@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import axios from 'axios';
@@ -25,22 +25,15 @@ const InventoryPage = () => {
 
     const columns = [
         {
-            title: 'System SKU',
-            dataIndex: 'systemsku',
-            key: 'systemsku',
-            width: 150,
-            filterable: true
-        },
-        {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
             width: 150,
             filterable: true,
-            render: (text) => (
+            render: (text, record) => (
                 <span>
                     {text}
-                    {duplicateSerials.has(text) && (
+                    {record.is_duplicate && (
                         <Tag color="red" style={{ marginLeft: 8 }}>
                             Duplicate
                         </Tag>
@@ -52,37 +45,128 @@ const InventoryPage = () => {
             title: 'Computer Name',
             dataIndex: 'computername',
             key: 'computername',
-            width: 150
+            width: 150,
+            filterable: true
         },
         {
             title: 'Manufacturer',
             dataIndex: 'manufacturer',
             key: 'manufacturer',
-            width: 120
+            width: 100,
+            filterable: true
         },
         {
             title: 'Model',
             dataIndex: 'model',
             key: 'model',
-            width: 150
+            width: 120,
+            filterable: true
         },
         {
-            title: 'OS',
+            title: 'System SKU',
+            dataIndex: 'systemsku',
+            key: 'systemsku',
+            width: 150,
+            filterable: true,
+            render: (text) => {
+                if (!text) return 'N/A';
+                const parts = text.split('_');
+                const thinkpadPart = parts.find(part => part.includes('ThinkPad'));
+                if (thinkpadPart) {
+                    return parts.slice(parts.indexOf(thinkpadPart)).join(' ')
+                        .replace(/Gen (\d+)$/, 'Gen$1').trim();
+                }
+                return text;
+            }
+        },
+        {
+            title: 'Operating System',
             dataIndex: 'os',
             key: 'os',
-            width: 200
+            width: 150,
+            render: (text) => {
+                if (!text || text === 'N/A') return 'N/A';
+                const osLower = text.toLowerCase();
+                if (osLower.includes('windows')) {
+                    const mainVersion = osLower.includes('11') ? '11' : 
+                                    osLower.includes('10') ? '10' : '';
+                    const edition = osLower.includes('pro') ? 'Pro' :
+                                osLower.includes('home') ? 'Home' : 
+                                osLower.includes('enterprise') ? 'Enterprise' : '';
+                    return `Windows ${mainVersion} ${edition}`.trim();
+                }
+                return text;
+            }
         },
         {
             title: 'CPU',
             dataIndex: 'cpu',
             key: 'cpu',
-            width: 200
+            width: 180,
+            render: (text) => {
+                if (!text || text === 'N/A') return 'N/A';
+                // Remove text in parentheses and extra spaces
+                return text.replace(/\s*\([^)]*\)/g, '').trim();
+            }
+        },
+        {
+            title: 'Resolution',
+            dataIndex: 'resolution',
+            key: 'resolution',
+            width: 120
+        },
+        {
+            title: 'Graphics Card',
+            dataIndex: 'graphics',
+            key: 'graphics',
+            width: 150,
+            render: (text) => {
+                if (!text || text === 'N/A') return 'N/A';
+                // Take only the part before [
+                return text.split('[')[0].trim();
+            }
+        },
+        {
+            title: 'Touch Screen',
+            dataIndex: 'touch_screen',
+            key: 'touch_screen',
+            width: 100,
+            render: (value) => value ? 'Yes' : 'No'
         },
         {
             title: 'RAM (GB)',
             dataIndex: 'ram_gb',
             key: 'ram_gb',
-            width: 100
+            width: 100,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Disks',
+            dataIndex: 'disks',
+            key: 'disks',
+            width: 150,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Design Capacity',
+            dataIndex: 'design_capacity',
+            key: 'design_capacity',
+            width: 120,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Full Charge',
+            dataIndex: 'full_charge',
+            key: 'full_charge',
+            width: 120,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Cycle Count',
+            dataIndex: 'cycle_count',
+            key: 'cycle_count',
+            width: 100,
+            render: (text) => text || 'N/A'
         },
         {
             title: 'Battery Health',
@@ -97,70 +181,38 @@ const InventoryPage = () => {
             }
         },
         {
+            title: 'Created Time',
+            dataIndex: 'created_at',
+            key: 'created_at',
+            width: 150,
+            render: (text) => {
+                if (!text) return 'N/A';
+                return new Date(text).toLocaleString();
+            }
+        },
+        {
             title: 'Actions',
             key: 'actions',
             fixed: 'right',
             width: 100,
             render: (_, record) => (
                 <Space size="middle">
-                    <Popconfirm
-                        title="Delete this record?"
-                        onConfirm={() => handleDelete(record)}
-                        okText="Yes"
-                        cancelText="No"
-                    >
-                        <Button danger type="link">Delete</Button>
-                    </Popconfirm>
+                    {record.is_duplicate && (
+                        <Popconfirm
+                            title="Delete this record?"
+                            onConfirm={() => handleDelete(record)}
+                            okText="Yes"
+                            cancelText="No"
+                        >
+                            <Button danger type="link">Delete</Button>
+                        </Popconfirm>
+                    )}
                 </Space>
             )
         }
     ];
 
-    const fetchRecords = async () => {
-        try {
-            setLoading(true);
-            const response = await axios.get(`${API_BASE_URL}/api/records`, {
-                params: {
-                    branch: selectedBranch !== 'all' ? selectedBranch : undefined
-                },
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                timeout: 5000,
-                withCredentials: true
-            });
-
-            if (response.data.success) {
-                const records = response.data.records;
-                setRecords(records);
-                handleSearch(searchText, records);
-                
-                // Find duplicate serials
-                const serialCounts = {};
-                records.forEach(record => {
-                    if (record.serialnumber) {
-                        serialCounts[record.serialnumber] = (serialCounts[record.serialnumber] || 0) + 1;
-                    }
-                });
-                
-                const duplicates = new Set(
-                    Object.entries(serialCounts)
-                        .filter(([_, count]) => count > 1)
-                        .map(([serial]) => serial)
-                );
-                
-                setDuplicateSerials(duplicates);
-            }
-        } catch (error) {
-            console.error('Error fetching records:', error);
-            message.error(`Failed to fetch records: ${error.message}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleSearch = (value, dataSource = records) => {
+    const handleSearch = useCallback((value, dataSource = records) => {
         const searchValue = value.toLowerCase();
         setSearchText(value);
         
@@ -174,17 +226,90 @@ const InventoryPage = () => {
         });
         
         setFilteredRecords(filtered);
-    };
+    }, [columns]);
 
-    const handleBranchChange = (value) => {
+    const fetchRecords = useCallback(async () => {
+        try {
+            setLoading(true);
+            const [recordsResponse, duplicatesResponse] = await Promise.all([
+                axios.get(`${API_BASE_URL}/api/records`, {
+                    params: {
+                        branch: selectedBranch !== 'all' ? selectedBranch : undefined
+                    },
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 5000,
+                    withCredentials: true
+                }),
+                axios.get(`${API_BASE_URL}/api/records/duplicates`, {
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 5000,
+                    withCredentials: true
+                })
+            ]);
+
+            if (recordsResponse.data.success) {
+                const newRecords = recordsResponse.data.records;
+                
+                // Get duplicates from backend
+                const duplicatesList = duplicatesResponse.data.success ? 
+                    duplicatesResponse.data.duplicates.map(d => d.serialnumber) : [];
+                
+                setDuplicateSerials(new Set(duplicatesList));
+                setRecords(newRecords);
+            }
+        } catch (error) {
+            console.error('Error fetching records:', error);
+            message.error(`Failed to fetch records: ${error.message}`);
+        } finally {
+            setLoading(false);
+        }
+    }, [selectedBranch]);
+
+    // Effect for search when records or search text changes
+    useEffect(() => {
+        if (records.length > 0 || searchText) {
+            handleSearch(searchText, records);
+        }
+    }, [records, searchText]);
+
+    const handleBranchChange = useCallback((value) => {
         setSelectedBranch(value);
+    }, []);
+
+    // Effect for initial fetch and branch changes
+    useEffect(() => {
+        fetchRecords();
+    }, [selectedBranch]);
+
+    const handleRefresh = () => {
         fetchRecords();
     };
 
     const handleDelete = async (record) => {
+        // Safety checks
+        if (!record || !record.id) {
+            message.error('Invalid record to delete');
+            return;
+        }
+
+        if (!record.serialnumber || !duplicateSerials.has(record.serialnumber)) {
+            message.error('Can only delete duplicate records');
+            return;
+        }
+
         try {
             setLoading(true);
-            console.log('Deleting record:', record.id);
+            console.log('Attempting to delete record:', {
+                id: record.id,
+                serialNumber: record.serialnumber,
+                computerName: record.computername
+            });
 
             const response = await axios.delete(`${API_BASE_URL}/api/records/${record.id}`, {
                 headers: {
@@ -196,20 +321,38 @@ const InventoryPage = () => {
             });
 
             if (response.data.success) {
-                message.success('Record deleted successfully');
-                fetchRecords();
+                message.success(`Record with serial ${record.serialnumber} deleted successfully`);
+                // Refresh the records to update the list
+                await fetchRecords();
+            } else {
+                throw new Error(response.data.error || 'Unknown error');
             }
         } catch (error) {
             console.error('Error deleting record:', error);
-            message.error(`Failed to delete record: ${error.message}`);
+            
+            // Handle specific error cases
+            if (error.response) {
+                switch (error.response.status) {
+                    case 404:
+                        message.error(`Record not found. It may have been already deleted.`);
+                        // Refresh to get latest data
+                        await fetchRecords();
+                        break;
+                    case 403:
+                        message.error('You do not have permission to delete this record');
+                        break;
+                    default:
+                        message.error(`Failed to delete record: ${error.response.data?.error || error.message}`);
+                }
+            } else if (error.request) {
+                message.error('Network error. Please check your connection.');
+            } else {
+                message.error(`Failed to delete record: ${error.message}`);
+            }
         } finally {
             setLoading(false);
         }
     };
-
-    useEffect(() => {
-        fetchRecords();
-    }, [selectedBranch]);
 
     return (
         <div>
@@ -240,7 +383,7 @@ const InventoryPage = () => {
                 <Col xs={24} sm={12} md={8} lg={6}>
                     <Button
                         icon={<ReloadOutlined />}
-                        onClick={() => fetchRecords()}
+                        onClick={handleRefresh}
                         loading={loading}
                     >
                         Refresh

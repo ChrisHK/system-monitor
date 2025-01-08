@@ -7,13 +7,40 @@ import {
     SettingOutlined
 } from '@ant-design/icons';
 
-const { SubMenu } = Menu;
-
 const Sidebar = () => {
     const branches = [
         'Main Store',
         'FMP Store',
         'Mississauga Store'
+    ];
+
+    const branchItems = branches.map(branch => ({
+        key: branch.toLowerCase().replace(' ', '-'),
+        label: branch
+    }));
+
+    const items = [
+        {
+            key: 'inventory',
+            icon: <DatabaseOutlined />,
+            label: 'Inventory'
+        },
+        {
+            key: 'outbound',
+            icon: <ExportOutlined />,
+            label: 'Outbound'
+        },
+        {
+            key: 'branches',
+            icon: <BranchesOutlined />,
+            label: 'Branches',
+            children: branchItems
+        },
+        {
+            key: 'settings',
+            icon: <SettingOutlined />,
+            label: 'Settings'
+        }
     ];
 
     return (
@@ -22,24 +49,8 @@ const Sidebar = () => {
             defaultSelectedKeys={['inventory']}
             defaultOpenKeys={['branches']}
             style={{ height: '100%', borderRight: 0 }}
-        >
-            <Menu.Item key="inventory" icon={<DatabaseOutlined />}>
-                Inventory
-            </Menu.Item>
-            <Menu.Item key="outbound" icon={<ExportOutlined />}>
-                Outbound
-            </Menu.Item>
-            <SubMenu key="branches" icon={<BranchesOutlined />} title="Branches">
-                {branches.map(branch => (
-                    <Menu.Item key={branch.toLowerCase().replace(' ', '-')}>
-                        {branch}
-                    </Menu.Item>
-                ))}
-            </SubMenu>
-            <Menu.Item key="settings" icon={<SettingOutlined />}>
-                Settings
-            </Menu.Item>
-        </Menu>
+            items={items}
+        />
     );
 };
 
