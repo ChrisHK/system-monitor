@@ -1,0 +1,5 @@
+@echo off
+set PORT=3001
+set WDS_SOCKET_HOST=192.168.0.10
+set WDS_SOCKET_PORT=3001
+npm start 
