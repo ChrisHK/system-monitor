@@ -4,6 +4,8 @@ const cors = require('cors');
 const http = require('http');
 const WebSocket = require('ws');
 const recordRoutes = require('./routes/recordRoutes');
+const outboundRoutes = require('./routes/outboundRoutes');
+const storeRoutes = require('./routes/storeRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -25,6 +27,8 @@ app.use(express.json());
 
 // API Routes
 app.use('/api/records', recordRoutes);
+app.use('/api/outbound', outboundRoutes);
+app.use('/api/stores', storeRoutes);
 
 // Create WebSocket server directly
 const wss = new WebSocket.Server({ 

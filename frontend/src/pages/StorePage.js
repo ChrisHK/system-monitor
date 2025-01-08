@@ -1,256 +1,217 @@
-import React, { useState, useEffect } from 'react';
-import {
-    Table,
-    Button,
-    Modal,
-    Form,
-    Input,
-    message,
-    Popconfirm,
-    Space
-} from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import axios from 'axios';
-
-const API_BASE_URL = process.env.REACT_APP_API_URL;
+import React, { useState, useEffect, useCallback } from 'react';
+import { Table, message, Tag, Row, Col } from 'antd';
+import { useParams } from 'react-router-dom';
+import { getStoreItems } from '../services/api';
 
 const StorePage = () => {
-    const [stores, setStores] = useState([]);
+    const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [modalVisible, setModalVisible] = useState(false);
-    const [editingStore, setEditingStore] = useState(null);
-    const [form] = Form.useForm();
+    const { storeId } = useParams();
 
-    // Fetch stores
-    const fetchStores = async () => {
-        try {
-            setLoading(true);
-            const response = await axios.get(`${API_BASE_URL}/stores`);
-            if (response.data.success) {
-                setStores(response.data.stores);
-            }
-        } catch (error) {
-            console.error('Error fetching stores:', error);
-            message.error('Failed to fetch stores');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => {
-        fetchStores();
-    }, []);
-
-    // Handle form submission
-    const handleSubmit = async (values) => {
-        try {
-            if (editingStore) {
-                // Update existing store
-                const response = await axios.put(
-                    `${API_BASE_URL}/stores/${editingStore.id}`,
-                    values
-                );
-                if (response.data.success) {
-                    message.success('Store updated successfully');
-                    fetchStores();
-                }
-            } else {
-                // Create new store
-                const response = await axios.post(
-                    `${API_BASE_URL}/stores`,
-                    values
-                );
-                if (response.data.success) {
-                    message.success('Store created successfully');
-                    fetchStores();
-                }
-            }
-            setModalVisible(false);
-            form.resetFields();
-            setEditingStore(null);
-        } catch (error) {
-            console.error('Error saving store:', error);
-            message.error(error.response?.data?.error || 'Failed to save store');
-        }
-    };
-
-    // Handle store deletion
-    const handleDelete = async (id) => {
-        try {
-            const response = await axios.delete(`${API_BASE_URL}/stores/${id}`);
-            if (response.data.success) {
-                message.success('Store deleted successfully');
-                fetchStores();
-            }
-        } catch (error) {
-            console.error('Error deleting store:', error);
-            message.error('Failed to delete store');
-        }
-    };
-
-    // Handle edit button click
-    const handleEdit = (record) => {
-        setEditingStore(record);
-        form.setFieldsValue(record);
-        setModalVisible(true);
-    };
-
-    // Table columns
     const columns = [
         {
-            title: 'Name',
-            dataIndex: 'name',
-            key: 'name',
-            sorter: (a, b) => a.name.localeCompare(b.name)
+            title: 'Serial Number',
+            dataIndex: 'serialnumber',
+            key: 'serialnumber',
+            width: 150,
+            filterable: true
         },
         {
-            title: 'Address',
-            dataIndex: 'address',
-            key: 'address'
+            title: 'Computer Name',
+            dataIndex: 'computername',
+            key: 'computername',
+            width: 150,
+            filterable: true
         },
         {
-            title: 'Phone',
-            dataIndex: 'phone',
-            key: 'phone'
+            title: 'Manufacturer',
+            dataIndex: 'manufacturer',
+            key: 'manufacturer',
+            width: 100,
+            filterable: true
         },
         {
-            title: 'Contact Person',
-            dataIndex: 'contact_person',
-            key: 'contact_person'
+            title: 'Model',
+            dataIndex: 'model',
+            key: 'model',
+            width: 120,
+            filterable: true
         },
         {
-            title: 'Email',
-            dataIndex: 'email',
-            key: 'email'
+            title: 'System SKU',
+            dataIndex: 'systemsku',
+            key: 'systemsku',
+            width: 150,
+            filterable: true,
+            render: (text) => {
+                if (!text) return 'N/A';
+                const parts = text.split('_');
+                const thinkpadPart = parts.find(part => part.includes('ThinkPad'));
+                if (thinkpadPart) {
+                    return parts.slice(parts.indexOf(thinkpadPart)).join(' ')
+                        .replace(/Gen (\d+)$/, 'Gen$1').trim();
+                }
+                return text;
+            }
         },
         {
-            title: 'Actions',
-            key: 'actions',
-            render: (_, record) => (
-                <Space>
-                    <Button
-                        type="primary"
-                        icon={<EditOutlined />}
-                        onClick={() => handleEdit(record)}
-                    >
-                        Edit
-                    </Button>
-                    <Popconfirm
-                        title="Are you sure you want to delete this store?"
-                        onConfirm={() => handleDelete(record.id)}
-                        okText="Yes"
-                        cancelText="No"
-                    >
-                        <Button type="primary" danger icon={<DeleteOutlined />}>
-                            Delete
-                        </Button>
-                    </Popconfirm>
-                </Space>
-            )
+            title: 'Operating System',
+            dataIndex: 'operatingsystem',
+            key: 'operatingsystem',
+            width: 150,
+            render: (text) => {
+                if (!text || text === 'N/A') return 'N/A';
+                const osLower = text.toLowerCase();
+                if (osLower.includes('windows')) {
+                    const mainVersion = osLower.includes('11') ? '11' : 
+                                    osLower.includes('10') ? '10' : '';
+                    const edition = osLower.includes('pro') ? 'Pro' :
+                                osLower.includes('home') ? 'Home' : 
+                                osLower.includes('enterprise') ? 'Enterprise' : '';
+                    return `Windows ${mainVersion} ${edition}`.trim();
+                }
+                return text;
+            }
+        },
+        {
+            title: 'CPU',
+            dataIndex: 'cpu',
+            key: 'cpu',
+            width: 180,
+            render: (text) => {
+                if (!text || text === 'N/A') return 'N/A';
+                return text.replace(/\s*\([^)]*\)/g, '').trim();
+            }
+        },
+        {
+            title: 'Resolution',
+            dataIndex: 'resolution',
+            key: 'resolution',
+            width: 120
+        },
+        {
+            title: 'Graphics Card',
+            dataIndex: 'graphicscard',
+            key: 'graphicscard',
+            width: 150,
+            render: (text) => {
+                if (!text || text === 'N/A') return 'N/A';
+                return text.split('[')[0].trim();
+            }
+        },
+        {
+            title: 'Touch Screen',
+            dataIndex: 'touchscreen',
+            key: 'touchscreen',
+            width: 100,
+            render: (value) => value ? 'Yes' : 'No'
+        },
+        {
+            title: 'RAM (GB)',
+            dataIndex: 'ram_gb',
+            key: 'ram_gb',
+            width: 100,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Disks',
+            dataIndex: 'disks',
+            key: 'disks',
+            width: 150,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Design Capacity',
+            dataIndex: 'design_capacity',
+            key: 'design_capacity',
+            width: 120,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Full Charge',
+            dataIndex: 'full_charge_capacity',
+            key: 'full_charge_capacity',
+            width: 120,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Cycle Count',
+            dataIndex: 'cycle_count',
+            key: 'cycle_count',
+            width: 100,
+            render: (text) => text || 'N/A'
+        },
+        {
+            title: 'Battery Health',
+            dataIndex: 'battery_health',
+            key: 'battery_health',
+            width: 120,
+            render: (health) => {
+                let color = 'green';
+                if (health < 50) color = 'red';
+                else if (health < 80) color = 'orange';
+                return health ? <Tag color={color}>{health}%</Tag> : 'N/A';
+            }
+        },
+        {
+            title: 'Received Time',
+            dataIndex: 'received_at',
+            key: 'received_at',
+            width: 150,
+            render: (text) => {
+                if (!text) return 'N/A';
+                return new Date(text).toLocaleString();
+            }
         }
     ];
 
+    const fetchStoreItems = useCallback(async () => {
+        try {
+            setLoading(true);
+            const response = await getStoreItems(storeId);
+
+            if (response.success) {
+                setRecords(response.items || []);
+            }
+        } catch (error) {
+            console.error('Error fetching store items:', error);
+            message.error(`Failed to fetch items: ${error.message}`);
+        } finally {
+            setLoading(false);
+        }
+    }, [storeId]);
+
+    useEffect(() => {
+        if (storeId) {
+            fetchStoreItems();
+        }
+    }, [storeId, fetchStoreItems]);
+
     return (
-        <div style={{ padding: '24px' }}>
-            <div style={{ marginBottom: '16px' }}>
-                <Button
-                    type="primary"
-                    icon={<PlusOutlined />}
-                    onClick={() => {
-                        setEditingStore(null);
-                        form.resetFields();
-                        setModalVisible(true);
-                    }}
-                >
-                    Add Store
-                </Button>
-            </div>
+        <div>
+            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                <Col xs={24} sm={12} md={8} lg={6}>
+                    <span style={{ marginRight: 8 }}>
+                        Total Items: {records.length}
+                    </span>
+                </Col>
+            </Row>
 
             <Table
                 columns={columns}
-                dataSource={stores}
+                dataSource={records}
                 rowKey="id"
                 loading={loading}
-            />
-
-            <Modal
-                title={editingStore ? 'Edit Store' : 'Add Store'}
-                open={modalVisible}
-                onCancel={() => {
-                    setModalVisible(false);
-                    setEditingStore(null);
-                    form.resetFields();
+                scroll={{ x: 1500 }}
+                pagination={{
+                    total: records.length,
+                    pageSize: 20,
+                    showSizeChanger: true,
+                    showQuickJumper: true,
+                    pageSizeOptions: ['20', '50', '100'],
+                    defaultPageSize: 20
                 }}
-                footer={null}
-            >
-                <Form
-                    form={form}
-                    layout="vertical"
-                    onFinish={handleSubmit}
-                >
-                    <Form.Item
-                        name="name"
-                        label="Store Name"
-                        rules={[
-                            {
-                                required: true,
-                                message: 'Please input the store name!'
-                            }
-                        ]}
-                    >
-                        <Input />
-                    </Form.Item>
-
-                    <Form.Item
-                        name="address"
-                        label="Address"
-                    >
-                        <Input.TextArea />
-                    </Form.Item>
-
-                    <Form.Item
-                        name="phone"
-                        label="Phone"
-                    >
-                        <Input />
-                    </Form.Item>
-
-                    <Form.Item
-                        name="contact_person"
-                        label="Contact Person"
-                    >
-                        <Input />
-                    </Form.Item>
-
-                    <Form.Item
-                        name="email"
-                        label="Email"
-                        rules={[
-                            {
-                                type: 'email',
-                                message: 'Please input a valid email address!'
-                            }
-                        ]}
-                    >
-                        <Input />
-                    </Form.Item>
-
-                    <Form.Item>
-                        <Space>
-                            <Button type="primary" htmlType="submit">
-                                {editingStore ? 'Update' : 'Create'}
-                            </Button>
-                            <Button onClick={() => {
-                                setModalVisible(false);
-                                setEditingStore(null);
-                                form.resetFields();
-                            }}>
-                                Cancel
-                            </Button>
-                        </Space>
-                    </Form.Item>
-                </Form>
-            </Modal>
+            />
         </div>
     );
 };

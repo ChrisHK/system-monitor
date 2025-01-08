@@ -1,9 +1,9 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../config/database');
+const pool = require('../db');
 
 // Get all stores
-router.get('/stores', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM stores ORDER BY name');
         res.json({ success: true, stores: result.rows });
@@ -14,7 +14,7 @@ router.get('/stores', async (req, res) => {
 });
 
 // Add a new store
-router.post('/stores', async (req, res) => {
+router.post('/', async (req, res) => {
     const { name, address, phone, contact_person, email } = req.body;
     
     try {
@@ -30,7 +30,7 @@ router.post('/stores', async (req, res) => {
 });
 
 // Update a store
-router.put('/stores/:id', async (req, res) => {
+router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { name, address, phone, contact_person, email, status } = req.body;
     
@@ -52,7 +52,7 @@ router.put('/stores/:id', async (req, res) => {
 });
 
 // Delete a store
-router.delete('/stores/:id', async (req, res) => {
+router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     
     try {
@@ -69,36 +69,84 @@ router.delete('/stores/:id', async (req, res) => {
     }
 });
 
-// Send records to store
-router.post('/store-outbound', async (req, res) => {
-    const { storeId, recordIds } = req.body;
+// Get store items
+router.get('/:storeId/items', async (req, res) => {
+    const { storeId } = req.params;
+    
+    try {
+        const query = `
+            SELECT r.* 
+            FROM store_items s
+            JOIN system_records r ON s.record_id = r.id
+            WHERE s.store_id = $1
+            ORDER BY s.received_at DESC
+        `;
+        
+        const result = await pool.query(query, [storeId]);
+        
+        res.json({
+            success: true,
+            items: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching store items:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch store items'
+        });
+    }
+});
+
+// Process outbound items to store
+router.post('/:storeId/outbound', async (req, res) => {
+    const { storeId } = req.params;
+    const { items } = req.body;
     const client = await pool.connect();
     
     try {
         await client.query('BEGIN');
         
-        // Create new outbound record
-        const outboundResult = await client.query(
-            'INSERT INTO outbound (store_id, status, created_at) VALUES ($1, $2, NOW()) RETURNING id',
-            [storeId, 'pending']
+        // Get outbound items
+        const outboundItems = await client.query(
+            'SELECT id, record_id FROM outbound_items WHERE id = ANY($1)',
+            [items]
         );
         
-        const outboundId = outboundResult.rows[0].id;
+        if (outboundItems.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                success: false,
+                error: 'No outbound items found'
+            });
+        }
         
-        // Add records to outbound_items
-        for (const recordId of recordIds) {
+        // Add items to store
+        for (const item of outboundItems.rows) {
             await client.query(
-                'INSERT INTO outbound_items (outbound_id, record_id, status) VALUES ($1, $2, $3)',
-                [outboundId, recordId, 'pending']
+                'INSERT INTO store_items (store_id, record_id, received_at) VALUES ($1, $2, NOW())',
+                [storeId, item.record_id]
+            );
+            
+            // Mark outbound item as processed
+            await client.query(
+                'UPDATE outbound_items SET status = $1 WHERE id = $2',
+                ['processed', item.id]
             );
         }
         
         await client.query('COMMIT');
-        res.json({ success: true, outboundId });
+        
+        res.json({
+            success: true,
+            message: 'Items processed successfully'
+        });
     } catch (error) {
         await client.query('ROLLBACK');
-        console.error('Error sending records to store:', error);
-        res.status(500).json({ success: false, error: 'Failed to send records to store' });
+        console.error('Error processing outbound items:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to process outbound items'
+        });
     } finally {
         client.release();
     }
