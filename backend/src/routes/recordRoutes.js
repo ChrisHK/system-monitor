@@ -5,16 +5,18 @@ const pool = require('../db');
 // Get duplicate records
 router.get('/duplicates', async (req, res) => {
     try {
-        const query = `
-            SELECT serialnumber
-            FROM system_records
-            WHERE serialnumber IS NOT NULL
-            AND is_current = true
-            GROUP BY serialnumber
-            HAVING COUNT(*) > 1
-        `;
-        
-        const result = await pool.query(query);
+        const result = await pool.query(`
+            WITH duplicates AS (
+                SELECT serialnumber
+                FROM system_records
+                GROUP BY serialnumber
+                HAVING COUNT(*) > 1
+            )
+            SELECT DISTINCT r.serialnumber
+            FROM system_records r
+            JOIN duplicates d ON r.serialnumber = d.serialnumber
+            ORDER BY r.serialnumber
+        `);
         
         res.json({
             success: true,
@@ -24,7 +26,7 @@ router.get('/duplicates', async (req, res) => {
         console.error('Error fetching duplicates:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to fetch duplicates'
+            error: error.message
         });
     }
 });
@@ -71,7 +73,6 @@ router.get('/', async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT * FROM system_records 
-            WHERE is_current = true 
             ORDER BY created_at DESC
         `);
         
@@ -83,7 +84,7 @@ router.get('/', async (req, res) => {
         console.error('Error fetching records:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to fetch records'
+            error: error.message
         });
     }
 });
@@ -137,6 +138,122 @@ router.delete('/:id', async (req, res) => {
             success: false,
             error: 'Failed to delete record'
         });
+    }
+});
+
+// Create or update a record
+router.post('/', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        const record = req.body;
+        
+        // Check for existing record with same serial number
+        const existingRecord = await client.query(
+            'SELECT id FROM system_records WHERE serialnumber = $1',
+            [record.serialnumber]
+        );
+
+        let result;
+        if (existingRecord.rows.length > 0) {
+            // Update existing record
+            const recordId = existingRecord.rows[0].id;
+            result = await client.query(`
+                UPDATE system_records SET
+                    computername = $1,
+                    manufacturer = $2,
+                    model = $3,
+                    systemsku = $4,
+                    operatingsystem = $5,
+                    cpu = $6,
+                    resolution = $7,
+                    graphicscard = $8,
+                    touchscreen = $9,
+                    ram_gb = $10,
+                    disks = $11,
+                    design_capacity = $12,
+                    full_charge_capacity = $13,
+                    cycle_count = $14,
+                    battery_health = $15,
+                    created_at = NOW()
+                WHERE id = $16
+                RETURNING *
+            `, [
+                record.computername,
+                record.manufacturer,
+                record.model,
+                record.systemsku,
+                record.operatingsystem,
+                record.cpu,
+                record.resolution,
+                record.graphicscard,
+                record.touchscreen,
+                record.ram_gb,
+                record.disks,
+                record.design_capacity,
+                record.full_charge_capacity,
+                record.cycle_count,
+                record.battery_health,
+                recordId
+            ]);
+        } else {
+            // Insert new record
+            result = await client.query(`
+                INSERT INTO system_records (
+                    serialnumber,
+                    computername,
+                    manufacturer,
+                    model,
+                    systemsku,
+                    operatingsystem,
+                    cpu,
+                    resolution,
+                    graphicscard,
+                    touchscreen,
+                    ram_gb,
+                    disks,
+                    design_capacity,
+                    full_charge_capacity,
+                    cycle_count,
+                    battery_health
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                RETURNING *
+            `, [
+                record.serialnumber,
+                record.computername,
+                record.manufacturer,
+                record.model,
+                record.systemsku,
+                record.operatingsystem,
+                record.cpu,
+                record.resolution,
+                record.graphicscard,
+                record.touchscreen,
+                record.ram_gb,
+                record.disks,
+                record.design_capacity,
+                record.full_charge_capacity,
+                record.cycle_count,
+                record.battery_health
+            ]);
+        }
+
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            record: result.rows[0]
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error creating/updating record:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
     }
 });
 

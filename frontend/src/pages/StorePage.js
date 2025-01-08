@@ -1,12 +1,58 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, message, Tag, Row, Col } from 'antd';
+import { Table, message, Tag, Row, Col, Button, Popconfirm } from 'antd';
+import { DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { getStoreItems } from '../services/api';
+import { getStoreItems, deleteStoreItem, exportStoreItems } from '../services/api';
 
 const StorePage = () => {
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
     const { storeId } = useParams();
+
+    const handleDelete = async (itemId) => {
+        try {
+            setLoading(true);
+            const response = await deleteStoreItem(storeId, itemId);
+            if (response.success) {
+                message.success('Item deleted successfully');
+                await fetchStoreItems();
+            }
+        } catch (error) {
+            message.error(`Failed to delete item: ${error.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleExportCSV = async () => {
+        try {
+            setLoading(true);
+            const response = await exportStoreItems(storeId);
+            
+            // Create blob from the response
+            const blob = new Blob([response], { type: 'text/csv' });
+            
+            // Create download link
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `store-items-${new Date().toISOString().split('T')[0]}.csv`);
+            
+            // Trigger download
+            document.body.appendChild(link);
+            link.click();
+            
+            // Cleanup
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+            
+            message.success('CSV file exported successfully');
+        } catch (error) {
+            message.error(`Failed to export CSV: ${error.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const columns = [
         {
@@ -162,6 +208,24 @@ const StorePage = () => {
                 if (!text) return 'N/A';
                 return new Date(text).toLocaleString();
             }
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            fixed: 'right',
+            width: 100,
+            render: (_, record) => (
+                <Popconfirm
+                    title="Delete this item?"
+                    onConfirm={() => handleDelete(record.id)}
+                    okText="Yes"
+                    cancelText="No"
+                >
+                    <Button type="link" danger icon={<DeleteOutlined />}>
+                        Delete
+                    </Button>
+                </Popconfirm>
+            )
         }
     ];
 
@@ -194,6 +258,16 @@ const StorePage = () => {
                     <span style={{ marginRight: 8 }}>
                         Total Items: {records.length}
                     </span>
+                </Col>
+                <Col xs={24} sm={12} md={8} lg={6}>
+                    <Button
+                        type="primary"
+                        icon={<DownloadOutlined />}
+                        onClick={handleExportCSV}
+                        loading={loading}
+                    >
+                        Export CSV
+                    </Button>
                 </Col>
             </Row>
 

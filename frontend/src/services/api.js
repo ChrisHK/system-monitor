@@ -237,6 +237,74 @@ export const sendToStore = async (storeId, items) => {
         const response = await fetch(`${API_BASE_URL}/stores/${storeId}/outbound`, {
             ...defaultOptions,
             method: 'POST',
+            headers: {
+                ...defaultOptions.headers,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ items: items })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error sending items to store:', error);
+        throw error;
+    }
+};
+
+export const deleteStoreItem = async (storeId, itemId) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/items/${itemId}`, {
+            ...defaultOptions,
+            method: 'DELETE'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error deleting store item:', error);
+        throw error;
+    }
+};
+
+export const exportStoreItems = async (storeId) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/export`, {
+            ...defaultOptions,
+            method: 'GET'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.text(); // Return as text for CSV
+    } catch (error) {
+        console.error('Error exporting store items:', error);
+        throw error;
+    }
+};
+
+export const checkStoreItems = async (storeId, items) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/check-items`, {
+            ...defaultOptions,
+            method: 'POST',
+            headers: {
+                ...defaultOptions.headers,
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({ items })
         });
 
@@ -248,7 +316,7 @@ export const sendToStore = async (storeId, items) => {
 
         return await response.json();
     } catch (error) {
-        console.error('Error sending items to store:', error);
+        console.error('Error checking store items:', error);
         throw error;
     }
 }; 
