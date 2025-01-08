@@ -1,189 +1,251 @@
-import React, { useState, useEffect } from 'react';
-import { Table, Button, Select, Input, message, Row, Col } from 'antd';
-import { SearchOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Table, Input, Button, message, Row, Col, Select } from 'antd';
+import { SearchOutlined, ReloadOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons';
+import { searchRecords, addToOutbound, getOutboundItems, removeFromOutbound, sendToStore, getStores } from '../services/api';
 
-const { Option } = Select;
 const { Search } = Input;
-const API_BASE_URL = process.env.REACT_APP_API_URL;
+const { Option } = Select;
 
 const OutboundPage = () => {
     const [records, setRecords] = useState([]);
-    const [stores, setStores] = useState([]);
-    const [selectedStore, setSelectedStore] = useState(null);
-    const [selectedRecords, setSelectedRecords] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [searchField, setSearchField] = useState('system_sku');
     const [searchText, setSearchText] = useState('');
+    const [selectedStore, setSelectedStore] = useState(null);
+    const [stores, setStores] = useState([]);
 
-    // Fetch stores
-    const fetchStores = async () => {
-        try {
-            const response = await axios.get(`${API_BASE_URL}/stores`);
-            if (response.data.success) {
-                setStores(response.data.stores);
+    const columns = [
+        {
+            title: 'Serial Number',
+            dataIndex: 'serialnumber',
+            key: 'serialnumber',
+            width: 150,
+            filterable: true
+        },
+        {
+            title: 'Computer Name',
+            dataIndex: 'computername',
+            key: 'computername',
+            width: 150,
+            filterable: true
+        },
+        {
+            title: 'Manufacturer',
+            dataIndex: 'manufacturer',
+            key: 'manufacturer',
+            width: 100,
+            filterable: true
+        },
+        {
+            title: 'Model',
+            dataIndex: 'model',
+            key: 'model',
+            width: 120,
+            filterable: true
+        },
+        {
+            title: 'System SKU',
+            dataIndex: 'systemsku',
+            key: 'systemsku',
+            width: 150,
+            filterable: true,
+            render: (text) => {
+                if (!text) return 'N/A';
+                const parts = text.split('_');
+                const thinkpadPart = parts.find(part => part.includes('ThinkPad'));
+                if (thinkpadPart) {
+                    return parts.slice(parts.indexOf(thinkpadPart)).join(' ')
+                        .replace(/Gen (\d+)$/, 'Gen$1').trim();
+                }
+                return text;
             }
-        } catch (error) {
-            console.error('Error fetching stores:', error);
-            message.error('Failed to fetch stores');
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            fixed: 'right',
+            width: 100,
+            render: (_, record) => (
+                <Button
+                    type="link"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => handleRemoveItem(record.outbound_item_id)}
+                >
+                    Delete
+                </Button>
+            )
         }
-    };
+    ];
 
-    // Fetch records with search
-    const fetchRecords = async (searchParams = {}) => {
+    const handleSearch = useCallback(async (value) => {
+        if (!value) return;
+
         try {
             setLoading(true);
-            let url = `${API_BASE_URL}/records`;
-            
-            // Add search parameters if they exist
-            if (searchParams.field && searchParams.term) {
-                url = `${API_BASE_URL}/records/search?field=${encodeURIComponent(searchParams.field)}&term=${encodeURIComponent(searchParams.term)}`;
-            }
-            
-            const response = await axios.get(url);
-            if (response.data.success) {
-                setRecords(response.data.records);
+            setSearchText(value);
+
+            // Search for record by serial number
+            const response = await searchRecords('serialnumber', value);
+
+            if (response.success && response.records.length > 0) {
+                const record = response.records[0];
+                
+                // Add record to outbound
+                const addResponse = await addToOutbound(record.id);
+
+                if (addResponse.success) {
+                    message.success('Item added to outbound successfully');
+                    await fetchOutboundItems();
+                }
+            } else {
+                message.warning('No record found with this serial number');
             }
         } catch (error) {
-            console.error('Error fetching records:', error);
-            message.error('Failed to fetch records');
+            console.error('Error searching:', error);
+            message.error(`Failed to search: ${error.message}`);
+        } finally {
+            setLoading(false);
+            setSearchText('');
+        }
+    }, []);
+
+    const handleRemoveItem = async (itemId) => {
+        try {
+            setLoading(true);
+            const response = await removeFromOutbound(itemId);
+
+            if (response.success) {
+                message.success('Item removed successfully');
+                await fetchOutboundItems();
+            }
+        } catch (error) {
+            console.error('Error removing item:', error);
+            message.error(`Failed to remove item: ${error.message}`);
         } finally {
             setLoading(false);
         }
     };
 
-    useEffect(() => {
-        fetchStores();
-        fetchRecords();
-    }, []);
-
-    // Handle search
-    const handleSearch = (value) => {
-        if (!searchField) {
-            message.warning('Please select a search field');
-            return;
-        }
-        
-        if (value) {
-            fetchRecords({ field: searchField, term: value });
-        } else {
-            fetchRecords(); // Reset to show all records
-        }
-        setSearchText(value);
-    };
-
-    // Handle sending records to store
     const handleSendToStore = async () => {
         if (!selectedStore) {
             message.warning('Please select a store first');
             return;
         }
-        if (selectedRecords.length === 0) {
-            message.warning('Please select records to send');
+
+        if (records.length === 0) {
+            message.warning('No items to send');
             return;
         }
 
         try {
             setLoading(true);
-            const response = await axios.post(`${API_BASE_URL}/store-outbound`, {
-                storeId: selectedStore,
-                recordIds: selectedRecords
-            });
+            const response = await sendToStore(selectedStore, records.map(record => record.outbound_item_id));
 
-            if (response.data.success) {
-                message.success('Records sent to store successfully');
-                setSelectedRecords([]);
-                fetchRecords();
+            if (response.success) {
+                message.success('Items sent to store successfully');
+                await fetchOutboundItems();
+                setSelectedStore(null);
             }
         } catch (error) {
-            console.error('Error sending records to store:', error);
-            message.error(error.response?.data?.error || 'Failed to send records to store');
+            console.error('Error sending items to store:', error);
+            message.error(`Failed to send items: ${error.message}`);
         } finally {
             setLoading(false);
         }
     };
 
-    const columns = [
-        {
-            title: 'System SKU',
-            dataIndex: 'system_sku',
-            key: 'system_sku'
-        },
-        {
-            title: 'OS',
-            dataIndex: 'os',
-            key: 'os'
-        },
-        {
-            title: 'CPU',
-            dataIndex: 'cpu',
-            key: 'cpu'
-        },
-        {
-            title: 'RAM (GB)',
-            dataIndex: 'ram_gb',
-            key: 'ram_gb'
-        },
-        {
-            title: 'Battery Health',
-            dataIndex: 'battery_health',
-            key: 'battery_health',
-            render: (health) => {
-                const value = parseFloat(health);
-                let color = 'green';
-                if (value < 80) color = 'orange';
-                if (value < 60) color = 'red';
-                return <span style={{ color }}>{health}%</span>;
+    const fetchOutboundItems = async () => {
+        try {
+            setLoading(true);
+            const response = await getOutboundItems();
+
+            if (response.success) {
+                setRecords(response.items || []);
             }
+        } catch (error) {
+            console.error('Error fetching outbound items:', error);
+            message.error(`Failed to fetch items: ${error.message}`);
+        } finally {
+            setLoading(false);
         }
-    ];
+    };
+
+    const fetchStores = async () => {
+        try {
+            const response = await getStores();
+            if (response.success) {
+                setStores(response.stores.map(store => ({
+                    value: store.id,
+                    label: store.name
+                })));
+            }
+        } catch (error) {
+            console.error('Error fetching stores:', error);
+            message.error(`Failed to fetch stores: ${error.message}`);
+        }
+    };
+
+    useEffect(() => {
+        fetchOutboundItems();
+        fetchStores();
+    }, []);
+
+    const handleRefresh = () => {
+        fetchOutboundItems();
+    };
 
     return (
-        <div style={{ padding: '24px' }}>
-            <Row gutter={[16, 16]}>
-                <Col span={8}>
-                    <Select
-                        style={{ width: '100%' }}
-                        placeholder="Select a store"
-                        onChange={setSelectedStore}
-                        value={selectedStore}
-                    >
-                        {stores.map(store => (
-                            <Option key={store.id} value={store.id}>{store.name}</Option>
-                        ))}
-                    </Select>
-                </Col>
-                <Col span={8}>
-                    <Select
-                        style={{ width: '100%' }}
-                        placeholder="Search by"
-                        value={searchField}
-                        onChange={setSearchField}
-                    >
-                        <Option value="system_sku">System SKU</Option>
-                        <Option value="serialnumber">Serial Number</Option>
-                        <Option value="model">Model</Option>
-                    </Select>
-                </Col>
-                <Col span={8}>
+        <div>
+            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                <Col xs={24} sm={12} md={8} lg={6}>
                     <Search
-                        placeholder="Search records..."
-                        value={searchText}
-                        onChange={e => setSearchText(e.target.value)}
-                        onSearch={handleSearch}
-                        enterButton={<SearchOutlined />}
+                        placeholder="Enter serial number to add..."
                         allowClear
+                        enterButton={<SearchOutlined />}
+                        onSearch={handleSearch}
+                        value={searchText}
+                        onChange={(e) => setSearchText(e.target.value)}
+                        style={{ width: '100%' }}
                     />
+                </Col>
+                <Col xs={24} sm={12} md={8} lg={6}>
+                    <Button
+                        icon={<ReloadOutlined />}
+                        onClick={handleRefresh}
+                        loading={loading}
+                    >
+                        Refresh
+                    </Button>
                 </Col>
             </Row>
 
-            <Row style={{ marginTop: '16px', marginBottom: '16px' }}>
-                <Col>
+            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                <Col xs={24} sm={12} md={8} lg={6}>
+                    <span style={{ marginRight: 8 }}>
+                        Total Items: {records.length}
+                    </span>
+                </Col>
+                <Col xs={24} sm={12} md={8} lg={6}>
+                    <Select
+                        placeholder="Select store"
+                        style={{ width: '100%' }}
+                        value={selectedStore}
+                        onChange={setSelectedStore}
+                    >
+                        {stores.map(store => (
+                            <Option key={store.value} value={store.value}>
+                                {store.label}
+                            </Option>
+                        ))}
+                    </Select>
+                </Col>
+                <Col xs={24} sm={12} md={8} lg={6}>
                     <Button
                         type="primary"
+                        icon={<SendOutlined />}
                         onClick={handleSendToStore}
-                        disabled={!selectedStore || selectedRecords.length === 0}
                         loading={loading}
+                        disabled={!selectedStore || records.length === 0}
                     >
                         Send to Store
                     </Button>
@@ -195,11 +257,14 @@ const OutboundPage = () => {
                 dataSource={records}
                 rowKey="id"
                 loading={loading}
-                rowSelection={{
-                    selectedRowKeys: selectedRecords,
-                    onChange: (selectedRowKeys) => {
-                        setSelectedRecords(selectedRowKeys);
-                    }
+                scroll={{ x: 1500 }}
+                pagination={{
+                    total: records.length,
+                    pageSize: 20,
+                    showSizeChanger: true,
+                    showQuickJumper: true,
+                    pageSizeOptions: ['20', '50', '100'],
+                    defaultPageSize: 20
                 }}
             />
         </div>

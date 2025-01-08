@@ -189,4 +189,66 @@ export const searchOutboundRecords = async (field, term) => {
         console.error('Error searching outbound records:', error);
         throw error;
     }
+};
+
+// Store-related API functions
+export const getStores = async () => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores`, {
+            ...defaultOptions,
+            method: 'GET'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching stores:', error);
+        throw error;
+    }
+};
+
+export const getStoreItems = async (storeId) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/items`, {
+            ...defaultOptions,
+            method: 'GET'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching store items:', error);
+        throw error;
+    }
+};
+
+export const sendToStore = async (storeId, items) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/outbound`, {
+            ...defaultOptions,
+            method: 'POST',
+            body: JSON.stringify({ items })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error sending items to store:', error);
+        throw error;
+    }
 }; 
