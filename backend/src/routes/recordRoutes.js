@@ -9,6 +9,7 @@ router.get('/duplicates', async (req, res) => {
             WITH duplicates AS (
                 SELECT serialnumber
                 FROM system_records
+                WHERE is_current = true
                 GROUP BY serialnumber
                 HAVING COUNT(*) > 1
             )
@@ -31,6 +32,72 @@ router.get('/duplicates', async (req, res) => {
     }
 });
 
+// Clean up duplicate records - keep only the newest
+router.post('/cleanup-duplicates', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Find all duplicate serial numbers and their records
+        const findDuplicatesQuery = `
+            WITH duplicates AS (
+                SELECT serialnumber
+                FROM system_records
+                WHERE is_current = true
+                GROUP BY serialnumber
+                HAVING COUNT(*) > 1
+            )
+            SELECT r.id, r.serialnumber, r.created_at
+            FROM system_records r
+            JOIN duplicates d ON r.serialnumber = d.serialnumber
+            WHERE r.is_current = true
+            ORDER BY r.serialnumber, r.created_at DESC
+        `;
+
+        const duplicates = await client.query(findDuplicatesQuery);
+        
+        // Process each duplicate group
+        let currentSerial = null;
+        let isFirst = true;
+        let deletedCount = 0;
+        
+        for (const record of duplicates.rows) {
+            if (currentSerial !== record.serialnumber) {
+                currentSerial = record.serialnumber;
+                isFirst = true;
+                continue;
+            }
+            
+            if (!isFirst) {
+                // Delete older duplicates (soft delete by setting is_current = false)
+                await client.query(`
+                    UPDATE system_records 
+                    SET is_current = false 
+                    WHERE id = $1
+                `, [record.id]);
+                deletedCount++;
+            }
+            isFirst = false;
+        }
+
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            message: `Successfully cleaned up duplicates. Removed ${deletedCount} older duplicate records.`
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error cleaning up duplicates:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 // Search records by field and term
 router.get('/search', async (req, res) => {
     const { field, term } = req.query;
@@ -46,11 +113,19 @@ router.get('/search', async (req, res) => {
 
         // Build the query with ILIKE for case-insensitive search
         const query = `
-            SELECT * FROM system_records 
-            WHERE ${field} ILIKE $1 
-            AND is_current = true
+            WITH RankedRecords AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY serialnumber 
+                        ORDER BY created_at DESC, id DESC
+                    ) as rn
+                FROM system_records
+                WHERE ${field} ILIKE $1 
+                AND is_current = true
+            )
+            SELECT * FROM RankedRecords 
+            WHERE rn = 1
             ORDER BY created_at DESC
-            LIMIT 1
         `;
         
         const result = await pool.query(query, [`%${term}%`]);
@@ -72,7 +147,17 @@ router.get('/search', async (req, res) => {
 router.get('/', async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT * FROM system_records 
+            WITH RankedRecords AS (
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY serialnumber 
+                        ORDER BY created_at DESC, id DESC
+                    ) as rn
+                FROM system_records
+                WHERE is_current = true
+            )
+            SELECT * FROM RankedRecords 
+            WHERE rn = 1
             ORDER BY created_at DESC
         `);
         

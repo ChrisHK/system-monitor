@@ -1,25 +1,31 @@
 // Use the environment variable for API URL
 const API_BASE_URL = (() => {
-    // Get the current hostname
+    // Get the current hostname and port
     const currentHostname = window.location.hostname;
+    const currentPort = window.location.port;
     const apiUrl = process.env.REACT_APP_API_URL;
     
-    // If accessing from another machine, ensure we use the server's IP
-    if (currentHostname !== 'localhost' && currentHostname !== '127.0.0.1') {
-        return 'http://192.168.0.10:3000/api';
-    }
-    
-    return apiUrl || 'http://192.168.0.10:3000/api';
+    console.log('Network Configuration:', {
+        currentHostname,
+        currentPort,
+        apiUrl,
+        fullUrl: window.location.href
+    });
+
+    // Always use the configured API URL for consistency
+    return 'http://192.168.0.10:4000/api';
 })();
 
 // Log all environment variables and connection info for debugging
 console.log('API Configuration:', {
     currentHostname: window.location.hostname,
+    currentPort: window.location.port,
     REACT_APP_API_URL: process.env.REACT_APP_API_URL,
     REACT_APP_WS_URL: process.env.REACT_APP_WS_URL,
     NODE_ENV: process.env.NODE_ENV,
     API_BASE_URL,
-    origin: window.location.origin
+    origin: window.location.origin,
+    fullUrl: window.location.href
 });
 
 const defaultOptions = {

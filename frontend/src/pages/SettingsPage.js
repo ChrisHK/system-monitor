@@ -16,7 +16,12 @@ const SettingsPage = () => {
         try {
             setLoading(true);
             console.log('Fetching stores...');
-            const response = await axios.get('http://192.168.0.10:3000/api/stores');
+            const response = await axios.get('http://192.168.0.10:4000/api/stores', {
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
             console.log('Response:', response.data);
             if (response.data.success) {
                 setStores(response.data.stores);
@@ -45,7 +50,12 @@ const SettingsPage = () => {
 
     const handleDelete = async (id) => {
         try {
-            const response = await axios.delete(`http://192.168.0.10:3000/api/stores/${id}`);
+            const response = await axios.delete(`http://192.168.0.10:4000/api/stores/${id}`, {
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
             if (response.data.success) {
                 message.success('Store deleted successfully');
                 fetchStores();
@@ -58,7 +68,12 @@ const SettingsPage = () => {
 
     const handleUpdate = async (values) => {
         try {
-            const response = await axios.put(`http://192.168.0.10:3000/api/stores/${editingStore.id}`, values);
+            const response = await axios.put(`http://192.168.0.10:4000/api/stores/${editingStore.id}`, values, {
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
             if (response.data.success) {
                 message.success('Store updated successfully');
                 setEditModalVisible(false);

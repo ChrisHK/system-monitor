@@ -13,12 +13,12 @@ const server = http.createServer(app);
 // CORS configuration
 const corsOptions = {
     origin: [
-        'http://localhost:3001',
-        'http://192.168.0.10:3001',
-        'http://192.168.0.239:3001'
+        'http://localhost:4001',
+        'http://192.168.0.10:4001',
+        'http://192.168.0.239:4001'
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true
 };
 

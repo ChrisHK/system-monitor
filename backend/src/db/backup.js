@@ -3,7 +3,7 @@ const { Pool } = require('pg');
 const pool = new Pool({
     user: 'zero',
     host: '192.168.0.10',
-    database: 'zerodb',
+    database: 'zerodev',
     password: 'zero',
     port: 5432,
 });
@@ -19,7 +19,7 @@ async function backupData() {
             const permissionQuery = `
                 SELECT 
                     has_table_privilege(current_user, 'system_records', 'SELECT') as can_select,
-                    has_database_privilege(current_user, 'zerodb', 'CREATE') as can_create_table
+                    has_database_privilege(current_user, 'zerodev', 'CREATE') as can_create_table
             `;
             const permissionResult = await client.query(permissionQuery);
             const perms = permissionResult.rows[0];

@@ -17,7 +17,12 @@ const Sidebar = () => {
 
     const fetchStores = async () => {
         try {
-            const response = await axios.get('http://192.168.0.10:3000/api/stores');
+            const response = await axios.get('http://192.168.0.10:4000/api/stores', {
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
             if (response.data.success) {
                 setStores(response.data.stores);
             }
@@ -33,7 +38,12 @@ const Sidebar = () => {
 
     const handleAddStore = async (values) => {
         try {
-            const response = await axios.post('http://192.168.0.10:3000/api/stores', values);
+            const response = await axios.post('http://192.168.0.10:4000/api/stores', values, {
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json'
+                }
+            });
             if (response.data.success) {
                 message.success('Store added successfully');
                 form.resetFields();

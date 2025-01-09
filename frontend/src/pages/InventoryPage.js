@@ -14,7 +14,7 @@ const InventoryPage = () => {
     const [selectedBranch, setSelectedBranch] = useState('all');
     const [filteredRecords, setFilteredRecords] = useState([]);
 
-    const API_BASE_URL = 'http://192.168.0.10:3000';
+    const API_BASE_URL = 'http://192.168.0.10:4000';
 
     const branches = [
         { value: 'all', label: 'All Stores' },
