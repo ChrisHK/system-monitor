@@ -1,25 +1,31 @@
 // Use the environment variable for API URL
 const API_BASE_URL = (() => {
-    // Get the current hostname
+    // Get the current hostname and port
     const currentHostname = window.location.hostname;
+    const currentPort = window.location.port;
     const apiUrl = process.env.REACT_APP_API_URL;
     
-    // If accessing from another machine, ensure we use the server's IP
-    if (currentHostname !== 'localhost' && currentHostname !== '127.0.0.1') {
-        return 'http://192.168.0.10:3000/api';
-    }
-    
-    return apiUrl || 'http://192.168.0.10:3000/api';
+    console.log('Network Configuration:', {
+        currentHostname,
+        currentPort,
+        apiUrl,
+        fullUrl: window.location.href
+    });
+
+    // Always use the configured API URL for consistency
+    return 'http://192.168.0.10:4000/api';
 })();
 
 // Log all environment variables and connection info for debugging
 console.log('API Configuration:', {
     currentHostname: window.location.hostname,
+    currentPort: window.location.port,
     REACT_APP_API_URL: process.env.REACT_APP_API_URL,
     REACT_APP_WS_URL: process.env.REACT_APP_WS_URL,
     NODE_ENV: process.env.NODE_ENV,
     API_BASE_URL,
-    origin: window.location.origin
+    origin: window.location.origin,
+    fullUrl: window.location.href
 });
 
 const defaultOptions = {
@@ -237,6 +243,74 @@ export const sendToStore = async (storeId, items) => {
         const response = await fetch(`${API_BASE_URL}/stores/${storeId}/outbound`, {
             ...defaultOptions,
             method: 'POST',
+            headers: {
+                ...defaultOptions.headers,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ items: items })
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error sending items to store:', error);
+        throw error;
+    }
+};
+
+export const deleteStoreItem = async (storeId, itemId) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/items/${itemId}`, {
+            ...defaultOptions,
+            method: 'DELETE'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error deleting store item:', error);
+        throw error;
+    }
+};
+
+export const exportStoreItems = async (storeId) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/export`, {
+            ...defaultOptions,
+            method: 'GET'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.text(); // Return as text for CSV
+    } catch (error) {
+        console.error('Error exporting store items:', error);
+        throw error;
+    }
+};
+
+export const checkStoreItems = async (storeId, items) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/check-items`, {
+            ...defaultOptions,
+            method: 'POST',
+            headers: {
+                ...defaultOptions.headers,
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({ items })
         });
 
@@ -248,7 +322,28 @@ export const sendToStore = async (storeId, items) => {
 
         return await response.json();
     } catch (error) {
-        console.error('Error sending items to store:', error);
+        console.error('Error checking store items:', error);
+        throw error;
+    }
+};
+
+// Check item location
+export const checkItemLocation = async (serialNumber) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/records/check-location/${serialNumber}`, {
+            ...defaultOptions,
+            method: 'GET'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error checking item location:', error);
         throw error;
     }
 }; 

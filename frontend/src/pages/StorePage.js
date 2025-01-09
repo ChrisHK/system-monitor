@@ -1,20 +1,24 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, message, Tag, Row, Col } from 'antd';
+import { Table, Input, Button, message, Row, Col, Tag, Popconfirm } from 'antd';
+import { SearchOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { getStoreItems } from '../services/api';
+import { getStoreItems, deleteStoreItem, exportStoreItems } from '../services/api';
+
+const { Search } = Input;
 
 const StorePage = () => {
+    const { storeId } = useParams();
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
-    const { storeId } = useParams();
+    const [searchText, setSearchText] = useState('');
+    const [filteredRecords, setFilteredRecords] = useState([]);
 
     const columns = [
         {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
-            width: 150,
-            filterable: true
+            width: 150
         },
         {
             title: 'Computer Name',
@@ -162,8 +166,46 @@ const StorePage = () => {
                 if (!text) return 'N/A';
                 return new Date(text).toLocaleString();
             }
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            fixed: 'right',
+            width: 100,
+            render: (_, record) => (
+                <Popconfirm
+                    title="Delete this item?"
+                    onConfirm={() => handleDelete(record.id)}
+                    okText="Yes"
+                    cancelText="No"
+                >
+                    <Button type="link" danger icon={<DeleteOutlined />}>
+                        Delete
+                    </Button>
+                </Popconfirm>
+            )
         }
     ];
+
+    const handleSearch = useCallback((value) => {
+        const searchValue = value.toLowerCase().trim();
+        setSearchText(value);
+        
+        if (!searchValue) {
+            setFilteredRecords([]);
+            return;
+        }
+        
+        const filtered = records.filter(record => 
+            record.serialnumber.toLowerCase().includes(searchValue)
+        );
+        
+        setFilteredRecords(filtered);
+        
+        if (filtered.length === 0 && searchValue) {
+            message.info('No data found');
+        }
+    }, [records]);
 
     const fetchStoreItems = useCallback(async () => {
         try {
@@ -172,9 +214,11 @@ const StorePage = () => {
 
             if (response.success) {
                 setRecords(response.items || []);
+                // Clear filtered records when fetching new data
+                setFilteredRecords([]);
+                setSearchText('');
             }
         } catch (error) {
-            console.error('Error fetching store items:', error);
             message.error(`Failed to fetch items: ${error.message}`);
         } finally {
             setLoading(false);
@@ -182,29 +226,83 @@ const StorePage = () => {
     }, [storeId]);
 
     useEffect(() => {
-        if (storeId) {
-            fetchStoreItems();
+        fetchStoreItems();
+    }, [fetchStoreItems]);
+
+    const handleDelete = async (recordId) => {
+        try {
+            setLoading(true);
+            const response = await deleteStoreItem(storeId, recordId);
+
+            if (response.success) {
+                message.success('Item deleted successfully');
+                await fetchStoreItems();
+            }
+        } catch (error) {
+            message.error(`Failed to delete item: ${error.message}`);
+        } finally {
+            setLoading(false);
         }
-    }, [storeId, fetchStoreItems]);
+    };
+
+    const handleExport = async () => {
+        try {
+            setLoading(true);
+            const csvData = await exportStoreItems(storeId);
+            
+            // Create blob and download
+            const blob = new Blob([csvData], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `store-items-${new Date().toISOString().split('T')[0]}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            
+            message.success('Export completed');
+        } catch (error) {
+            message.error(`Failed to export: ${error.message}`);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     return (
         <div>
             <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 <Col xs={24} sm={12} md={8} lg={6}>
-                    <span style={{ marginRight: 8 }}>
-                        Total Items: {records.length}
-                    </span>
+                    <Search
+                        placeholder="Search by Serial Number"
+                        allowClear
+                        enterButton={<SearchOutlined />}
+                        onSearch={handleSearch}
+                        value={searchText}
+                        onChange={(e) => handleSearch(e.target.value)}
+                        style={{ width: '100%' }}
+                    />
+                </Col>
+                <Col xs={24} sm={12} md={8} lg={6}>
+                    <Button
+                        type="primary"
+                        icon={<DownloadOutlined />}
+                        onClick={handleExport}
+                        loading={loading}
+                    >
+                        Export CSV
+                    </Button>
                 </Col>
             </Row>
 
             <Table
                 columns={columns}
-                dataSource={records}
+                dataSource={searchText ? filteredRecords : records}
                 rowKey="id"
                 loading={loading}
                 scroll={{ x: 1500 }}
                 pagination={{
-                    total: records.length,
+                    total: (searchText ? filteredRecords : records).length,
                     pageSize: 20,
                     showSizeChanger: true,
                     showQuickJumper: true,

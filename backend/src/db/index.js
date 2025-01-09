@@ -9,13 +9,14 @@ const pool = new Pool({
 });
 
 // Test the connection
-pool.query('SELECT NOW()', (err, res) => {
-    if (err) {
-        console.error('Database connection error:', err);
-    } else {
+pool.connect()
+    .then(client => {
         console.log('Database connected successfully');
-    }
-});
+        client.release();
+    })
+    .catch(err => {
+        console.error('Database connection error:', err);
+    });
 
 // Error handling
 pool.on('error', (err) => {
