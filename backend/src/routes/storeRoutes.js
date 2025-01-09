@@ -5,9 +5,9 @@ const pool = require('../db');
 // Get all stores
 router.get('/', async (req, res) => {
     try {
-        console.log('GET /api/stores - Fetching all stores');
+        console.log('=== GET /api/stores - Fetching all stores ===');
         const result = await pool.query('SELECT * FROM stores ORDER BY name');
-        console.log('Found stores:', result.rows);
+        console.log('Found stores:', JSON.stringify(result.rows, null, 2));
         res.json({ success: true, stores: result.rows });
     } catch (error) {
         console.error('Error fetching stores:', error);
@@ -141,27 +141,20 @@ router.post('/:storeId/outbound', async (req, res) => {
             });
         }
         
-        // Check for existing items in any store
+        // Get record IDs and serial numbers
         const recordIds = outboundItems.rows.map(item => item.record_id);
-        const existingItems = await client.query(`
-            SELECT si.record_id, s.name as store_name 
-            FROM store_items si
-            JOIN stores s ON si.store_id = s.id
-            WHERE si.record_id = ANY($1)
-        `, [recordIds]);
-
-        if (existingItems.rows.length > 0) {
-            await client.query('ROLLBACK');
-            const duplicates = existingItems.rows.map(item => 
-                `Record ID ${item.record_id} already exists in ${item.store_name}`
-            ).join(', ');
-            return res.status(400).json({
-                success: false,
-                error: `Cannot process items: ${duplicates}`
-            });
-        }
+        const recordsQuery = await client.query(
+            'SELECT id, serialnumber FROM system_records WHERE id = ANY($1)',
+            [recordIds]
+        );
         
-        // Add items to store
+        // Remove items from their current stores
+        await client.query(`
+            DELETE FROM store_items 
+            WHERE record_id = ANY($1)
+        `, [recordIds]);
+        
+        // Add items to new store
         for (const item of outboundItems.rows) {
             await client.query(
                 'INSERT INTO store_items (store_id, record_id, received_at) VALUES ($1, $2, NOW())',

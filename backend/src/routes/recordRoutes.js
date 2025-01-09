@@ -257,4 +257,108 @@ router.post('/', async (req, res) => {
     }
 });
 
+// Add item to outbound
+router.post('/outbound/:id', async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+        
+        // Check if item already exists in outbound
+        const existingItem = await client.query(
+            'SELECT id, serialnumber FROM outbound_items oi JOIN system_records sr ON oi.record_id = sr.id WHERE record_id = $1 AND status = $2',
+            [id, 'pending']
+        );
+        
+        if (existingItem.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                error: `Serial Number ${existingItem.rows[0].serialnumber} is already in outbound list`
+            });
+        }
+        
+        // Add to outbound
+        const result = await client.query(
+            'INSERT INTO outbound_items (record_id, status) VALUES ($1, $2) RETURNING *',
+            [id, 'pending']
+        );
+        
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            item: result.rows[0]
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error adding to outbound:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+// Check item location
+router.get('/check-location/:serialNumber', async (req, res) => {
+    const { serialNumber } = req.params;
+    const client = await pool.connect();
+    
+    try {
+        // Check if item is in any store
+        const storeQuery = `
+            SELECT s.name as store_name
+            FROM system_records r
+            JOIN store_items si ON r.id = si.record_id
+            JOIN stores s ON si.store_id = s.id
+            WHERE r.serialnumber = $1
+        `;
+        
+        const storeResult = await client.query(storeQuery, [serialNumber]);
+        
+        if (storeResult.rows.length > 0) {
+            return res.json({
+                success: true,
+                location: 'store',
+                storeName: storeResult.rows[0].store_name
+            });
+        }
+        
+        // Check if item is in inventory
+        const inventoryQuery = `
+            SELECT id
+            FROM system_records
+            WHERE serialnumber = $1
+            AND is_current = true
+        `;
+        
+        const inventoryResult = await client.query(inventoryQuery, [serialNumber]);
+        
+        if (inventoryResult.rows.length > 0) {
+            return res.json({
+                success: true,
+                location: 'inventory'
+            });
+        }
+        
+        // Item not found
+        res.json({
+            success: true,
+            location: 'none'
+        });
+    } catch (error) {
+        console.error('Error checking item location:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router; 

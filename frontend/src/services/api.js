@@ -319,4 +319,25 @@ export const checkStoreItems = async (storeId, items) => {
         console.error('Error checking store items:', error);
         throw error;
     }
+};
+
+// Check item location
+export const checkItemLocation = async (serialNumber) => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/records/check-location/${serialNumber}`, {
+            ...defaultOptions,
+            method: 'GET'
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Server response:', errorText);
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error checking item location:', error);
+        throw error;
+    }
 }; 

@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Input, Button, message, Row, Col, Select, Tag, Modal } from 'antd';
 import { SearchOutlined, ReloadOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons';
-import { searchRecords, addToOutbound, getOutboundItems, removeFromOutbound, sendToStore, getStores, checkStoreItems } from '../services/api';
-import axios from 'axios';
+import { searchRecords, addToOutbound, getOutboundItems, removeFromOutbound, sendToStore, getStores, checkStoreItems, checkItemLocation } from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -25,14 +24,44 @@ const OutboundPage = () => {
     const [stores, setStores] = useState([]);
     const [filteredRecords, setFilteredRecords] = useState([]);
     const [duplicateItems, setDuplicateItems] = useState([]);
+    const [addSerialNumber, setAddSerialNumber] = useState('');
+    const [itemLocations, setItemLocations] = useState({});
 
     const columns = [
+        {
+            title: 'Location',
+            dataIndex: 'serialnumber',
+            key: 'location',
+            width: 120,
+            render: (text) => {
+                const location = itemLocations[text];
+                if (!location) return <Tag color="default">Unknown</Tag>;
+                if (location.location === 'store') {
+                    return (
+                        <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
+                            {location.storeName}
+                        </Tag>
+                    );
+                }
+                if (location.location === 'inventory') {
+                    return (
+                        <Tag color="green" style={{ minWidth: '80px', textAlign: 'center' }}>
+                            Inventory
+                        </Tag>
+                    );
+                }
+                return (
+                    <Tag color="default" style={{ minWidth: '80px', textAlign: 'center' }}>
+                        None
+                    </Tag>
+                );
+            }
+        },
         {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
-            width: 150,
-            filterable: true
+            width: 200
         },
         {
             title: 'Computer Name',
@@ -199,37 +228,94 @@ const OutboundPage = () => {
         }
     ];
 
-    const handleSearch = useCallback((value) => {
-        const searchValue = value.toLowerCase();
+    const handleSearch = useCallback(async (value) => {
+        const searchValue = value.toLowerCase().trim();
         setSearchText(value);
         
-        if (!value.trim()) {
+        if (!searchValue) {
             setFilteredRecords([]);
             return;
         }
         
-        const filtered = records.filter(record => {
-            if (!record) return false;
-            return Object.entries(record).some(([key, val]) => {
-                if (columns.find(col => col.dataIndex === key && col.filterable)) {
-                    return val && val.toString().toLowerCase().includes(searchValue);
+        try {
+            // Search for record
+            const response = await searchRecords('serialnumber', searchValue);
+            
+            if (response.success && response.records.length > 0) {
+                const record = response.records[0];
+                
+                // Check item location
+                const locationResponse = await checkItemLocation(record.serialnumber);
+                
+                if (locationResponse.success) {
+                    setItemLocations(prev => ({
+                        ...prev,
+                        [record.serialnumber]: locationResponse
+                    }));
                 }
-                return false;
-            });
-        });
-        
-        setFilteredRecords(filtered);
-    }, [columns, records]);
+                
+                setFilteredRecords([record]);
+            } else {
+                message.warning('No record found with this serial number');
+                setFilteredRecords([]);
+            }
+        } catch (error) {
+            message.error(`Search failed: ${error.message}`);
+            setFilteredRecords([]);
+        }
+    }, []);
 
     const fetchOutboundItems = useCallback(async () => {
         try {
             setLoading(true);
             const response = await getOutboundItems();
+            console.log('Fetched outbound items:', response);
 
             if (response.success) {
-                setRecords(response.items || []);
+                const items = response.items || [];
+                setRecords(items);
+
+                // Check location for each item
+                const locationPromises = items.map(async (item) => {
+                    if (!item.serialnumber) {
+                        console.warn('Item missing serial number:', item);
+                        return null;
+                    }
+
+                    try {
+                        const locationResponse = await checkItemLocation(item.serialnumber);
+                        console.log(`Location for ${item.serialnumber}:`, locationResponse);
+                        
+                        if (locationResponse.success) {
+                            return {
+                                serialNumber: item.serialnumber,
+                                location: locationResponse
+                            };
+                        } else {
+                            console.warn(`Failed to get location for ${item.serialnumber}:`, locationResponse);
+                        }
+                    } catch (error) {
+                        console.error(`Error checking location for ${item.serialnumber}:`, error);
+                    }
+                    return null;
+                });
+
+                const locations = await Promise.all(locationPromises);
+                console.log('All locations:', locations);
+
+                const locationMap = {};
+                locations.forEach(loc => {
+                    if (loc) {
+                        locationMap[loc.serialNumber] = loc.location;
+                    }
+                });
+                console.log('Location map:', locationMap);
+                setItemLocations(locationMap);
+            } else {
+                console.warn('Failed to fetch outbound items:', response);
             }
         } catch (error) {
+            console.error('Error in fetchOutboundItems:', error);
             message.error(`Failed to fetch items: ${error.message}`);
         } finally {
             setLoading(false);
@@ -294,7 +380,7 @@ const OutboundPage = () => {
         try {
             setLoading(true);
             
-            // First check for duplicates
+            // First check for duplicates and current locations
             const serialNumbers = records.map(record => record.serialnumber);
             const checkResponse = await checkStoreItems(selectedStore, serialNumbers);
 
@@ -307,16 +393,17 @@ const OutboundPage = () => {
                 );
                 
                 Modal.confirm({
-                    title: 'Duplicate Items Detected',
+                    title: 'Transfer Items',
                     content: (
                         <div>
-                            <p>The following items already exist in other stores:</p>
+                            <p>The following items will be transferred:</p>
                             <ul>
                                 {duplicateMessages.map((msg, idx) => (
                                     <li key={idx}>{msg}</li>
                                 ))}
                             </ul>
-                            <p>Do you want to proceed anyway?</p>
+                            <p>Existing items will be removed from their current stores.</p>
+                            <p>Do you want to proceed?</p>
                         </div>
                     ),
                     onOk: () => proceedWithSend(),
@@ -357,28 +444,48 @@ const OutboundPage = () => {
 
         try {
             setLoading(true);
+            // First check if the item is already in the outbound list
+            const isDuplicate = records.some(record => record.serialnumber === serialNumber);
+            if (isDuplicate) {
+                message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
+                setAddSerialNumber(''); // Clear input on duplicate
+                return;
+            }
+
             // Search for record by serial number
             const response = await searchRecords('serialnumber', serialNumber);
 
             if (response.success && response.records.length > 0) {
                 const record = response.records[0];
                 
-                // Add record to outbound
-                const addResponse = await addToOutbound(record.id);
+                try {
+                    // Add record to outbound
+                    const addResponse = await addToOutbound(record.id);
 
-                if (addResponse.success) {
-                    message.success('Item added to outbound successfully');
-                    await fetchOutboundItems();
+                    if (addResponse.success) {
+                        message.success('Item added to outbound successfully');
+                        await fetchOutboundItems();
+                        setAddSerialNumber(''); // Clear input on success
+                    }
+                } catch (error) {
+                    // Handle specific error for duplicate items
+                    if (error.message.includes('already in outbound')) {
+                        message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
+                        setAddSerialNumber(''); // Clear input on duplicate
+                    } else {
+                        message.error(`Failed to add item: ${error.message}`);
+                    }
                 }
             } else {
                 message.warning('No record found with this serial number');
+                setAddSerialNumber(''); // Clear input when no record found
             }
         } catch (error) {
             message.error(`Failed to add item: ${error.message}`);
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [records, fetchOutboundItems]);
 
     // Update the columns definition to include row highlighting
     const getRowClassName = (record) => {
@@ -405,6 +512,8 @@ const OutboundPage = () => {
                         allowClear
                         enterButton="Add"
                         onSearch={handleAddItem}
+                        value={addSerialNumber}
+                        onChange={(e) => setAddSerialNumber(e.target.value)}
                         style={{ width: '100%' }}
                     />
                 </Col>
