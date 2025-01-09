@@ -364,4 +364,40 @@ router.post('/:storeId/check-items', async (req, res) => {
     }
 });
 
+// Check for duplicate items in store
+router.post('/:storeId/check', async (req, res) => {
+    const { storeId } = req.params;
+    const { serialNumbers } = req.body;
+    const client = await pool.connect();
+    
+    try {
+        // Check for existing items in the store
+        const query = `
+            SELECT DISTINCT r.serialnumber, s.name as store_name
+            FROM system_records r
+            JOIN store_items si ON r.id = si.record_id
+            JOIN stores s ON si.store_id = s.id
+            WHERE r.serialnumber = ANY($1)
+        `;
+        
+        const result = await client.query(query, [serialNumbers]);
+        
+        res.json({
+            success: true,
+            duplicates: result.rows.map(row => ({
+                serialNumber: row.serialnumber,
+                storeName: row.store_name
+            }))
+        });
+    } catch (error) {
+        console.error('Error checking store items:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to check store items'
+        });
+    } finally {
+        client.release();
+    }
+});
+
 module.exports = router; 

@@ -6,6 +6,7 @@ const WebSocket = require('ws');
 const recordRoutes = require('./routes/recordRoutes');
 const outboundRoutes = require('./routes/outboundRoutes');
 const storeRoutes = require('./routes/storeRoutes');
+const userRoutes = require('./routes/userRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -25,10 +26,17 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
+// JWT Secret check
+if (!process.env.JWT_SECRET) {
+    console.error('JWT_SECRET is not set in environment variables');
+    process.exit(1);
+}
+
 // API Routes
 app.use('/api/records', recordRoutes);
 app.use('/api/outbound', outboundRoutes);
 app.use('/api/stores', storeRoutes);
+app.use('/api/users', userRoutes);
 
 // Create WebSocket server directly
 const wss = new WebSocket.Server({ 
@@ -94,6 +102,11 @@ app.use((req, res) => {
         error: 'Not Found',
         path: req.url
     });
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok' });
 });
 
 // Start server

@@ -33,13 +33,15 @@ const OutboundPage = () => {
             dataIndex: 'serialnumber',
             key: 'location',
             width: 120,
-            render: (text) => {
-                const location = itemLocations[text];
-                if (!location) return <Tag color="default">Unknown</Tag>;
+            render: (serialnumber) => {
+                const location = itemLocations[serialnumber];
+                if (!location) {
+                    return <Tag color="default">Unknown</Tag>;
+                }
                 if (location.location === 'store') {
                     return (
                         <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
-                            {location.storeName}
+                            {location.storeName || 'Store'}
                         </Tag>
                     );
                 }
@@ -52,7 +54,7 @@ const OutboundPage = () => {
                 }
                 return (
                     <Tag color="default" style={{ minWidth: '80px', textAlign: 'center' }}>
-                        None
+                        {location.location || 'Unknown'}
                     </Tag>
                 );
             }
@@ -238,30 +240,46 @@ const OutboundPage = () => {
         }
         
         try {
-            // Search for record
-            const response = await searchRecords('serialnumber', searchValue);
+            setLoading(true);
+            // Search for record in inventory
+            const response = await searchRecords(searchValue);
             
-            if (response.success && response.records.length > 0) {
-                const record = response.records[0];
+            if (response?.data?.success && response.data.records?.length > 0) {
+                const records = response.data.records;
                 
-                // Check item location
-                const locationResponse = await checkItemLocation(record.serialnumber);
+                // Check locations for found records
+                const locationPromises = records.map(record => 
+                    checkItemLocation(record.serialnumber)
+                        .catch(error => {
+                            console.warn(`Failed to check location for ${record.serialnumber}:`, error);
+                            return { data: { success: true, location: 'unknown' } };
+                        })
+                );
                 
-                if (locationResponse.success) {
-                    setItemLocations(prev => ({
-                        ...prev,
-                        [record.serialnumber]: locationResponse
-                    }));
-                }
+                const locations = await Promise.all(locationPromises);
+                const locationMap = {};
+                locations.forEach((loc, index) => {
+                    if (loc?.data?.success) {
+                        locationMap[records[index].serialnumber] = loc.data;
+                    }
+                });
                 
-                setFilteredRecords([record]);
+                setItemLocations(prev => ({
+                    ...prev,
+                    ...locationMap
+                }));
+                
+                setFilteredRecords(records);
             } else {
-                message.warning('No record found with this serial number');
+                message.warning('No records found');
                 setFilteredRecords([]);
             }
         } catch (error) {
+            console.error('Search error:', error);
             message.error(`Search failed: ${error.message}`);
             setFilteredRecords([]);
+        } finally {
+            setLoading(false);
         }
     }, []);
 
@@ -269,50 +287,33 @@ const OutboundPage = () => {
         try {
             setLoading(true);
             const response = await getOutboundItems();
-            console.log('Fetched outbound items:', response);
-
-            if (response.success) {
-                const items = response.items || [];
-                setRecords(items);
-
-                // Check location for each item
-                const locationPromises = items.map(async (item) => {
-                    if (!item.serialnumber) {
-                        console.warn('Item missing serial number:', item);
-                        return null;
+            if (response?.data?.success && response.data.items) {
+                setRecords(response.data.items);
+                
+                // Fetch locations for each item
+                const locationPromises = response.data.items.map(item => {
+                    if (item.serialnumber) {
+                        return checkItemLocation(item.serialnumber)
+                            .catch(error => {
+                                console.warn(`Failed to check location for ${item.serialnumber}:`, error);
+                                return { data: { success: true, location: 'unknown' } };
+                            });
                     }
-
-                    try {
-                        const locationResponse = await checkItemLocation(item.serialnumber);
-                        console.log(`Location for ${item.serialnumber}:`, locationResponse);
-                        
-                        if (locationResponse.success) {
-                            return {
-                                serialNumber: item.serialnumber,
-                                location: locationResponse
-                            };
-                        } else {
-                            console.warn(`Failed to get location for ${item.serialnumber}:`, locationResponse);
-                        }
-                    } catch (error) {
-                        console.error(`Error checking location for ${item.serialnumber}:`, error);
-                    }
-                    return null;
+                    return Promise.resolve({ data: { success: true, location: 'unknown' } });
                 });
 
                 const locations = await Promise.all(locationPromises);
-                console.log('All locations:', locations);
-
                 const locationMap = {};
-                locations.forEach(loc => {
-                    if (loc) {
-                        locationMap[loc.serialNumber] = loc.location;
+                locations.forEach((loc, index) => {
+                    const item = response.data.items[index];
+                    if (loc?.data?.success && item) {
+                        locationMap[item.serialnumber] = loc.data;
                     }
                 });
-                console.log('Location map:', locationMap);
                 setItemLocations(locationMap);
             } else {
-                console.warn('Failed to fetch outbound items:', response);
+                console.warn('Invalid response format:', response);
+                message.error('Failed to fetch outbound items: Invalid response format');
             }
         } catch (error) {
             console.error('Error in fetchOutboundItems:', error);
@@ -325,13 +326,16 @@ const OutboundPage = () => {
     const fetchStores = useCallback(async () => {
         try {
             const response = await getStores();
-            if (response.success) {
-                setStores(response.stores.map(store => ({
+            if (response?.data?.success && response.data.stores) {
+                setStores(response.data.stores.map(store => ({
                     value: store.id,
                     label: store.name
                 })));
+            } else {
+                message.error('Failed to fetch stores: Invalid response format');
             }
         } catch (error) {
+            console.error('Fetch stores error:', error);
             message.error(`Failed to fetch stores: ${error.message}`);
         }
     }, []);
@@ -380,12 +384,12 @@ const OutboundPage = () => {
         try {
             setLoading(true);
             
-            // First check for duplicates and current locations
+            // First check for duplicates
             const serialNumbers = records.map(record => record.serialnumber);
             const checkResponse = await checkStoreItems(selectedStore, serialNumbers);
 
-            if (checkResponse.duplicates.length > 0) {
-                const duplicates = checkResponse.duplicates;
+            if (checkResponse?.data?.success && checkResponse.data.duplicates?.length > 0) {
+                const duplicates = checkResponse.data.duplicates;
                 setDuplicateItems(duplicates.map(d => d.serialNumber));
                 
                 const duplicateMessages = duplicates.map(d => 
@@ -409,6 +413,7 @@ const OutboundPage = () => {
                     onOk: () => proceedWithSend(),
                     onCancel: () => {
                         setLoading(false);
+                        setDuplicateItems([]);
                     },
                 });
                 return;
@@ -416,24 +421,30 @@ const OutboundPage = () => {
 
             await proceedWithSend();
         } catch (error) {
-            message.error(error.message);
+            console.error('Send to store error:', error);
+            message.error(`Failed to send items: ${error.message}`);
             setLoading(false);
         }
     };
 
     const proceedWithSend = async () => {
         try {
-            const itemIds = records.map(record => record.outbound_item_id);
-            const response = await sendToStore(selectedStore, itemIds);
+            // Get outbound item IDs
+            const items = records.map(record => record.outbound_item_id);
+            const response = await sendToStore(selectedStore, items);
 
-            if (response.success) {
+            if (response?.data?.success) {
                 message.success('Items sent to store successfully');
                 await fetchOutboundItems();
                 setSelectedStore(null);
                 setDuplicateItems([]);
+            } else {
+                throw new Error(response?.data?.error || 'Failed to send items to store');
             }
         } catch (error) {
-            message.error(error.message);
+            console.error('Send to store error:', error);
+            const errorMessage = error.response?.data?.error || error.message;
+            message.error(`Failed to send items: ${errorMessage}`);
         } finally {
             setLoading(false);
         }
@@ -448,42 +459,41 @@ const OutboundPage = () => {
             const isDuplicate = records.some(record => record.serialnumber === serialNumber);
             if (isDuplicate) {
                 message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
-                setAddSerialNumber(''); // Clear input on duplicate
+                setAddSerialNumber('');
                 return;
             }
 
-            // Search for record by serial number
-            const response = await searchRecords('serialnumber', serialNumber);
+            // Search for record in inventory
+            const response = await searchRecords(serialNumber);
 
-            if (response.success && response.records.length > 0) {
-                const record = response.records[0];
+            if (response?.data?.success && response.data.records?.length > 0) {
+                const record = response.data.records[0];
                 
+                // Add to outbound directly
                 try {
-                    // Add record to outbound
                     const addResponse = await addToOutbound(record.id);
-
-                    if (addResponse.success) {
+                    if (addResponse?.data?.success) {
                         message.success('Item added to outbound successfully');
                         await fetchOutboundItems();
-                        setAddSerialNumber(''); // Clear input on success
+                        setAddSerialNumber('');
                     }
                 } catch (error) {
-                    // Handle specific error for duplicate items
-                    if (error.message.includes('already in outbound')) {
+                    if (error.response?.data?.error?.includes('already in outbound')) {
                         message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
-                        setAddSerialNumber(''); // Clear input on duplicate
                     } else {
+                        console.error('Add to outbound error:', error);
                         message.error(`Failed to add item: ${error.message}`);
                     }
                 }
             } else {
                 message.warning('No record found with this serial number');
-                setAddSerialNumber(''); // Clear input when no record found
             }
         } catch (error) {
-            message.error(`Failed to add item: ${error.message}`);
+            console.error('Search error:', error);
+            message.error(`Failed to search item: ${error.message}`);
         } finally {
             setLoading(false);
+            setAddSerialNumber('');
         }
     }, [records, fetchOutboundItems]);
 

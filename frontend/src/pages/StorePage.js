@@ -197,13 +197,17 @@ const StorePage = () => {
         }
         
         const filtered = records.filter(record => 
-            record.serialnumber.toLowerCase().includes(searchValue)
+            Object.values(record)
+                .some(val => 
+                    val && 
+                    val.toString().toLowerCase().includes(searchValue)
+                )
         );
         
         setFilteredRecords(filtered);
         
         if (filtered.length === 0 && searchValue) {
-            message.info('No data found');
+            message.info('No matching records found in this store');
         }
     }, [records]);
 
@@ -212,13 +216,17 @@ const StorePage = () => {
             setLoading(true);
             const response = await getStoreItems(storeId);
 
-            if (response.success) {
-                setRecords(response.items || []);
+            if (response?.data?.success) {
+                setRecords(response.data.items || []);
                 // Clear filtered records when fetching new data
                 setFilteredRecords([]);
                 setSearchText('');
+            } else {
+                console.warn('Invalid response format:', response);
+                message.error('Failed to fetch items: Invalid response format');
             }
         } catch (error) {
+            console.error('Error fetching store items:', error);
             message.error(`Failed to fetch items: ${error.message}`);
         } finally {
             setLoading(false);
@@ -234,12 +242,15 @@ const StorePage = () => {
             setLoading(true);
             const response = await deleteStoreItem(storeId, recordId);
 
-            if (response.success) {
+            if (response?.data?.success) {
                 message.success('Item deleted successfully');
                 await fetchStoreItems();
+            } else {
+                throw new Error(response?.data?.error || 'Failed to delete item');
             }
         } catch (error) {
-            message.error(`Failed to delete item: ${error.message}`);
+            console.error('Error deleting item:', error);
+            message.error(`Failed to delete item: ${error.response?.data?.error || error.message}`);
         } finally {
             setLoading(false);
         }
@@ -272,26 +283,26 @@ const StorePage = () => {
     return (
         <div>
             <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Search
-                        placeholder="Search by Serial Number"
-                        allowClear
-                        enterButton={<SearchOutlined />}
-                        onSearch={handleSearch}
-                        value={searchText}
-                        onChange={(e) => handleSearch(e.target.value)}
-                        style={{ width: '100%' }}
-                    />
-                </Col>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Button
-                        type="primary"
-                        icon={<DownloadOutlined />}
-                        onClick={handleExport}
-                        loading={loading}
-                    >
-                        Export CSV
-                    </Button>
+                <Col flex="auto">
+                    <Input.Group compact style={{ display: 'flex' }}>
+                        <Search
+                            placeholder="Search in current store..."
+                            allowClear
+                            enterButton={<SearchOutlined />}
+                            onSearch={handleSearch}
+                            value={searchText}
+                            onChange={(e) => handleSearch(e.target.value)}
+                            style={{ flex: 1 }}
+                        />
+                        <Button
+                            type="primary"
+                            icon={<DownloadOutlined />}
+                            onClick={handleExport}
+                            loading={loading}
+                        >
+                            Export
+                        </Button>
+                    </Input.Group>
                 </Col>
             </Row>
 
@@ -308,6 +319,18 @@ const StorePage = () => {
                     showQuickJumper: true,
                     pageSizeOptions: ['20', '50', '100'],
                     defaultPageSize: 20
+                }}
+                summary={pageData => {
+                    const total = pageData.length;
+                    return (
+                        <Table.Summary fixed>
+                            <Table.Summary.Row>
+                                <Table.Summary.Cell index={0} colSpan={columns.length}>
+                                    Total Records: {total}
+                                </Table.Summary.Cell>
+                            </Table.Summary.Row>
+                        </Table.Summary>
+                    );
                 }}
             />
         </div>

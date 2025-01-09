@@ -7,10 +7,12 @@
     "dev": "nodemon -r dotenv/config src/app.js"
   },
   "dependencies": {
+    "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
     "lodash.debounce": "^4.0.8",
     "pg": "^8.13.1",
     "ws": "^8.18.0"
