@@ -1,82 +1,59 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { ThemeProvider } from '@mui/material/styles';
-import CssBaseline from '@mui/material/CssBaseline';
-import theme from './theme';
-
-import { AuthProvider } from './contexts/AuthContext';
-import ProtectedRoute from './components/ProtectedRoute';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
-import LoginPage from './pages/LoginPage';
 import InventoryPage from './pages/InventoryPage';
+import StorePage from './pages/StorePage';
 import OutboundPage from './pages/OutboundPage';
 import SettingsPage from './pages/SettingsPage';
-import StorePage from './pages/StorePage';
+import LoginPage from './pages/LoginPage';
+import { AuthProvider } from './contexts/AuthContext';
 
-function App() {
+// Private Route Component
+const PrivateRoute = ({ children }) => {
+    const user = JSON.parse(localStorage.getItem('user'));
+    return user ? children : <Navigate to="/login" />;
+};
+
+const App = () => {
     return (
-        <ThemeProvider theme={theme}>
-            <CssBaseline />
+        <BrowserRouter>
             <AuthProvider>
-                <Router>
-                    <Routes>
-                        <Route path="/login" element={<LoginPage />} />
-                        <Route
-                            path="/"
-                            element={
-                                <ProtectedRoute>
-                                    <Layout>
-                                        <InventoryPage />
-                                    </Layout>
-                                </ProtectedRoute>
-                            }
-                        />
-                        <Route
-                            path="/inventory"
-                            element={
-                                <ProtectedRoute>
-                                    <Layout>
-                                        <InventoryPage />
-                                    </Layout>
-                                </ProtectedRoute>
-                            }
-                        />
-                        <Route
-                            path="/outbound"
-                            element={
-                                <ProtectedRoute>
-                                    <Layout>
-                                        <OutboundPage />
-                                    </Layout>
-                                </ProtectedRoute>
-                            }
-                        />
-                        <Route
-                            path="/stores/:storeId"
-                            element={
-                                <ProtectedRoute>
-                                    <Layout>
-                                        <StorePage />
-                                    </Layout>
-                                </ProtectedRoute>
-                            }
-                        />
-                        <Route
-                            path="/settings/*"
-                            element={
-                                <ProtectedRoute adminOnly>
-                                    <Layout>
-                                        <SettingsPage />
-                                    </Layout>
-                                </ProtectedRoute>
-                            }
-                        />
-                        <Route path="*" element={<Navigate to="/" replace />} />
-                    </Routes>
-                </Router>
+                <Routes>
+                    <Route path="/" element={<Navigate to="/inventory" />} />
+                    <Route path="/login" element={<LoginPage />} />
+                    <Route path="/inventory" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <InventoryPage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="/stores/:storeId" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <StorePage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="/outbound" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <OutboundPage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="/settings/*" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <SettingsPage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="*" element={<Navigate to="/inventory" />} />
+                </Routes>
             </AuthProvider>
-        </ThemeProvider>
+        </BrowserRouter>
     );
-}
+};
 
 export default App; 

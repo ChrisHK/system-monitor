@@ -59,18 +59,7 @@
     color: #1890ff !important;
 }
 
-/* Sider collapse button */
-.ant-layout-sider-trigger {
-    background: #fff !important;
-    color: rgba(0, 0, 0, 0.65) !important;
-    border-right: 1px solid #f0f0f0;
-}
-
-.ant-layout-sider-trigger:hover {
-    color: #1890ff !important;
-}
-
-/* Modal styles */
+/* Store Modal styles */
 .store-modal .ant-modal-content {
     border-radius: 8px;
     box-shadow: 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 6px 16px 0 rgba(0, 0, 0, 0.08);
@@ -85,6 +74,17 @@
 .store-modal .ant-form-item-label > label {
     font-weight: 500;
     color: rgba(0, 0, 0, 0.85);
+}
+
+/* Sider collapse button */
+.ant-layout-sider-trigger {
+    background: #fff !important;
+    color: rgba(0, 0, 0, 0.65) !important;
+    border-right: 1px solid #f0f0f0;
+}
+
+.ant-layout-sider-trigger:hover {
+    color: #1890ff !important;
 }
 
 /* Responsive styles */

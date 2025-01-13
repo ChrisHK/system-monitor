@@ -1,152 +1,109 @@
 import React, { useState } from 'react';
+import { Form, Input, Button, Card, message } from 'antd';
+import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import {
-    Box,
-    Button,
-    Container,
-    TextField,
-    Typography,
-    Paper,
-    Alert,
-    CircularProgress
-} from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
-import api from '../services/api';
+import { login as apiLogin } from '../services/api';
 
 const LoginPage = () => {
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
     const { login } = useAuth();
+    const [loading, setLoading] = useState(false);
 
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-        setError('');
-        setLoading(true);
-
+    const onFinish = async (values) => {
         try {
-            if (!username || !password) {
-                setError('Please enter both username and password');
-                setLoading(false);
-                return;
-            }
-
-            const response = await api.post('/users/login', {
-                username,
-                password
+            setLoading(true);
+            console.log('Login attempt with:', {
+                username: values.username,
+                hasPassword: !!values.password
             });
 
-            if (response.data && response.data.token) {
-                // Extract user data from response
-                const user = response.data.user || {};
+            // Call API login
+            const response = await apiLogin({
+                username: values.username,
+                password: values.password
+            });
+
+            console.log('Login API response:', {
+                success: response.success,
+                hasToken: !!response.token,
+                hasUser: !!response.user,
+                error: response.error
+            });
+
+            if (response.success && response.token && response.user) {
+                // Call context login
+                const loginSuccess = await login(response.token, response.user);
                 
-                // Ensure all required fields are present
-                const userData = {
-                    id: user.id || user._id,
-                    username: user.username || username,
-                    role: user.role || 'user',
-                    name: user.name || username,
-                    email: user.email || '',
-                    created_at: user.created_at || new Date().toISOString()
-                };
-
-                // Log the processed user data
-                console.log('Processed user data:', userData);
-
-                const loginSuccess = await login(response.data.token, userData);
                 if (loginSuccess) {
+                    message.success('Login successful');
                     navigate('/');
-                } else {
-                    setError('Failed to set authentication state');
+                    return;
                 }
-            } else {
-                console.error('Invalid server response:', response.data);
-                setError('Invalid response from server');
             }
+            
+            // Handle login failure
+            throw new Error(response.error || 'Failed to login');
+
         } catch (error) {
-            console.error('Login error:', error);
-            if (error.response?.status === 401) {
-                setError('Invalid username or password');
-            } else if (error.response?.status === 404) {
-                setError('Server not found. Please try again later.');
-            } else {
-                setError('Login failed. Please try again.');
-            }
+            console.error('Login failed:', error);
+            message.error(error.message || 'Failed to login');
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <Container component="main" maxWidth="xs">
-            <Box
-                sx={{
-                    marginTop: 8,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                }}
-            >
-                <Paper
-                    elevation={3}
-                    sx={{
-                        padding: 4,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        width: '100%',
-                    }}
+        <div style={{ 
+            display: 'flex', 
+            justifyContent: 'center', 
+            alignItems: 'center', 
+            minHeight: '100vh',
+            background: '#f0f2f5'
+        }}>
+            <Card style={{ width: 300, boxShadow: '0 4px 8px rgba(0,0,0,0.1)' }}>
+                <h2 style={{ textAlign: 'center', marginBottom: 24 }}>Login</h2>
+                <Form
+                    name="login"
+                    onFinish={onFinish}
+                    autoComplete="off"
                 >
-                    <Typography component="h1" variant="h5">
-                        Sign in
-                    </Typography>
-                    <Box component="form" onSubmit={handleSubmit} sx={{ mt: 1, width: '100%' }}>
-                        {error && (
-                            <Alert severity="error" sx={{ mb: 2 }}>
-                                {error}
-                            </Alert>
-                        )}
-                        <TextField
-                            margin="normal"
-                            required
-                            fullWidth
-                            id="username"
-                            label="Username"
-                            name="username"
-                            autoComplete="username"
-                            autoFocus
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            disabled={loading}
+                    <Form.Item
+                        name="username"
+                        rules={[{ required: true, message: 'Please input your username!' }]}
+                    >
+                        <Input 
+                            prefix={<UserOutlined />} 
+                            placeholder="Username" 
+                            size="large"
                         />
-                        <TextField
-                            margin="normal"
-                            required
-                            fullWidth
-                            name="password"
-                            label="Password"
-                            type="password"
-                            id="password"
-                            autoComplete="current-password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            disabled={loading}
+                    </Form.Item>
+
+                    <Form.Item
+                        name="password"
+                        rules={[{ required: true, message: 'Please input your password!' }]}
+                    >
+                        <Input.Password
+                            prefix={<LockOutlined />}
+                            placeholder="Password"
+                            size="large"
                         />
-                        <Button
-                            type="submit"
-                            fullWidth
-                            variant="contained"
-                            sx={{ mt: 3, mb: 2 }}
-                            disabled={loading}
+                    </Form.Item>
+
+                    <Form.Item>
+                        <Button 
+                            type="primary" 
+                            htmlType="submit"
+                            loading={loading}
+                            style={{ width: '100%' }}
+                            size="large"
                         >
-                            {loading ? <CircularProgress size={24} /> : 'Sign In'}
+                            Log in
                         </Button>
-                    </Box>
-                </Paper>
-            </Box>
-        </Container>
+                    </Form.Item>
+                </Form>
+            </Card>
+        </div>
     );
 };
 

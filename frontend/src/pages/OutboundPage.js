@@ -1,30 +1,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Input, Button, message, Row, Col, Select, Tag, Modal } from 'antd';
+import { Table, Input, Button, message, Row, Col, Select, Tag } from 'antd';
 import { SearchOutlined, ReloadOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons';
-import { searchRecords, addToOutbound, getOutboundItems, removeFromOutbound, sendToStore, getStores, checkStoreItems, checkItemLocation } from '../services/api';
+import { searchRecords, addToOutbound, getOutboundItems, removeFromOutbound, sendToStore, storeApi, checkItemLocation } from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
-
-// Add styles object
-const styles = {
-    duplicateRow: {
-        backgroundColor: '#fff1f0'
-    },
-    duplicateRowHover: {
-        backgroundColor: '#ffccc7'
-    }
-};
 
 const OutboundPage = () => {
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
     const [searchText, setSearchText] = useState('');
+    const [addSerialNumber, setAddSerialNumber] = useState('');
     const [selectedStore, setSelectedStore] = useState(null);
     const [stores, setStores] = useState([]);
     const [filteredRecords, setFilteredRecords] = useState([]);
-    const [duplicateItems, setDuplicateItems] = useState([]);
-    const [addSerialNumber, setAddSerialNumber] = useState('');
     const [itemLocations, setItemLocations] = useState({});
 
     const columns = [
@@ -41,7 +30,7 @@ const OutboundPage = () => {
                 if (location.location === 'store') {
                     return (
                         <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
-                            {location.storeName || 'Store'}
+                            {location.store_name || 'Store'}
                         </Tag>
                     );
                 }
@@ -287,37 +276,23 @@ const OutboundPage = () => {
         try {
             setLoading(true);
             const response = await getOutboundItems();
-            if (response?.data?.success && response.data.items) {
-                setRecords(response.data.items);
-                
-                // Fetch locations for each item
-                const locationPromises = response.data.items.map(item => {
-                    if (item.serialnumber) {
-                        return checkItemLocation(item.serialnumber)
-                            .catch(error => {
-                                console.warn(`Failed to check location for ${item.serialnumber}:`, error);
-                                return { data: { success: true, location: 'unknown' } };
-                            });
-                    }
-                    return Promise.resolve({ data: { success: true, location: 'unknown' } });
-                });
+            
+            if (response?.items) {
+                setRecords(response.items);
+
+                // Fetch locations for all items
+                const locationPromises = response.items.map(item => 
+                    checkItemLocation(item.serialnumber)
+                        .then(location => [item.serialnumber, location])
+                        .catch(() => [item.serialnumber, { location: 'unknown' }])
+                );
 
                 const locations = await Promise.all(locationPromises);
-                const locationMap = {};
-                locations.forEach((loc, index) => {
-                    const item = response.data.items[index];
-                    if (loc?.data?.success && item) {
-                        locationMap[item.serialnumber] = loc.data;
-                    }
-                });
+                const locationMap = Object.fromEntries(locations);
                 setItemLocations(locationMap);
-            } else {
-                console.warn('Invalid response format:', response);
-                message.error('Failed to fetch outbound items: Invalid response format');
             }
         } catch (error) {
-            console.error('Error in fetchOutboundItems:', error);
-            message.error(`Failed to fetch items: ${error.message}`);
+            message.error('Failed to fetch outbound items');
         } finally {
             setLoading(false);
         }
@@ -325,18 +300,25 @@ const OutboundPage = () => {
 
     const fetchStores = useCallback(async () => {
         try {
-            const response = await getStores();
-            if (response?.data?.success && response.data.stores) {
-                setStores(response.data.stores.map(store => ({
-                    value: store.id,
-                    label: store.name
-                })));
+            console.log('Fetching stores for outbound page...');
+            const response = await storeApi.getStores();
+            console.log('Outbound stores response:', response);
+
+            if (response?.success) {
+                const validStores = response.stores
+                    .filter(store => store && (store.id || store.value))
+                    .map(store => ({
+                        value: store.id?.toString() || store.value?.toString(),
+                        label: store.name || 'Unknown Store'
+                    }));
+                console.log('Valid stores:', validStores);
+                setStores(validStores);
             } else {
-                message.error('Failed to fetch stores: Invalid response format');
+                throw new Error(response?.error || 'Failed to fetch stores');
             }
         } catch (error) {
-            console.error('Fetch stores error:', error);
-            message.error(`Failed to fetch stores: ${error.message}`);
+            console.error('Error fetching stores:', error);
+            message.error('Failed to load stores');
         }
     }, []);
 
@@ -347,7 +329,10 @@ const OutboundPage = () => {
     }, [fetchOutboundItems, fetchStores]);
 
     const handleStoreChange = useCallback((value) => {
-        setSelectedStore(value);
+        console.log('Store selected:', value);
+        const storeId = value?.toString();
+        console.log('Store ID:', storeId);
+        setSelectedStore(storeId);
     }, []);
 
     const handleRefresh = useCallback(() => {
@@ -372,79 +357,101 @@ const OutboundPage = () => {
 
     const handleSendToStore = async () => {
         if (!selectedStore) {
-            message.warning('Please select a store first');
-            return;
-        }
-
-        if (records.length === 0) {
-            message.warning('No items to send');
+            message.error('Please select a store first');
             return;
         }
 
         try {
             setLoading(true);
             
-            // First check for duplicates
-            const serialNumbers = records.map(record => record.serialnumber);
-            const checkResponse = await checkStoreItems(selectedStore, serialNumbers);
-
-            if (checkResponse?.data?.success && checkResponse.data.duplicates?.length > 0) {
-                const duplicates = checkResponse.data.duplicates;
-                setDuplicateItems(duplicates.map(d => d.serialNumber));
-                
-                const duplicateMessages = duplicates.map(d => 
-                    `Serial Number ${d.serialNumber} already exists in ${d.storeName}`
-                );
-                
-                Modal.confirm({
-                    title: 'Transfer Items',
-                    content: (
-                        <div>
-                            <p>The following items will be transferred:</p>
-                            <ul>
-                                {duplicateMessages.map((msg, idx) => (
-                                    <li key={idx}>{msg}</li>
-                                ))}
-                            </ul>
-                            <p>Existing items will be removed from their current stores.</p>
-                            <p>Do you want to proceed?</p>
-                        </div>
-                    ),
-                    onOk: () => proceedWithSend(),
-                    onCancel: () => {
-                        setLoading(false);
-                        setDuplicateItems([]);
-                    },
-                });
-                return;
+            // Get the store details for location update
+            const selectedStoreData = stores.find(s => s.value === selectedStore);
+            if (!selectedStoreData) {
+                throw new Error('Store not found');
             }
 
-            await proceedWithSend();
-        } catch (error) {
-            console.error('Send to store error:', error);
-            message.error(`Failed to send items: ${error.message}`);
-            setLoading(false);
-        }
-    };
+            // Log the full records for debugging
+            console.log('Current records:', records);
 
-    const proceedWithSend = async () => {
-        try {
-            // Get outbound item IDs
-            const items = records.map(record => record.outbound_item_id);
-            const response = await sendToStore(selectedStore, items);
+            // Get the outbound item IDs - using outbound_item_id
+            const outboundIds = records.map(r => r.outbound_item_id).filter(Boolean);
+            if (outboundIds.length === 0) {
+                throw new Error('No valid outbound items found');
+            }
 
-            if (response?.data?.success) {
+            console.log('Sending items to store:', { 
+                selectedStore,
+                outboundIds,
+                records: records.map(r => ({ 
+                    id: r.id,
+                    outbound_item_id: r.outbound_item_id,
+                    serialnumber: r.serialnumber 
+                }))
+            });
+
+            // Send items to store using outbound IDs
+            const response = await sendToStore(selectedStore, outboundIds);
+            console.log('Send to store response:', response);
+            
+            if (response?.success) {
+                // Update locations for sent items
+                const newLocations = {};
+                records.forEach(record => {
+                    newLocations[record.serialnumber] = {
+                        location: 'store',
+                        store_name: selectedStoreData.label,
+                        store_id: selectedStore
+                    };
+                });
+
+                // Update itemLocations state
+                setItemLocations(prev => ({
+                    ...prev,
+                    ...newLocations
+                }));
+
                 message.success('Items sent to store successfully');
                 await fetchOutboundItems();
-                setSelectedStore(null);
-                setDuplicateItems([]);
             } else {
-                throw new Error(response?.data?.error || 'Failed to send items to store');
+                // Check if items are already in stores
+                if (response?.error?.includes('already in stores:')) {
+                    const confirmMove = window.confirm(
+                        `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`
+                    );
+                    
+                    if (confirmMove) {
+                        // Retry sending with force flag
+                        const retryResponse = await sendToStore(selectedStore, outboundIds, true);
+                        if (retryResponse?.success) {
+                            // Update locations for sent items
+                            const newLocations = {};
+                            records.forEach(record => {
+                                newLocations[record.serialnumber] = {
+                                    location: 'store',
+                                    store_name: selectedStoreData.label,
+                                    store_id: selectedStore
+                                };
+                            });
+
+                            // Update itemLocations state
+                            setItemLocations(prev => ({
+                                ...prev,
+                                ...newLocations
+                            }));
+
+                            message.success('Items moved to new store successfully');
+                            await fetchOutboundItems();
+                        } else {
+                            throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                        }
+                    }
+                } else {
+                    throw new Error(response?.error || 'Failed to send items to store');
+                }
             }
         } catch (error) {
-            console.error('Send to store error:', error);
-            const errorMessage = error.response?.data?.error || error.message;
-            message.error(`Failed to send items: ${errorMessage}`);
+            console.error('Error sending items to store:', error);
+            message.error(error.message || 'Failed to send items to store');
         } finally {
             setLoading(false);
         }
@@ -464,33 +471,36 @@ const OutboundPage = () => {
             }
 
             // Search for record in inventory
-            const response = await searchRecords(serialNumber);
-
-            if (response?.data?.success && response.data.records?.length > 0) {
-                const record = response.data.records[0];
+            const searchResponse = await searchRecords(serialNumber);
+            console.log('Search response:', searchResponse);
+            
+            // Check if we have a valid record
+            if (searchResponse?.success && searchResponse.records?.length > 0) {
+                const record = searchResponse.records[0];
+                console.log('Found record:', record);
                 
-                // Add to outbound directly
-                try {
-                    const addResponse = await addToOutbound(record.id);
-                    if (addResponse?.data?.success) {
-                        message.success('Item added to outbound successfully');
-                        await fetchOutboundItems();
-                        setAddSerialNumber('');
-                    }
-                } catch (error) {
-                    if (error.response?.data?.error?.includes('already in outbound')) {
-                        message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
-                    } else {
-                        console.error('Add to outbound error:', error);
-                        message.error(`Failed to add item: ${error.message}`);
-                    }
+                // Add to outbound
+                const addResponse = await addToOutbound(record.id);
+                console.log('Add to outbound response:', addResponse);
+
+                if (addResponse?.success) {
+                    message.success('Item added to outbound successfully');
+                    await fetchOutboundItems();
+                    setAddSerialNumber('');
+                } else {
+                    throw new Error(addResponse?.error || 'Failed to add item to outbound');
                 }
             } else {
+                console.log('No record found. Search response:', searchResponse);
                 message.warning('No record found with this serial number');
             }
         } catch (error) {
-            console.error('Search error:', error);
-            message.error(`Failed to search item: ${error.message}`);
+            console.error('Add item error:', error);
+            if (error.response?.data?.error?.includes('already in outbound')) {
+                message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
+            } else {
+                message.error(error.message || 'Failed to add item');
+            }
         } finally {
             setLoading(false);
             setAddSerialNumber('');
@@ -499,7 +509,7 @@ const OutboundPage = () => {
 
     // Update the columns definition to include row highlighting
     const getRowClassName = (record) => {
-        return duplicateItems.includes(record.serialnumber) ? 'duplicate-row' : '';
+        return '';
     };
 
     return (
@@ -579,7 +589,7 @@ const OutboundPage = () => {
                 scroll={{ x: 1500 }}
                 rowClassName={getRowClassName}
                 onRow={(record) => ({
-                    style: duplicateItems.includes(record.serialnumber) ? styles.duplicateRow : {}
+                    style: {}
                 })}
                 pagination={{
                     total: (searchText ? filteredRecords : records).length,
@@ -590,14 +600,6 @@ const OutboundPage = () => {
                     defaultPageSize: 20
                 }}
             />
-            
-            <style>
-                {`
-                    .duplicate-row:hover td {
-                        background-color: #ffccc7 !important;
-                    }
-                `}
-            </style>
         </div>
     );
 };

@@ -1,14 +1,33 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import api from '../services/api';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
+    const initRef = useRef(false);
 
+    // Helper function to clear auth data
+    const clearAuthData = useCallback(() => {
+        setUser(null);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        delete axios.defaults.headers.common['Authorization'];
+        delete api.defaults.headers.common['Authorization'];
+    }, []);
+
+    // Initialize auth state
     useEffect(() => {
         const initializeAuth = async () => {
+            // Prevent multiple initializations in development mode
+            if (initRef.current) {
+                console.log('Auth already initialized, skipping...');
+                return;
+            }
+            initRef.current = true;
+
             try {
                 console.log('Initializing auth...');
                 const token = localStorage.getItem('token');
@@ -18,36 +37,62 @@ export const AuthProvider = ({ children }) => {
                     try {
                         console.log('Found stored credentials');
                         const parsedUser = JSON.parse(storedUser);
-                        console.log('Stored user data:', parsedUser);
                         
                         if (parsedUser && parsedUser.username && parsedUser.role) {
-                            setUser(parsedUser);
+                            // Set axios default headers first
                             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-                            console.log('Auth initialized successfully');
+                            api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+                            
+                            // Set user state first
+                            setUser(parsedUser);
+                            
+                            // Verify token after setting state
+                            try {
+                                const checkResponse = await api.get('/users/me');
+                                if (!checkResponse?.data?.user) {
+                                    throw new Error('Token validation failed');
+                                }
+                                console.log('Auth initialized successfully');
+                            } catch (error) {
+                                console.error('Token validation error:', error);
+                                clearAuthData();
+                            }
                         } else {
                             console.error('Invalid stored user data');
-                            localStorage.removeItem('token');
-                            localStorage.removeItem('user');
+                            clearAuthData();
                         }
                     } catch (parseError) {
                         console.error('Failed to parse stored user data:', parseError);
-                        localStorage.removeItem('token');
-                        localStorage.removeItem('user');
+                        clearAuthData();
                     }
                 } else {
                     console.log('No stored credentials found');
+                    clearAuthData();
                 }
             } catch (error) {
                 console.error('Auth initialization error:', error);
-                localStorage.removeItem('token');
-                localStorage.removeItem('user');
+                clearAuthData();
             } finally {
                 setLoading(false);
             }
         };
 
         initializeAuth();
-    }, []);
+
+        // Add event listener for storage changes
+        const handleStorageChange = (e) => {
+            if (e.key === 'token' || e.key === 'user') {
+                // Reset initRef when storage changes
+                initRef.current = false;
+                initializeAuth();
+            }
+        };
+        window.addEventListener('storage', handleStorageChange);
+
+        return () => {
+            window.removeEventListener('storage', handleStorageChange);
+        };
+    }, [clearAuthData]);
 
     const login = async (token, userData) => {
         console.log('Setting user data:', userData);
@@ -64,37 +109,49 @@ export const AuthProvider = ({ children }) => {
         }
 
         try {
-            // Set user state and localStorage
-            setUser(userData);
-            localStorage.setItem('token', token);
-            localStorage.setItem('user', JSON.stringify(userData));
-
-            // Set axios default headers
+            // First set the token in axios headers
             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-            
-            console.log('Auth state updated:', {
-                user: userData,
-                token: token ? 'exists' : 'missing',
-                headers: axios.defaults.headers.common['Authorization']
-            });
+            api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
-            return true;
+            // Then verify token with backend
+            try {
+                const checkResponse = await api.get('/users/me');
+                if (!checkResponse?.data?.user) {
+                    throw new Error('Token validation failed');
+                }
+
+                // If token is valid, set user state and localStorage
+                setUser(userData);
+                localStorage.setItem('token', token);
+                localStorage.setItem('user', JSON.stringify(userData));
+                
+                console.log('Auth state updated:', {
+                    user: userData,
+                    token: token ? 'exists' : 'missing',
+                    headers: axios.defaults.headers.common['Authorization']
+                });
+
+                return true;
+            } catch (checkError) {
+                console.error('Token validation error:', checkError);
+                clearAuthData();
+                return false;
+            }
         } catch (error) {
             console.error('Failed to set auth state:', error);
+            clearAuthData();
             return false;
         }
     };
 
-    const logout = () => {
+    const logout = useCallback(() => {
         console.log('Logging out...');
-        setUser(null);
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        delete axios.defaults.headers.common['Authorization'];
-        window.location.href = '/login';
-    };
+        clearAuthData();
+        // Use replace to prevent back navigation to protected routes
+        window.location.replace('/login');
+    }, [clearAuthData]);
 
-    const isAdmin = () => {
+    const isAdmin = useCallback(() => {
         const isAdminUser = user?.role === 'admin';
         console.log('Checking admin status:', { 
             user, 
@@ -102,38 +159,21 @@ export const AuthProvider = ({ children }) => {
             isAdmin: isAdminUser
         });
         return isAdminUser;
-    };
+    }, [user]);
 
-    const isAuthenticated = () => {
+    const isAuthenticated = useCallback(() => {
         const token = localStorage.getItem('token');
-        const storedUser = localStorage.getItem('user');
         const hasUser = !!user;
         const hasToken = !!token;
-        const hasStoredUser = !!storedUser;
-        
-        try {
-            if (storedUser) {
-                const parsedUser = JSON.parse(storedUser);
-                if (!parsedUser.username || !parsedUser.role) {
-                    console.error('Invalid stored user data');
-                    return false;
-                }
-            }
-        } catch (error) {
-            console.error('Failed to parse stored user data');
-            return false;
-        }
         
         console.log('Checking authentication status:', { 
             hasUser,
             hasToken,
-            hasStoredUser,
-            user,
-            token: token ? 'exists' : 'missing'
+            user
         });
         
-        return hasUser && hasToken && hasStoredUser;
-    };
+        return hasUser && hasToken;
+    }, [user]);
 
     if (loading) {
         return <div>Loading...</div>;

@@ -1,34 +1,60 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Layout, Menu, Modal, Form, Input, message } from 'antd';
-import { PlusOutlined, DesktopOutlined, ShopOutlined, ExportOutlined, SettingOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
-import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
+import {
+    ShopOutlined,
+    SettingOutlined,
+    LogoutOutlined,
+    ImportOutlined,
+    ExportOutlined,
+    DatabaseOutlined,
+    PlusOutlined,
+    BranchesOutlined
+} from '@ant-design/icons';
+import { storeApi } from '../services/api';
 import './Sidebar.css';
 
 const { Sider } = Layout;
 
-const Sidebar = () => {
-    const [collapsed, setCollapsed] = useState(false);
+const Sidebar = ({ collapsed, setCollapsed }) => {
+    const navigate = useNavigate();
+    const location = useLocation();
+    const { logout, user } = useAuth();
     const [stores, setStores] = useState([]);
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [form] = Form.useForm();
-    const navigate = useNavigate();
-    const location = useLocation();
+
+    const handleLogout = useCallback(() => {
+        console.log('Logging out...');
+        logout();
+        navigate('/login');
+    }, [logout, navigate]);
 
     const fetchStores = async () => {
         try {
-            const response = await axios.get('http://192.168.0.10:4000/api/stores', {
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                }
-            });
-            if (response.data.success) {
-                setStores(response.data.stores);
+            console.log('Fetching stores for sidebar...');
+            const response = await storeApi.getStores();
+            console.log('Sidebar stores response:', response);
+
+            if (response?.success) {
+                const userStoreId = user?.store_id?.toString();
+                const filteredStores = user?.role === 'admin' 
+                    ? response.stores 
+                    : response.stores.filter(store => {
+                        const storeId = store.id?.toString();
+                        console.log('Comparing store IDs:', { storeId, userStoreId });
+                        return storeId === userStoreId;
+                    });
+                
+                console.log('Filtered stores:', filteredStores);
+                setStores(filteredStores);
+            } else {
+                throw new Error(response?.error || 'Failed to load stores');
             }
         } catch (error) {
             console.error('Error fetching stores:', error);
-            message.error('Failed to fetch stores');
+            message.error('Failed to load stores');
         }
     };
 
@@ -38,21 +64,21 @@ const Sidebar = () => {
 
     const handleAddStore = async (values) => {
         try {
-            const response = await axios.post('http://192.168.0.10:4000/api/stores', values, {
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                }
-            });
-            if (response.data.success) {
+            console.log('Creating new store:', values);
+            const response = await storeApi.createStore(values);
+            console.log('Create store response:', response);
+
+            if (response?.success) {
                 message.success('Store added successfully');
                 form.resetFields();
                 setIsModalVisible(false);
                 fetchStores();
+            } else {
+                throw new Error(response?.error || 'Failed to add store');
             }
         } catch (error) {
             console.error('Error adding store:', error);
-            message.error('Failed to add store');
+            message.error(error.message || 'Failed to add store');
         }
     };
 
@@ -63,68 +89,97 @@ const Sidebar = () => {
         return path;
     };
 
-    const items = [
-        {
-            key: '/inventory',
-            icon: <DesktopOutlined />,
-            label: 'Inventory'
-        },
-        {
-            key: 'branches',
-            icon: <ShopOutlined />,
-            label: 'Branches',
-            children: [
-                {
-                    key: 'add-store',
-                    icon: <PlusOutlined />,
-                    label: 'Add Store',
-                    className: 'ant-menu-item-add-store',
-                    onClick: () => setIsModalVisible(true)
-                },
-                ...stores.map(store => ({
+    const getMenuItems = useCallback(() => {
+        const items = [
+            {
+                key: '/inventory',
+                icon: <DatabaseOutlined />,
+                label: 'Inventory',
+                onClick: () => navigate('/inventory')
+            }
+        ];
+
+        // Add Branches submenu if there are stores
+        if (stores.length > 0) {
+            items.push({
+                key: 'branches',
+                icon: <BranchesOutlined />,
+                label: 'Branches',
+                children: stores.map(store => ({
                     key: `/stores/${store.id}`,
                     label: store.name,
                     onClick: () => {
-                        console.log('Navigating to store:', store.id);
+                        console.log(`Navigating to store ${store.id}`);
                         navigate(`/stores/${store.id}`);
                     }
                 }))
-            ]
-        },
-        {
-            key: '/outbound',
-            icon: <ExportOutlined />,
-            label: 'Outbound'
-        },
-        {
-            key: '/settings',
-            icon: <SettingOutlined />,
-            label: 'Settings'
+            });
         }
-    ];
+
+        // Add other menu items
+        items.push(
+            {
+                key: '/outbound',
+                icon: <ExportOutlined />,
+                label: 'Outbound',
+                onClick: () => {
+                    console.log('Navigating to outbound page');
+                    navigate('/outbound');
+                }
+            }
+        );
+
+        // Add settings for admin
+        if (user?.role === 'admin') {
+            items.push({
+                key: '/settings',
+                icon: <SettingOutlined />,
+                label: 'Settings',
+                onClick: () => navigate('/settings')
+            });
+        }
+
+        // Add logout
+        items.push({
+            key: 'logout',
+            icon: <LogoutOutlined />,
+            label: 'Logout',
+            onClick: handleLogout
+        });
+
+        return items;
+    }, [stores, user?.role, navigate, handleLogout]);
+
+    const handleMenuClick = (e) => {
+        if (e.key === 'logout') {
+            handleLogout();
+        } else if (e.key === 'add-store') {
+            setIsModalVisible(true);
+        } else {
+            navigate(e.key);
+        }
+    };
 
     return (
-        <Sider 
-            collapsible 
-            collapsed={collapsed} 
-            onCollapse={setCollapsed}
-            breakpoint="lg"
-            collapsedWidth="80"
-            theme="light"
-        >
-            <div className="sidebar-logo" />
-            <Menu
+        <>
+            <Sider 
+                collapsible 
+                collapsed={collapsed} 
+                onCollapse={setCollapsed}
+                breakpoint="lg"
+                collapsedWidth="80"
                 theme="light"
-                selectedKeys={[getSelectedKey()]}
-                defaultOpenKeys={['branches']}
-                mode="inline"
-                items={items}
-                onClick={({ key }) => {
-                    if (key !== 'add-store' && !key.startsWith('/stores/')) {
-                        navigate(key, { replace: true });
-                    }
-                }}
-            />
+            >
+                <div className="sidebar-logo" />
+                <Menu
+                    theme="light"
+                    mode="inline"
+                    selectedKeys={[getSelectedKey()]}
+                    defaultOpenKeys={['branches']}
+                    items={getMenuItems()}
+                    onClick={handleMenuClick}
+                />
+            </Sider>
 
             <Modal
                 title="Add New Store"
@@ -180,7 +235,7 @@ const Sidebar = () => {
                     </Form.Item>
                 </Form>
             </Modal>
-        </Sider>
+        </>
     );
 };
 

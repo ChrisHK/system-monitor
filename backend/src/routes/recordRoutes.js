@@ -140,23 +140,44 @@ router.get('/', auth, async (req, res) => {
     try {
         const result = await pool.query(`
             WITH RankedRecords AS (
-                SELECT *,
+                SELECT 
+                    r.*,
+                    s.store_id,
+                    st.name as store_name,
                     ROW_NUMBER() OVER (
-                        PARTITION BY serialnumber 
-                        ORDER BY created_at DESC, id DESC
-                    ) as rn
-                FROM system_records
-                WHERE is_current = true
+                        PARTITION BY r.serialnumber 
+                        ORDER BY r.created_at DESC, r.id DESC
+                    ) as rn,
+                    COUNT(*) OVER (PARTITION BY r.serialnumber) as serial_count
+                FROM system_records r
+                LEFT JOIN store_items s ON r.id = s.record_id
+                LEFT JOIN stores st ON s.store_id = st.id
+                WHERE r.is_current = true
             )
-            SELECT * FROM RankedRecords 
-            WHERE rn = 1
-            ORDER BY created_at DESC
+            SELECT 
+                rr.*,
+                CASE
+                    WHEN rr.store_id IS NOT NULL THEN 'store'
+                    ELSE 'inventory'
+                END as location,
+                rr.serial_count > 1 as is_duplicate
+            FROM RankedRecords rr
+            WHERE rr.rn = 1
+            ORDER BY rr.created_at DESC
         `);
+        
+        const records = result.rows.map(record => ({
+            ...record,
+            location: {
+                location: record.location,
+                storeName: record.store_name
+            }
+        }));
         
         res.json({
             success: true,
-            records: result.rows,
-            total: result.rows.length
+            records: records,
+            total: records.length
         });
     } catch (error) {
         console.error('Error fetching records:', error);
@@ -407,6 +428,42 @@ router.get('/check-location/:serialNumber', async (req, res) => {
         });
     } catch (error) {
         console.error('Error checking item location:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+// Get records with locations
+router.get('/with-locations', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const query = `
+            SELECT 
+                r.*,
+                CASE
+                    WHEN si.store_id IS NOT NULL THEN 'store'
+                    ELSE 'inventory'
+                END as location,
+                s.name as store_name
+            FROM system_records r
+            LEFT JOIN store_items si ON r.id = si.record_id
+            LEFT JOIN stores s ON si.store_id = s.id
+            WHERE r.is_current = true
+            ORDER BY r.created_at DESC
+        `;
+        
+        const result = await client.query(query);
+        
+        res.json({
+            success: true,
+            records: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching records with locations:', error);
         res.status(500).json({
             success: false,
             error: error.message

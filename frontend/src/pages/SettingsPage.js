@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route, Link, useLocation } from 'react-router-dom';
+import { Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import {
     Box,
     Paper,
@@ -48,21 +48,21 @@ const SettingsPage = () => {
                         <StyledTab
                             label="Store Management"
                             component={Link}
-                            to="/settings/stores"
+                            to="stores"
                         />
                         <StyledTab
                             label="User Management"
                             component={Link}
-                            to="/settings/users"
+                            to="users"
                         />
                     </Tabs>
                 </Paper>
 
                 <Box sx={{ mt: 3 }}>
                     <Routes>
-                        <Route path="/" element={<StoreManagement />} />
-                        <Route path="/stores" element={<StoreManagement />} />
-                        <Route path="/users" element={<UserManagement />} />
+                        <Route index element={<Navigate to="stores" replace />} />
+                        <Route path="stores/*" element={<StoreManagement />} />
+                        <Route path="users/*" element={<UserManagement />} />
                     </Routes>
                 </Box>
             </Box>

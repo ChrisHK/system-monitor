@@ -1,0 +1,100 @@
+/* Import variables */
+@import './variables.css';
+
+/* Layout Container */
+.app-container {
+    min-height: 100vh;
+}
+
+/* Header */
+.app-header {
+    background: #fff;
+    padding: 0;
+    box-shadow: var(--box-shadow-base);
+    height: var(--header-height);
+    position: fixed;
+    width: 100%;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+}
+
+/* Sidebar */
+.app-sidebar {
+    background: #fff !important;
+    box-shadow: var(--box-shadow-base);
+    position: fixed;
+    height: 100vh;
+    z-index: 99;
+}
+
+.sidebar-logo {
+    height: 32px;
+    margin: var(--spacing-md);
+    background: var(--primary-color);
+    border-radius: var(--border-radius-base);
+}
+
+/* Content */
+.app-content {
+    margin: var(--spacing-lg);
+    padding: var(--spacing-lg);
+    background: #fff;
+    min-height: 280px;
+    border-radius: var(--border-radius-base);
+    box-shadow: var(--box-shadow-base);
+}
+
+.content-header {
+    margin-bottom: var(--spacing-lg);
+}
+
+/* Page Container */
+.page-container {
+    padding: var(--spacing-lg);
+    background: #fff;
+    border-radius: var(--border-radius-base);
+    min-height: calc(100vh - var(--header-height) - var(--spacing-lg) * 2);
+}
+
+/* Card Styles */
+.stats-card {
+    margin-bottom: var(--spacing-lg);
+}
+
+.stats-card .ant-card-head {
+    border-bottom: 1px solid var(--border-color);
+    min-height: 48px;
+}
+
+.stats-card .ant-card-head-title {
+    color: var(--heading-color);
+    font-size: var(--font-size-lg);
+}
+
+/* Table Container */
+.table-container {
+    margin-top: var(--spacing-lg);
+    background: #fff;
+    padding: var(--spacing-lg);
+    border-radius: var(--border-radius-base);
+    box-shadow: var(--box-shadow-base);
+}
+
+/* Responsive Layout */
+@media (max-width: 768px) {
+    .app-sidebar {
+        position: fixed;
+        height: 100vh;
+        z-index: 999;
+    }
+    
+    .app-sidebar.ant-layout-sider-collapsed {
+        transform: translateX(-100%);
+    }
+
+    .app-content {
+        margin: var(--spacing-xs);
+        padding: var(--spacing-xs);
+    }
+} 
