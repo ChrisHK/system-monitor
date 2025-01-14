@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { auth, checkRole } = require('../middleware/auth');
 
-// Get duplicate records
-router.get('/duplicates', async (req, res) => {
+// Get duplicate records (admin only)
+router.get('/duplicates', auth, checkRole(['admin']), async (req, res) => {
     try {
         const result = await pool.query(`
             WITH duplicates AS (
@@ -32,13 +33,12 @@ router.get('/duplicates', async (req, res) => {
     }
 });
 
-// Clean up duplicate records - keep only the newest
-router.post('/cleanup-duplicates', async (req, res) => {
+// Clean up duplicate records (admin only)
+router.post('/cleanup-duplicates', auth, checkRole(['admin']), async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // Find all duplicate serial numbers and their records
         const findDuplicatesQuery = `
             WITH duplicates AS (
                 SELECT serialnumber
@@ -56,7 +56,6 @@ router.post('/cleanup-duplicates', async (req, res) => {
 
         const duplicates = await client.query(findDuplicatesQuery);
         
-        // Process each duplicate group
         let currentSerial = null;
         let isFirst = true;
         let deletedCount = 0;
@@ -69,7 +68,6 @@ router.post('/cleanup-duplicates', async (req, res) => {
             }
             
             if (!isFirst) {
-                // Delete older duplicates (soft delete by setting is_current = false)
                 await client.query(`
                     UPDATE system_records 
                     SET is_current = false 
@@ -98,38 +96,32 @@ router.post('/cleanup-duplicates', async (req, res) => {
     }
 });
 
-// Search records by field and term
-router.get('/search', async (req, res) => {
-    const { field, term } = req.query;
-    
+// Search records
+router.get('/search', auth, async (req, res) => {
     try {
-        // Validate required parameters
-        if (!field || !term) {
+        const { q } = req.query;
+        if (!q) {
             return res.status(400).json({
                 success: false,
-                error: 'Field and search term are required'
+                error: 'Search query is required'
             });
         }
 
-        // Build the query with ILIKE for case-insensitive search
-        const query = `
-            WITH RankedRecords AS (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY serialnumber 
-                        ORDER BY created_at DESC, id DESC
-                    ) as rn
-                FROM system_records
-                WHERE ${field} ILIKE $1 
-                AND is_current = true
-            )
-            SELECT * FROM RankedRecords 
-            WHERE rn = 1
+        const result = await pool.query(`
+            SELECT *
+            FROM system_records
+            WHERE 
+                is_current = true 
+                AND (
+                    serialnumber ILIKE $1 
+                    OR model ILIKE $1 
+                    OR manufacturer ILIKE $1
+                    OR CAST(id AS TEXT) ILIKE $1
+                )
             ORDER BY created_at DESC
-        `;
-        
-        const result = await pool.query(query, [`%${term}%`]);
-        
+            LIMIT 50
+        `, [`%${q}%`]);
+
         res.json({
             success: true,
             records: result.rows
@@ -138,13 +130,13 @@ router.get('/search', async (req, res) => {
         console.error('Error searching records:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to search records'
+            error: error.message
         });
     }
 });
 
 // Get all records
-router.get('/', async (req, res) => {
+router.get('/', auth, async (req, res) => {
     try {
         const result = await pool.query(`
             WITH RankedRecords AS (
@@ -163,7 +155,8 @@ router.get('/', async (req, res) => {
         
         res.json({
             success: true,
-            records: result.rows
+            records: result.rows,
+            total: result.rows.length
         });
     } catch (error) {
         console.error('Error fetching records:', error);
@@ -174,54 +167,31 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Delete a record
-router.delete('/:id', async (req, res) => {
-    const { id } = req.params;
-    
+// Delete a record (admin only)
+router.delete('/:id', auth, checkRole(['admin']), async (req, res) => {
     try {
-        // First check if record exists and is a duplicate
-        const checkQuery = `
-            SELECT r.id, r.serialnumber
-            FROM system_records r
-            WHERE r.id = $1
-            AND r.is_current = true
-            AND EXISTS (
-                SELECT 1 
-                FROM system_records r2 
-                WHERE r2.serialnumber = r.serialnumber 
-                AND r2.id != r.id 
-                AND r2.is_current = true
-            )
-        `;
-        
-        const checkResult = await pool.query(checkQuery, [id]);
-        
-        if (checkResult.rows.length === 0) {
+        const { id } = req.params;
+        const result = await pool.query(
+            'UPDATE system_records SET is_current = false WHERE id = $1 RETURNING id',
+            [id]
+        );
+
+        if (result.rows.length === 0) {
             return res.status(404).json({
                 success: false,
-                error: 'Record not found or not a duplicate'
+                error: 'Record not found'
             });
         }
 
-        // Delete the record (soft delete by setting is_current to false)
-        const deleteQuery = `
-            UPDATE system_records 
-            SET is_current = false 
-            WHERE id = $1 
-            RETURNING id, serialnumber
-        `;
-        
-        const result = await pool.query(deleteQuery, [id]);
-        
         res.json({
             success: true,
-            message: `Record ${result.rows[0].serialnumber} deleted successfully`
+            message: 'Record deleted successfully'
         });
     } catch (error) {
         console.error('Error deleting record:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to delete record'
+            error: error.message
         });
     }
 });

@@ -1,349 +1,101 @@
-// Use the environment variable for API URL
-const API_BASE_URL = (() => {
-    // Get the current hostname and port
-    const currentHostname = window.location.hostname;
-    const currentPort = window.location.port;
-    const apiUrl = process.env.REACT_APP_API_URL;
-    
-    console.log('Network Configuration:', {
-        currentHostname,
-        currentPort,
-        apiUrl,
-        fullUrl: window.location.href
-    });
+import axios from 'axios';
 
-    // Always use the configured API URL for consistency
-    return 'http://192.168.0.10:4000/api';
-})();
+// Get the API base URL from environment variables or construct it
+const API_HOST = process.env.REACT_APP_API_HOST || '192.168.0.10';
+const API_PORT = process.env.REACT_APP_API_PORT || '4000';
+const DEFAULT_API_URL = `http://${API_HOST}:${API_PORT}`;
 
-// Log all environment variables and connection info for debugging
-console.log('API Configuration:', {
-    currentHostname: window.location.hostname,
-    currentPort: window.location.port,
-    REACT_APP_API_URL: process.env.REACT_APP_API_URL,
-    REACT_APP_WS_URL: process.env.REACT_APP_WS_URL,
-    NODE_ENV: process.env.NODE_ENV,
-    API_BASE_URL,
-    origin: window.location.origin,
-    fullUrl: window.location.href
+// Get the complete API URL or use constructed default
+const API_BASE_URL = process.env.REACT_APP_API_URL || DEFAULT_API_URL;
+
+// Remove /api from the end of the base URL if it exists
+const normalizedBaseURL = API_BASE_URL.endsWith('/api') 
+    ? API_BASE_URL.slice(0, -4) 
+    : API_BASE_URL;
+
+// Create axios instance with default config
+const api = axios.create({
+    baseURL: `${normalizedBaseURL}/api`,
+    timeout: 10000,
+    headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
 });
 
-const defaultOptions = {
-    headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
+// Request interceptor for adding auth token
+api.interceptors.request.use(
+    (config) => {
+        const token = localStorage.getItem('token');
+        if (token) {
+            config.headers['Authorization'] = `Bearer ${token}`;
+        }
+        // Remove any duplicate /api in the URL
+        if (config.url && config.url.startsWith('/api/')) {
+            config.url = config.url.replace('/api/', '/');
+        }
+        return config;
     },
-    mode: 'cors'
-};
-
-export const fetchRecords = async (page = 1) => {
-    try {
-        const url = `${API_BASE_URL}/records?page=${page}`;
-        console.log('Fetching records from:', url);
-
-        const response = await fetch(url, {
-            ...defaultOptions,
-            method: 'GET',
-            cache: 'no-cache'
-        });
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        console.log('Fetched records:', data);
-        return data;
-    } catch (error) {
-        console.error('Error fetching records:', error);
-        throw error;
+    (error) => {
+        return Promise.reject(error);
     }
-};
+);
 
-export const searchRecords = async (field, term) => {
-    try {
-        const url = `${API_BASE_URL}/records/search?field=${encodeURIComponent(field)}&term=${encodeURIComponent(term)}`;
-        console.log('Searching records:', { url, field, term });
-        
-        const response = await fetch(url, {
-            ...defaultOptions,
-            method: 'GET',
-            cache: 'no-cache'
-        });
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
+// Response interceptor for handling errors
+api.interceptors.response.use(
+    (response) => {
+        // Transform successful responses
+        if (response.data) {
+            return {
+                ...response,
+                data: {
+                    success: true,
+                    ...response.data
+                }
+            };
         }
-        
-        const data = await response.json();
-        console.log('Search results:', data);
-        return data;
-    } catch (error) {
-        console.error('Error searching records:', error);
-        throw error;
-    }
-};
-
-// Add outbound-related API functions
-export const addToOutbound = async (recordId) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/outbound/items`, {
-            ...defaultOptions,
-            method: 'POST',
-            body: JSON.stringify({ recordId })
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
+        return response;
+    },
+    (error) => {
+        if (error.response?.status === 401) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            window.location.href = '/login';
         }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error adding to outbound:', error);
-        throw error;
+        return Promise.reject(error);
     }
-};
+);
 
-export const getOutboundItems = async () => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/outbound/items`, {
-            ...defaultOptions,
-            method: 'GET'
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error fetching outbound items:', error);
-        throw error;
+// Inventory Management
+export const getInventoryRecords = (params) => api.get('/records', { params });
+export const getDuplicateRecords = () => api.get('/records/duplicates');
+export const searchRecords = (query) => api.get(`/records/search?q=${query}`);
+export const updateRecord = (id, data) => api.put(`/records/${id}`, data);
+export const deleteRecord = (id) => api.delete(`/records/${id}`);
+export const addRecord = (data) => api.post('/records', data);
+export const importRecords = (formData) => api.post('/records/import', formData, {
+    headers: {
+        'Content-Type': 'multipart/form-data'
     }
-};
+});
+export const exportRecords = (params) => api.get('/records/export', { 
+    params,
+    responseType: 'blob' 
+});
 
-export const removeFromOutbound = async (recordId) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/outbound/items/${recordId}`, {
-            ...defaultOptions,
-            method: 'DELETE'
-        });
+// Store Management
+export const getStoreItems = (storeId) => api.get(`/stores/${storeId}/items`);
+export const deleteStoreItem = (storeId, itemId) => api.delete(`/stores/${storeId}/items/${itemId}`);
+export const exportStoreItems = (storeId) => api.get(`/stores/${storeId}/export`, { responseType: 'blob' });
+export const getStores = () => api.get('/stores');
+export const checkStoreItems = (storeId, serialNumbers) => api.post(`/stores/${storeId}/check`, { serialNumbers });
+export const sendToStore = (storeId, items) => api.post(`/stores/${storeId}/outbound`, { items });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
+// Outbound Management
+export const getOutboundItems = () => api.get('/outbound/items');
+export const addToOutbound = (recordId) => api.post('/outbound/items', { recordId });
+export const removeFromOutbound = (itemId) => api.delete(`/outbound/items/${itemId}`);
+export const checkItemLocation = (serialNumber) => api.get(`/records/check-location/${serialNumber}`);
 
-        return await response.json();
-    } catch (error) {
-        console.error('Error removing from outbound:', error);
-        throw error;
-    }
-};
-
-export const confirmOutbound = async (outboundId, notes) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/outbound/${outboundId}/confirm`, {
-            ...defaultOptions,
-            method: 'POST',
-            body: JSON.stringify({ notes })
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error confirming outbound:', error);
-        throw error;
-    }
-};
-
-export const searchOutboundRecords = async (field, term) => {
-    try {
-        const url = `${API_BASE_URL}/outbound/search?field=${encodeURIComponent(field)}&term=${encodeURIComponent(term)}`;
-        console.log('Searching outbound records:', { url, field, term });
-        
-        const response = await fetch(url, {
-            ...defaultOptions,
-            method: 'GET',
-            cache: 'no-cache'
-        });
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        console.log('Outbound search results:', data);
-        return data;
-    } catch (error) {
-        console.error('Error searching outbound records:', error);
-        throw error;
-    }
-};
-
-// Store-related API functions
-export const getStores = async () => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/stores`, {
-            ...defaultOptions,
-            method: 'GET'
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error fetching stores:', error);
-        throw error;
-    }
-};
-
-export const getStoreItems = async (storeId) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/items`, {
-            ...defaultOptions,
-            method: 'GET'
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error fetching store items:', error);
-        throw error;
-    }
-};
-
-export const sendToStore = async (storeId, items) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/outbound`, {
-            ...defaultOptions,
-            method: 'POST',
-            headers: {
-                ...defaultOptions.headers,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ items: items })
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error sending items to store:', error);
-        throw error;
-    }
-};
-
-export const deleteStoreItem = async (storeId, itemId) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/items/${itemId}`, {
-            ...defaultOptions,
-            method: 'DELETE'
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error deleting store item:', error);
-        throw error;
-    }
-};
-
-export const exportStoreItems = async (storeId) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/export`, {
-            ...defaultOptions,
-            method: 'GET'
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.text(); // Return as text for CSV
-    } catch (error) {
-        console.error('Error exporting store items:', error);
-        throw error;
-    }
-};
-
-export const checkStoreItems = async (storeId, items) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/stores/${storeId}/check-items`, {
-            ...defaultOptions,
-            method: 'POST',
-            headers: {
-                ...defaultOptions.headers,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ items })
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error checking store items:', error);
-        throw error;
-    }
-};
-
-// Check item location
-export const checkItemLocation = async (serialNumber) => {
-    try {
-        const response = await fetch(`${API_BASE_URL}/records/check-location/${serialNumber}`, {
-            ...defaultOptions,
-            method: 'GET'
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Server response:', errorText);
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Error checking item location:', error);
-        throw error;
-    }
-}; 
+// Default export for general API calls
+export default api; 

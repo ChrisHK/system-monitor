@@ -1,24 +1,25 @@
 const { Pool } = require('pg');
+require('dotenv').config();
 
 const pool = new Pool({
-    user: process.env.DB_USER || 'zero',
-    host: process.env.DB_HOST || '192.168.0.10',
-    database: process.env.DB_NAME || 'zerodb',
-    password: process.env.DB_PASSWORD || 'zero',
-    port: process.env.DB_PORT || 5432,
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASSWORD,
+    port: process.env.DB_PORT,
 });
 
-// Test the connection
-pool.connect()
-    .then(client => {
-        console.log('Database connected successfully');
-        client.release();
-    })
-    .catch(err => {
-        console.error('Database connection error:', err);
-    });
+// Test database connection
+pool.connect((err, client, release) => {
+    if (err) {
+        console.error('Error connecting to the database:', err.stack);
+        return;
+    }
+    console.log('Database connected successfully');
+    release();
+});
 
-// Error handling
+// Add error handler
 pool.on('error', (err) => {
     console.error('Unexpected database error:', err);
 });

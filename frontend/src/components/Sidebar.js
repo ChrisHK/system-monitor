@@ -58,14 +58,14 @@ const Sidebar = () => {
 
     const getSelectedKey = () => {
         const path = location.pathname;
-        if (path === '/') return '/';
-        if (path.startsWith('/store/')) return path;
+        if (path === '/') return '/inventory';
+        if (path.startsWith('/stores/')) return path;
         return path;
     };
 
     const items = [
         {
-            key: '/',
+            key: '/inventory',
             icon: <DesktopOutlined />,
             label: 'Inventory'
         },
@@ -82,8 +82,12 @@ const Sidebar = () => {
                     onClick: () => setIsModalVisible(true)
                 },
                 ...stores.map(store => ({
-                    key: `/store/${store.id}`,
-                    label: store.name
+                    key: `/stores/${store.id}`,
+                    label: store.name,
+                    onClick: () => {
+                        console.log('Navigating to store:', store.id);
+                        navigate(`/stores/${store.id}`);
+                    }
                 }))
             ]
         },
@@ -116,8 +120,8 @@ const Sidebar = () => {
                 mode="inline"
                 items={items}
                 onClick={({ key }) => {
-                    if (key !== 'add-store') {
-                        navigate(key);
+                    if (key !== 'add-store' && !key.startsWith('/stores/')) {
+                        navigate(key, { replace: true });
                     }
                 }}
             />

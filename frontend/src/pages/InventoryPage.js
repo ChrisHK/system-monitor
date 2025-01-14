@@ -1,142 +1,178 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select } from 'antd';
+import { useLocation, useParams, useNavigate } from 'react-router-dom';
+import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select, Card, Statistic, Modal, Form } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
-import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
+import { 
+    getInventoryRecords, 
+    getDuplicateRecords, 
+    updateRecord,
+    deleteRecord,
+    checkItemLocation
+} from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
 
+const branches = [
+    { value: 'all', label: 'All Stores' },
+    { value: 'main-store', label: 'Main Store' },
+    { value: 'fmp-store', label: 'FMP Store' },
+    { value: 'mississauga-store', label: 'Mississauga Store' }
+];
+
 const InventoryPage = () => {
+    const navigate = useNavigate();
+    const location = useLocation();
+    const { "*": storeId } = useParams();
+    const { logout } = useAuth();
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
     const [duplicateSerials, setDuplicateSerials] = useState(new Set());
     const [searchText, setSearchText] = useState('');
     const [selectedBranch, setSelectedBranch] = useState('all');
     const [filteredRecords, setFilteredRecords] = useState([]);
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [editModalVisible, setEditModalVisible] = useState(false);
+    const [editingRecord, setEditingRecord] = useState(null);
+    const [form] = Form.useForm();
+    const [itemLocations, setItemLocations] = useState({});
 
-    const API_BASE_URL = 'http://192.168.0.10:4000';
+    useEffect(() => {
+        const path = location.pathname;
+        if (path.startsWith('/stores/')) {
+            const id = path.split('/')[2];
+            setSelectedBranch(id);
+        } else {
+            setSelectedBranch('all');
+        }
+    }, [location.pathname]);
 
-    const branches = [
-        { value: 'all', label: 'All Stores' },
-        { value: 'main-store', label: 'Main Store' },
-        { value: 'fmp-store', label: 'FMP Store' },
-        { value: 'mississauga-store', label: 'Mississauga Store' }
-    ];
+    const handleSessionExpired = useCallback(() => {
+        message.error('Session expired. Please login again.');
+        logout();
+        navigate('/login');
+    }, [logout, navigate]);
 
     const fetchRecords = useCallback(async () => {
         try {
             setLoading(true);
-            const [recordsResponse, duplicatesResponse] = await Promise.all([
-                axios.get(`${API_BASE_URL}/api/records`, {
-                    params: {
-                        branch: selectedBranch !== 'all' ? selectedBranch : undefined
-                    },
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 5000,
-                    withCredentials: true
-                }),
-                axios.get(`${API_BASE_URL}/api/records/duplicates`, {
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 5000,
-                    withCredentials: true
-                })
-            ]);
+            const params = {};
+            if (storeId && storeId !== 'all') {
+                params.store_id = storeId;
+            }
 
-            if (recordsResponse.data.success) {
+            const recordsResponse = await getInventoryRecords(params);
+            if (recordsResponse?.data?.success) {
                 const newRecords = recordsResponse.data.records;
-                
-                // Get duplicates from backend
-                const duplicatesList = duplicatesResponse.data.success ? 
-                    duplicatesResponse.data.duplicates.map(d => d.serialnumber) : [];
-                
-                setDuplicateSerials(new Set(duplicatesList));
                 setRecords(newRecords);
+                setFilteredRecords(newRecords);
+                setTotalRecords(newRecords.length);
+
+                // Fetch locations for all records
+                const locationPromises = newRecords.map(record => 
+                    checkItemLocation(record.serialnumber)
+                        .catch(error => {
+                            console.warn(`Failed to check location for ${record.serialnumber}:`, error);
+                            return { data: { success: true, location: 'unknown' } };
+                        })
+                );
+
+                const locations = await Promise.all(locationPromises);
+                const locationMap = {};
+                locations.forEach((loc, index) => {
+                    if (loc?.data?.success) {
+                        locationMap[newRecords[index].serialnumber] = loc.data;
+                    }
+                });
+                setItemLocations(locationMap);
+
+                try {
+                    const duplicatesResponse = await getDuplicateRecords();
+                    if (duplicatesResponse?.data?.success) {
+                        const duplicatesList = duplicatesResponse.data.duplicates.map(d => d.serialnumber);
+                        setDuplicateSerials(new Set(duplicatesList));
+                    }
+                } catch (duplicateError) {
+                    console.error('Failed to fetch duplicates:', duplicateError);
+                    setDuplicateSerials(new Set());
+                }
             }
         } catch (error) {
             console.error('Error fetching records:', error);
-            message.error(`Failed to fetch records: ${error.message}`);
+            if (error.response?.status === 401) {
+                handleSessionExpired();
+            } else {
+                message.error('Failed to fetch records. Please try again.');
+            }
         } finally {
             setLoading(false);
         }
-    }, [API_BASE_URL, selectedBranch]);
+    }, [storeId, handleSessionExpired]);
 
-    const handleDelete = useCallback(async (record) => {
-        // Safety checks
-        if (!record || !record.id) {
+    const handleEdit = useCallback((record) => {
+        setEditingRecord(record);
+        form.setFieldsValue(record);
+        setEditModalVisible(true);
+    }, [form]);
+
+    const handleDelete = useCallback(async (recordId) => {
+        if (!recordId) {
             message.error('Invalid record to delete');
             return;
         }
 
-        if (!record.serialnumber || !duplicateSerials.has(record.serialnumber)) {
-            message.error('Can only delete duplicate records');
-            return;
-        }
-
         try {
-            setLoading(true);
-            console.log('Attempting to delete record:', {
-                id: record.id,
-                serialNumber: record.serialnumber,
-                computerName: record.computername
-            });
-
-            const response = await axios.delete(`${API_BASE_URL}/api/records/${record.id}`, {
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json'
-                },
-                timeout: 5000,
-                withCredentials: true
-            });
-
+            const response = await deleteRecord(recordId);
             if (response.data.success) {
-                message.success(`Record with serial ${record.serialnumber} deleted successfully`);
-                // Refresh the records to update the list
-                await fetchRecords();
-            } else {
-                throw new Error(response.data.error || 'Unknown error');
+                message.success('Record deleted successfully');
+                fetchRecords();
             }
         } catch (error) {
-            console.error('Error deleting record:', error);
-            
-            // Handle specific error cases
-            if (error.response) {
-                switch (error.response.status) {
-                    case 404:
-                        message.error(`Record not found. It may have been already deleted.`);
-                        // Refresh to get latest data
-                        await fetchRecords();
-                        break;
-                    case 403:
-                        message.error('You do not have permission to delete this record');
-                        break;
-                    default:
-                        message.error(`Failed to delete record: ${error.response.data?.error || error.message}`);
-                }
-            } else if (error.request) {
-                message.error('Network error. Please check your connection.');
-            } else {
-                message.error(`Failed to delete record: ${error.message}`);
-            }
-        } finally {
-            setLoading(false);
+            console.error('Delete failed:', error);
+            message.error('Failed to delete record');
         }
-    }, [API_BASE_URL, duplicateSerials, fetchRecords]);
+    }, [fetchRecords]);
 
     const columns = useMemo(() => [
+        {
+            title: 'Location',
+            dataIndex: 'serialnumber',
+            key: 'location',
+            width: 120,
+            render: (serialnumber) => {
+                const location = itemLocations[serialnumber];
+                if (!location) {
+                    return <Tag color="default">Unknown</Tag>;
+                }
+                if (location.location === 'store') {
+                    return (
+                        <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
+                            {location.storeName || 'Store'}
+                        </Tag>
+                    );
+                }
+                if (location.location === 'inventory') {
+                    return (
+                        <Tag color="green" style={{ minWidth: '80px', textAlign: 'center' }}>
+                            Inventory
+                        </Tag>
+                    );
+                }
+                return (
+                    <Tag color="default" style={{ minWidth: '80px', textAlign: 'center' }}>
+                        {location.location || 'Unknown'}
+                    </Tag>
+                );
+            }
+        },
         {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
             width: 150,
             filterable: true,
-            render: (text, record) => (
+            render: (text) => (
                 <span>
                     {text}
                     {duplicateSerials.has(text) && (
@@ -145,7 +181,7 @@ const InventoryPage = () => {
                         </Tag>
                     )}
                 </span>
-            )
+            ),
         },
         {
             title: 'Computer Name',
@@ -211,7 +247,6 @@ const InventoryPage = () => {
             width: 180,
             render: (text) => {
                 if (!text || text === 'N/A') return 'N/A';
-                // Remove text in parentheses and extra spaces
                 return text.replace(/\s*\([^)]*\)/g, '').trim();
             }
         },
@@ -228,7 +263,6 @@ const InventoryPage = () => {
             width: 150,
             render: (text) => {
                 if (!text || text === 'N/A') return 'N/A';
-                // Take only the part before [
                 return text.split('[')[0].trim();
             }
         },
@@ -303,10 +337,13 @@ const InventoryPage = () => {
             width: 100,
             render: (_, record) => (
                 <Space size="middle">
+                    <Button type="link" onClick={() => handleEdit(record)}>
+                        Edit
+                    </Button>
                     {duplicateSerials.has(record.serialnumber) && (
                         <Popconfirm
                             title="Delete this record?"
-                            onConfirm={() => handleDelete(record)}
+                            onConfirm={() => handleDelete(record.id)}
                             okText="Yes"
                             cancelText="No"
                         >
@@ -316,16 +353,18 @@ const InventoryPage = () => {
                 </Space>
             )
         }
-    ], [duplicateSerials, handleDelete]);
+    ], [itemLocations, duplicateSerials, handleDelete, handleEdit]);
 
-    const handleSearch = useCallback((value, dataSource = records) => {
+    const handleSearch = useCallback((value) => {
         const searchValue = value.toLowerCase();
         setSearchText(value);
         
-        // Ensure dataSource is an array
-        const dataArray = Array.isArray(dataSource) ? dataSource : [];
+        if (!searchValue) {
+            setFilteredRecords(records);
+            return;
+        }
         
-        const filtered = dataArray.filter(record => {
+        const filtered = records.filter(record => {
             if (!record) return false;
             return Object.entries(record).some(([key, val]) => {
                 if (columns.find(col => col.dataIndex === key && col.filterable)) {
@@ -336,80 +375,191 @@ const InventoryPage = () => {
         });
         
         setFilteredRecords(filtered);
-    }, [columns, records]);
+    }, [records, columns]);
 
-    // Effect for search when records or search text changes
     useEffect(() => {
-        if (records.length > 0 || searchText) {
-            handleSearch(searchText, records);
+        fetchRecords();
+    }, [fetchRecords]);
+
+    useEffect(() => {
+        if (searchText) {
+            handleSearch(searchText);
         }
-    }, [records, searchText, handleSearch]);
+    }, [searchText, handleSearch]);
 
-    const handleBranchChange = useCallback((value) => {
-        setSelectedBranch(value);
-    }, []);
-
-    // Effect for initial fetch and branch changes
-    useEffect(() => {
-        fetchRecords();
-    }, [selectedBranch, fetchRecords]);
-
-    const handleRefresh = () => {
-        fetchRecords();
+    const handleEditSubmit = async () => {
+        try {
+            const values = await form.validateFields();
+            const response = await updateRecord(editingRecord.id, values);
+            if (response.data.success) {
+                message.success('Record updated successfully');
+                setEditModalVisible(false);
+                fetchRecords();
+            }
+        } catch (error) {
+            console.error('Update failed:', error);
+            message.error('Failed to update record');
+        }
     };
+
+    const getStoreCount = useCallback((storeName) => {
+        return Object.values(itemLocations).filter(location => 
+            location?.location === 'store' && 
+            location?.storeName?.toLowerCase().includes(storeName.toLowerCase().replace('-store', ''))
+        ).length;
+    }, [itemLocations]);
 
     return (
         <div>
             <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Search
-                        placeholder="Search inventory..."
-                        allowClear
-                        enterButton={<SearchOutlined />}
-                        onSearch={(value) => handleSearch(value, records)}
-                        onChange={(e) => handleSearch(e.target.value, records)}
-                        style={{ width: '100%' }}
-                    />
+                <Col span={24}>
+                    <Card>
+                        <Row gutter={16}>
+                            <Col span={6}>
+                                <Statistic
+                                    title="Total Records"
+                                    value={totalRecords}
+                                    style={{ marginBottom: 16 }}
+                                />
+                            </Col>
+                            <Col span={6}>
+                                <Statistic
+                                    title="Main Store"
+                                    value={getStoreCount('main-store')}
+                                    style={{ marginBottom: 16 }}
+                                />
+                            </Col>
+                            <Col span={6}>
+                                <Statistic
+                                    title="FMP Store"
+                                    value={getStoreCount('fmp-store')}
+                                    style={{ marginBottom: 16 }}
+                                />
+                            </Col>
+                            <Col span={6}>
+                                <Statistic
+                                    title="Mississauga Store"
+                                    value={getStoreCount('mississauga-store')}
+                                    style={{ marginBottom: 16 }}
+                                />
+                            </Col>
+                        </Row>
+                        <Row gutter={16}>
+                            <Col span={24}>
+                                <Space>
+                                    <Select
+                                        style={{ width: 200 }}
+                                        value={selectedBranch}
+                                        onChange={setSelectedBranch}
+                                    >
+                                        {branches.map(branch => (
+                                            <Option key={branch.value} value={branch.value}>
+                                                {branch.label}
+                                            </Option>
+                                        ))}
+                                    </Select>
+                                    <Search
+                                        placeholder="Search records..."
+                                        allowClear
+                                        enterButton={<SearchOutlined />}
+                                        onSearch={handleSearch}
+                                        style={{ width: 300 }}
+                                    />
+                                    <Button
+                                        icon={<ReloadOutlined />}
+                                        onClick={fetchRecords}
+                                        loading={loading}
+                                    >
+                                        Refresh
+                                    </Button>
+                                </Space>
+                            </Col>
+                        </Row>
+                    </Card>
                 </Col>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Select
-                        value={selectedBranch}
-                        onChange={handleBranchChange}
-                        style={{ width: '100%' }}
-                    >
-                        {branches.map(branch => (
-                            <Option key={branch.value} value={branch.value}>
-                                {branch.label}
-                            </Option>
-                        ))}
-                    </Select>
-                </Col>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Button
-                        icon={<ReloadOutlined />}
-                        onClick={handleRefresh}
+
+                <Col span={24}>
+                    <Table
+                        columns={columns}
+                        dataSource={filteredRecords}
+                        rowKey="id"
                         loading={loading}
-                    >
-                        Refresh
-                    </Button>
+                        scroll={{ x: 1500 }}
+                        pagination={{
+                            total: filteredRecords.length,
+                            pageSize: 20,
+                            showSizeChanger: true,
+                            showQuickJumper: true,
+                            pageSizeOptions: ['20', '50', '100']
+                        }}
+                        summary={pageData => {
+                            return (
+                                <Table.Summary fixed>
+                                    <Table.Summary.Row>
+                                        <Table.Summary.Cell index={0} colSpan={columns.length}>
+                                            Total Records: {totalRecords} | Main Store: {getStoreCount('main-store')} | FMP Store: {getStoreCount('fmp-store')} | Mississauga Store: {getStoreCount('mississauga-store')}
+                                        </Table.Summary.Cell>
+                                    </Table.Summary.Row>
+                                </Table.Summary>
+                            );
+                        }}
+                    />
                 </Col>
             </Row>
 
-            <Table
-                columns={columns}
-                dataSource={searchText ? filteredRecords : records}
-                rowKey="id"
-                loading={loading}
-                scroll={{ x: 1500 }}
-                pagination={{
-                    total: (searchText ? filteredRecords : records).length,
-                    pageSize: 20,
-                    showSizeChanger: true,
-                    showQuickJumper: true,
-                    pageSizeOptions: ['20', '50', '100'],
-                    defaultPageSize: 20
+            <Modal
+                title="Edit Record"
+                open={editModalVisible}
+                onOk={handleEditSubmit}
+                onCancel={() => {
+                    setEditModalVisible(false);
+                    form.resetFields();
                 }}
-            />
+            >
+                <Form
+                    form={form}
+                    layout="vertical"
+                >
+                    <Form.Item
+                        name="serialnumber"
+                        label="Serial Number"
+                        rules={[{ required: true, message: 'Please input serial number!' }]}
+                    >
+                        <Input />
+                    </Form.Item>
+                    <Form.Item
+                        name="computername"
+                        label="Computer Name"
+                        rules={[{ required: true, message: 'Please input computer name!' }]}
+                    >
+                        <Input />
+                    </Form.Item>
+                    <Form.Item
+                        name="manufacturer"
+                        label="Manufacturer"
+                    >
+                        <Input />
+                    </Form.Item>
+                    <Form.Item
+                        name="model"
+                        label="Model"
+                    >
+                        <Input />
+                    </Form.Item>
+                    <Form.Item
+                        name="systemsku"
+                        label="System SKU"
+                    >
+                        <Input />
+                    </Form.Item>
+                    <Form.Item
+                        name="operatingsystem"
+                        label="Operating System"
+                    >
+                        <Input />
+                    </Form.Item>
+                </Form>
+            </Modal>
         </div>
     );
 };
