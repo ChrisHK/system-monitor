@@ -11,6 +11,7 @@ export const AuthProvider = ({ children }) => {
 
     // Helper function to clear auth data
     const clearAuthData = useCallback(() => {
+        console.log('Clearing auth data');
         setUser(null);
         localStorage.removeItem('token');
         localStorage.removeItem('user');
@@ -21,7 +22,6 @@ export const AuthProvider = ({ children }) => {
     // Initialize auth state
     useEffect(() => {
         const initializeAuth = async () => {
-            // Prevent multiple initializations in development mode
             if (initRef.current) {
                 console.log('Auth already initialized, skipping...');
                 return;
@@ -43,19 +43,16 @@ export const AuthProvider = ({ children }) => {
                             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
                             api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
                             
-                            // Set user state first
+                            // Set user state
                             setUser(parsedUser);
                             
-                            // Verify token after setting state
-                            try {
-                                const checkResponse = await api.get('/users/me');
-                                if (!checkResponse?.data?.user) {
-                                    throw new Error('Token validation failed');
-                                }
-                                console.log('Auth initialized successfully');
-                            } catch (error) {
-                                console.error('Token validation error:', error);
+                            // Verify token
+                            const checkResponse = await api.get('/users/me');
+                            if (!checkResponse?.data?.user) {
+                                console.error('Token validation failed');
                                 clearAuthData();
+                            } else {
+                                console.log('Auth initialized successfully with valid token');
                             }
                         } else {
                             console.error('Invalid stored user data');
@@ -78,20 +75,6 @@ export const AuthProvider = ({ children }) => {
         };
 
         initializeAuth();
-
-        // Add event listener for storage changes
-        const handleStorageChange = (e) => {
-            if (e.key === 'token' || e.key === 'user') {
-                // Reset initRef when storage changes
-                initRef.current = false;
-                initializeAuth();
-            }
-        };
-        window.addEventListener('storage', handleStorageChange);
-
-        return () => {
-            window.removeEventListener('storage', handleStorageChange);
-        };
     }, [clearAuthData]);
 
     const login = async (token, userData) => {
@@ -102,7 +85,6 @@ export const AuthProvider = ({ children }) => {
             return false;
         }
 
-        // Validate required fields
         if (!userData.username || !userData.role) {
             console.error('Missing required user data fields');
             return false;
@@ -113,30 +95,24 @@ export const AuthProvider = ({ children }) => {
             axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
             api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
-            // Then verify token with backend
-            try {
-                const checkResponse = await api.get('/users/me');
-                if (!checkResponse?.data?.user) {
-                    throw new Error('Token validation failed');
-                }
-
-                // If token is valid, set user state and localStorage
-                setUser(userData);
-                localStorage.setItem('token', token);
-                localStorage.setItem('user', JSON.stringify(userData));
-                
-                console.log('Auth state updated:', {
-                    user: userData,
-                    token: token ? 'exists' : 'missing',
-                    headers: axios.defaults.headers.common['Authorization']
-                });
-
-                return true;
-            } catch (checkError) {
-                console.error('Token validation error:', checkError);
-                clearAuthData();
-                return false;
+            // Verify token with backend
+            const checkResponse = await api.get('/users/me');
+            if (!checkResponse?.data?.user) {
+                throw new Error('Token validation failed');
             }
+
+            // If token is valid, set user state and localStorage
+            localStorage.setItem('token', token);
+            localStorage.setItem('user', JSON.stringify(userData));
+            setUser(userData);
+            
+            console.log('Auth state updated:', {
+                user: userData,
+                token: token ? 'exists' : 'missing',
+                headers: axios.defaults.headers.common['Authorization']
+            });
+
+            return true;
         } catch (error) {
             console.error('Failed to set auth state:', error);
             clearAuthData();
@@ -147,18 +123,11 @@ export const AuthProvider = ({ children }) => {
     const logout = useCallback(() => {
         console.log('Logging out...');
         clearAuthData();
-        // Use replace to prevent back navigation to protected routes
         window.location.replace('/login');
     }, [clearAuthData]);
 
     const isAdmin = useCallback(() => {
-        const isAdminUser = user?.role === 'admin';
-        console.log('Checking admin status:', { 
-            user, 
-            role: user?.role,
-            isAdmin: isAdminUser
-        });
-        return isAdminUser;
+        return user?.role === 'admin';
     }, [user]);
 
     const isAuthenticated = useCallback(() => {

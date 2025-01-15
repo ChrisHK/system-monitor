@@ -27,8 +27,8 @@ const SettingsPage = () => {
     const currentPath = location.pathname;
 
     const getTabValue = () => {
-        if (currentPath.includes('/settings/stores')) return 0;
-        if (currentPath.includes('/settings/users')) return 1;
+        if (currentPath === '/settings/stores') return 0;
+        if (currentPath === '/settings/users') return 1;
         return 0;
     };
 
@@ -48,12 +48,12 @@ const SettingsPage = () => {
                         <StyledTab
                             label="Store Management"
                             component={Link}
-                            to="stores"
+                            to="/settings/stores"
                         />
                         <StyledTab
                             label="User Management"
                             component={Link}
-                            to="users"
+                            to="/settings/users"
                         />
                     </Tabs>
                 </Paper>
@@ -61,8 +61,8 @@ const SettingsPage = () => {
                 <Box sx={{ mt: 3 }}>
                     <Routes>
                         <Route index element={<Navigate to="stores" replace />} />
-                        <Route path="stores/*" element={<StoreManagement />} />
-                        <Route path="users/*" element={<UserManagement />} />
+                        <Route path="stores" element={<StoreManagement />} />
+                        <Route path="users" element={<UserManagement />} />
                     </Routes>
                 </Box>
             </Box>

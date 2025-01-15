@@ -213,8 +213,44 @@ export const getInventoryRecords = async (params) => {
 export const getDuplicateRecords = () => 
     handleApiResponse(api.get('/records/duplicates'));
 
-export const searchRecords = (query) => 
-    handleApiResponse(api.get(`/records/search?q=${query}`));
+export const searchRecords = async (searchTerm, options = {}) => {
+    try {
+        const response = await api.get(`/records/search?q=${encodeURIComponent(searchTerm)}`);
+        if (response.data?.success) {
+            // 檢查每個記錄的 store 信息
+            const records = response.data.records;
+            const recordsWithLocation = await Promise.all(records.map(async (record) => {
+                try {
+                    // 檢查項目位置
+                    const locationResponse = await api.get(`/records/check-location/${record.serialnumber}`);
+                    if (locationResponse.data?.success) {
+                        return {
+                            ...record,
+                            location: locationResponse.data.location,
+                            store_name: locationResponse.data.storeName
+                        };
+                    }
+                    return record;
+                } catch (error) {
+                    console.error(`Error checking location for ${record.serialnumber}:`, error);
+                    return record;
+                }
+            }));
+            
+            return {
+                success: true,
+                records: recordsWithLocation
+            };
+        }
+        return response.data;
+    } catch (error) {
+        console.error('Search error:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
 
 export const updateRecord = (id, data) => 
     handleApiResponse(api.put(`/records/${id}`, data));
@@ -274,7 +310,13 @@ export const storeApi = {
                 error: error.message
             };
         }
-    }
+    },
+    
+    // User Management
+    getUsers: () => handleApiResponse(api.get('/users')),
+    createUser: (userData) => handleApiResponse(api.post('/users', userData)),
+    updateUser: (userId, userData) => handleApiResponse(api.put(`/users/${userId}`, userData)),
+    deleteUser: (userId) => handleApiResponse(api.delete(`/users/${userId}`))
 };
 
 // Store Items Management with locations
@@ -329,36 +371,15 @@ export const removeFromOutbound = (itemId) =>
     }));
 
 export const checkItemLocation = async (serialNumber) => {
-    try {
-        const response = await locationApi.getLocation(serialNumber);
-        if (response.success) {
-            return response.location;
-        }
-        
-        // If no location found, check if it's in any store
-        const storeResponse = await storeApi.findItemStore(serialNumber);
-        if (storeResponse.success && storeResponse.store) {
-            const locationData = {
-                location: 'store',
-                storeId: storeResponse.store.id,
-                storeName: storeResponse.store.name
-            };
-            
-            // Update location in database
-            await locationApi.updateLocation(serialNumber, locationData);
-            return locationData;
-        }
-        
-        // If not in any store, it must be in inventory
-        const inventoryLocation = {
-            location: 'inventory'
-        };
-        await locationApi.updateLocation(serialNumber, inventoryLocation);
-        return inventoryLocation;
-    } catch (error) {
-        console.error('Error checking item location:', error);
-        return { location: 'unknown' };
-    }
+    return handleApiResponse(api.get(`/locations/${serialNumber}`));
+};
+
+export const checkItemLocations = async (serialNumbers) => {
+    return handleApiResponse(api.post('/locations/batch', { serialNumbers }));
+};
+
+export const updateLocation = async (serialNumber, data) => {
+    return handleApiResponse(api.post(`/locations/${serialNumber}`, data));
 };
 
 // User Management APIs
@@ -532,12 +553,19 @@ export const locationApi = {
     },
     
     getLocations: async (serialNumbers) => {
-        return handleApiResponse(api.post('/locations/batch', { serialNumbers }));
+        // Ensure we're sending an array of strings
+        const cleanedSerialNumbers = serialNumbers.map(s => s.toString().trim());
+        return handleApiResponse(api.post('/locations/batch', { serialNumbers: cleanedSerialNumbers }));
     },
 
     deleteLocation: async (serialNumber) => {
         return handleApiResponse(api.delete(`/locations/${serialNumber}`));
     }
+};
+
+export const fetchOutboundData = async () => {
+    const response = await axios.get('/outbound'); // 假设这是 outbound 的 API
+    return response.data;
 };
 
 // Export the api instance

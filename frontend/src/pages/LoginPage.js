@@ -1,14 +1,22 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Form, Input, Button, Card, message } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { login as apiLogin } from '../services/api';
 
 const LoginPage = () => {
     const navigate = useNavigate();
-    const { login } = useAuth();
+    const location = useLocation();
+    const { login, isAuthenticated } = useAuth();
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        // If already authenticated, redirect to home
+        if (isAuthenticated()) {
+            navigate('/');
+        }
+    }, [isAuthenticated, navigate]);
 
     const onFinish = async (values) => {
         try {
@@ -37,7 +45,9 @@ const LoginPage = () => {
                 
                 if (loginSuccess) {
                     message.success('Login successful');
-                    navigate('/');
+                    // Navigate to the intended page or home
+                    const from = location.state?.from || '/';
+                    navigate(from, { replace: true });
                     return;
                 }
             }

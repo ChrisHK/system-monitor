@@ -1,119 +1,579 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { 
-    Table, 
-    Input, 
-    Button, 
-    message, 
-    Space, 
-    Tag, 
-    Row, 
-    Col, 
-    Select, 
-    Card, 
-    Statistic, 
-    Modal, 
-    Form, 
-    Alert 
-} from 'antd';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useLocation, useParams, useNavigate } from 'react-router-dom';
+import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select, Card, Modal, Form, Statistic } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
-import { inventoryDataService } from '../services/inventoryDataService';
+import { 
+    getInventoryRecords, 
+    getDuplicateRecords, 
+    updateRecord,
+    deleteRecord,
+    searchRecords,
+    addToOutbound,
+    removeFromOutbound,
+    sendToStore,
+    getOutboundItems,
+    storeApi
+} from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
 
-// Constants for performance optimization
-const INITIAL_PAGE_SIZE = 20;
-const PAGE_SIZE_OPTIONS = ['20', '50', '100'];
+const InventoryPage = () => {
+    const navigate = useNavigate();
+    const location = useLocation();
+    const { "*": storeId } = useParams();
+    const { logout } = useAuth();
+    const [loading, setLoading] = useState(false);
+    const [duplicateSerials, setDuplicateSerials] = useState(new Set());
+    const [searchText, setSearchText] = useState('');
+    const [selectedBranch, setSelectedBranch] = useState('all');
+    const [filteredRecords, setFilteredRecords] = useState([]);
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [editModalVisible, setEditModalVisible] = useState(false);
+    const [editingRecord, setEditingRecord] = useState(null);
+    const [form] = Form.useForm();
+    const [pagination, setPagination] = useState({
+        current: 1,
+        pageSize: 20,
+        total: 0
+    });
+    const [outboundModalVisible, setOutboundModalVisible] = useState(false);
+    const [isInitialLoad, setIsInitialLoad] = useState(true);
+    const [storesList, setStoresList] = useState([]);
 
-// Utility functions
-const formatDate = (text) => {
-    if (!text) return 'N/A';
-    return new Date(text).toLocaleString();
-};
-
-const formatSystemSku = (text) => {
-    if (!text) return 'N/A';
-    const parts = text.split('_');
-    const thinkpadPart = parts.find(part => part.includes('ThinkPad'));
-    if (thinkpadPart) {
-        return parts.slice(parts.indexOf(thinkpadPart)).join(' ')
-            .replace(/Gen (\d+)$/, 'Gen$1').trim();
-    }
-    return text;
-};
-
-const formatOS = (text) => {
-    if (!text || text === 'N/A') return 'N/A';
-    const osLower = text.toLowerCase();
-    if (osLower.includes('windows')) {
-        const mainVersion = osLower.includes('11') ? '11' : 
-                        osLower.includes('10') ? '10' : '';
-        const edition = osLower.includes('pro') ? 'Pro' :
-                    osLower.includes('home') ? 'Home' : 
-                    osLower.includes('enterprise') ? 'Enterprise' : '';
-        return `Windows ${mainVersion} ${edition}`.trim();
-    }
-    return text;
-};
-
-// Update statistics styles
-const statisticStyle = {
-    fontSize: '24px'
-};
-
-// Add modern forced colors mode styles
-const tagStyle = {
-    minWidth: '80px',
-    textAlign: 'center'
-};
-
-// Create columns definition
-const createColumns = ({ itemLocations, duplicateSerials, handleDelete, handleEdit, userRole }) => [
-    {
-        title: 'Location',
-        dataIndex: 'serialnumber',
-        key: 'location',
-        width: 120,
-        render: (serialnumber) => {
-            const location = itemLocations[serialnumber];
-            if (!location) {
-                return <Tag color="default" style={tagStyle}>Unknown</Tag>;
+    useEffect(() => {
+        const path = location.pathname;
+        if (path.startsWith('/stores/')) {
+            const id = parseInt(path.split('/')[2], 10);
+            if (!isNaN(id)) {
+                setSelectedBranch(id);
+            } else {
+                setSelectedBranch('all');
             }
-            if (location.location === 'store') {
+        } else {
+            setSelectedBranch('all');
+        }
+    }, [location.pathname]);
+
+    // 只在組件初始化時獲取一次 duplicates
+    useEffect(() => {
+        const fetchDuplicates = async () => {
+            try {
+                const duplicatesResponse = await getDuplicateRecords();
+                if (duplicatesResponse?.success) {
+                    const duplicatesList = duplicatesResponse.duplicates.map(d => d.serialnumber);
+                    setDuplicateSerials(new Set(duplicatesList));
+                }
+            } catch (error) {
+                console.error('Failed to fetch duplicates:', error);
+                setDuplicateSerials(new Set());
+            }
+        };
+
+        if (isInitialLoad) {
+            fetchDuplicates();
+            setIsInitialLoad(false);
+        }
+    }, [isInitialLoad]);
+
+    const handleSessionExpired = useCallback(() => {
+        message.error('Session expired. Please login again.');
+        logout();
+        navigate('/login');
+    }, [logout, navigate]);
+
+    const fetchRecords = useCallback(async (page = 1, pageSize = 20) => {
+        try {
+            setLoading(true);
+            const params = {
+                page,
+                pageSize,
+                ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {})
+            };
+
+            console.log('Fetching records with params:', params);
+            const recordsResponse = await getInventoryRecords(params);
+            console.log('Records API response:', recordsResponse);
+            
+            if (recordsResponse?.success) {
+                const newRecords = recordsResponse.records || [];
+                const total = newRecords.length;
+                
+                console.log('Setting records state:', {
+                    newRecords: newRecords.length,
+                    total,
+                });
+                
+                setFilteredRecords(newRecords);
+                setTotalRecords(total);
+                setPagination(prev => ({
+                    ...prev,
+                    current: page,
+                    pageSize,
+                    total
+                }));
+
+                // Verify state update
+                console.log('Updated records state:', {
+                    filteredRecords: newRecords.length,
+                    totalRecords: total,
+                    pagination: {
+                        current: page,
+                        pageSize,
+                        total
+                    }
+                });
+            } else {
+                console.warn('API response indicates failure:', recordsResponse?.error);
+                message.error(recordsResponse?.error || 'Failed to fetch records');
+                setFilteredRecords([]);
+                setTotalRecords(0);
+                setPagination(prev => ({
+                    ...prev,
+                    total: 0
+                }));
+            }
+        } catch (error) {
+            console.error('Error fetching records:', error);
+            if (error.response?.status === 401) {
+                handleSessionExpired();
+            } else {
+                message.error('Failed to fetch records. Please try again.');
+            }
+            setFilteredRecords([]);
+            setTotalRecords(0);
+            setPagination(prev => ({
+                ...prev,
+                total: 0
+            }));
+        } finally {
+            setLoading(false);
+        }
+    }, [storeId, handleSessionExpired]);
+
+    const handleTableChange = useCallback((newPagination, filters, sorter) => {
+        fetchRecords(newPagination.current, newPagination.pageSize);
+    }, [fetchRecords]);
+
+    useEffect(() => {
+        fetchRecords(1, pagination.pageSize);
+    }, [fetchRecords, pagination.pageSize]);
+
+    const handleEdit = useCallback((record) => {
+        setEditingRecord(record);
+        form.setFieldsValue(record);
+        setEditModalVisible(true);
+    }, [form]);
+
+    const handleDelete = useCallback(async (recordId) => {
+        if (!recordId) {
+            message.error('Invalid record to delete');
+            return;
+        }
+
+        try {
+            const response = await deleteRecord(recordId);
+            if (response.data.success) {
+                message.success('Record deleted successfully');
+                fetchRecords();
+            }
+        } catch (error) {
+            console.error('Delete failed:', error);
+            message.error('Failed to delete record');
+        }
+    }, [fetchRecords]);
+
+    const handleSearch = useCallback(async (value) => {
+        const searchValue = value.toLowerCase().trim();
+        setSearchText(value);
+        setLoading(true);
+        
+        try {
+            if (!searchValue) {
+                await fetchRecords(1, pagination.pageSize);
+                return;
+            }
+
+            // Make a single search request
+            const searchResponse = await searchRecords(searchValue);
+            console.log('Search response:', searchResponse);
+
+            if (searchResponse?.success && searchResponse.records?.length > 0) {
+                const processedResults = searchResponse.records.map(item => {
+                    // If item has a store_name, it's in a store
+                    if (item.store_name) {
+                        return {
+                            ...item,
+                            location: item.store_name,
+                            locationColor: 'blue'
+                        };
+                    }
+                    // Otherwise, it's in inventory
+                    return {
+                        ...item,
+                        location: 'Inventory',
+                        locationColor: 'green'
+                    };
+                });
+
+                console.log('Processed results:', {
+                    total: processedResults.length,
+                    results: processedResults.map(item => ({
+                        serialnumber: item.serialnumber,
+                        location: item.location,
+                        store_name: item.store_name
+                    }))
+                });
+
+                setFilteredRecords(processedResults);
+                setTotalRecords(processedResults.length);
+                setPagination(prev => ({
+                    ...prev,
+                    current: 1,
+                    total: processedResults.length
+                }));
+            } else {
+                setFilteredRecords([]);
+                setTotalRecords(0);
+                setPagination(prev => ({
+                    ...prev,
+                    current: 1,
+                    total: 0
+                }));
+                message.info('No records found');
+            }
+        } catch (error) {
+            console.error('Search error:', error);
+            message.error('Failed to search records');
+            setFilteredRecords([]);
+            setTotalRecords(0);
+            setPagination(prev => ({
+                ...prev,
+                current: 1,
+                total: 0
+            }));
+        } finally {
+            setLoading(false);
+        }
+    }, [pagination.pageSize, fetchRecords]);
+
+    useEffect(() => {
+        if (searchText) {
+            handleSearch(searchText);
+        }
+    }, [searchText, handleSearch]);
+
+    const handleEditSubmit = async () => {
+        try {
+            const values = await form.validateFields();
+            const response = await updateRecord(editingRecord.id, values);
+            if (response.data.success) {
+                message.success('Record updated successfully');
+                setEditModalVisible(false);
+                fetchRecords();
+            }
+        } catch (error) {
+            console.error('Update failed:', error);
+            message.error('Failed to update record');
+        }
+    };
+
+    const fetchStores = useCallback(async () => {
+        try {
+            const response = await storeApi.getStores();
+            if (response?.success) {
+                const stores = response.stores.map(store => ({
+                    value: store.id,
+                    label: store.name
+                }));
+                setStoresList(stores);
+            }
+        } catch (error) {
+            console.error('Error fetching stores:', error);
+            message.error('Failed to load stores');
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchStores();
+    }, [fetchStores]);
+
+    const OutboundModal = () => {
+        const [outboundRecords, setOutboundRecords] = useState([]);
+        const [outboundLoading, setOutboundLoading] = useState(false);
+        const [selectedStore, setSelectedStore] = useState(null);
+        const [addSerialNumber, setAddSerialNumber] = useState('');
+        const [isOutboundInitialized, setIsOutboundInitialized] = useState(false);
+
+        const handleRemoveItem = async (itemId) => {
+            try {
+                setOutboundLoading(true);
+                const response = await removeFromOutbound(itemId);
+                if (response?.success) {
+                    message.success('Item removed successfully');
+                    await fetchOutboundItems();
+                } else {
+                    throw new Error(response?.error || 'Failed to remove item');
+                }
+            } catch (error) {
+                console.error('Remove item error:', error);
+                message.error(error.message || 'Failed to remove item');
+            } finally {
+                setOutboundLoading(false);
+            }
+        };
+
+        const handleAddItem = async (serialNumber) => {
+            if (!serialNumber) return;
+            try {
+                setOutboundLoading(true);
+                const searchResponse = await searchRecords(serialNumber);
+                if (searchResponse?.success && searchResponse.records?.length > 0) {
+                    const record = searchResponse.records[0];
+                    const addResponse = await addToOutbound(record.id);
+                    if (addResponse?.success) {
+                        message.success('Item added to outbound successfully');
+                        await fetchOutboundItems();
+                        setAddSerialNumber('');
+                    } else {
+                        throw new Error(addResponse?.error || 'Failed to add item to outbound');
+                    }
+                } else {
+                    message.warning('No record found with this serial number');
+                }
+            } catch (error) {
+                console.error('Add item error:', error);
+                if (error.response?.data?.error?.includes('already in outbound')) {
+                    message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
+                } else {
+                    message.error(error.message || 'Failed to add item');
+                }
+            } finally {
+                setOutboundLoading(false);
+                setAddSerialNumber('');
+            }
+        };
+
+        const handleSendToStore = async () => {
+            if (!selectedStore) {
+                message.error('Please select a store first');
+                return;
+            }
+
+            try {
+                setOutboundLoading(true);
+                const selectedStoreData = storesList.find(s => s.value === selectedStore);
+                if (!selectedStoreData) {
+                    throw new Error('Store not found');
+                }
+
+                const outboundIds = outboundRecords.map(r => r.outbound_item_id).filter(Boolean);
+                if (outboundIds.length === 0) {
+                    throw new Error('No valid outbound items found');
+                }
+
+                console.log('Sending items to store:', {
+                    storeId: selectedStore,
+                    outboundIds,
+                    storeName: selectedStoreData.label
+                });
+
+                const response = await sendToStore(selectedStore, outboundIds);
+                if (response?.success) {
+                    message.success(`Items sent to ${selectedStoreData.label} successfully`);
+                    await fetchOutboundItems();
+                    fetchRecords(); // 刷新主列表
+                    setOutboundModalVisible(false); // 關閉模態框
+                } else if (response?.error?.includes('already in stores:')) {
+                    Modal.confirm({
+                        title: 'Items Already in Store',
+                        content: `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
+                        onOk: async () => {
+                            try {
+                                const retryResponse = await sendToStore(selectedStore, outboundIds, true);
+                                if (retryResponse?.success) {
+                                    message.success('Items moved to new store successfully');
+                                    await fetchOutboundItems();
+                                    fetchRecords(); // 刷新主列表
+                                    setOutboundModalVisible(false); // 關閉模態框
+                                } else {
+                                    throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                                }
+                            } catch (error) {
+                                console.error('Error moving items:', error);
+                                message.error(error.message || 'Failed to move items to new store');
+                            }
+                        }
+                    });
+                } else {
+                    throw new Error(response?.error || 'Failed to send items to store');
+                }
+            } catch (error) {
+                console.error('Error sending items to store:', error);
+                message.error(error.message || 'Failed to send items to store');
+            } finally {
+                setOutboundLoading(false);
+            }
+        };
+
+        const fetchOutboundItems = async () => {
+            if (!outboundModalVisible) return;
+            
+            try {
+                setOutboundLoading(true);
+                const response = await getOutboundItems();
+                if (response?.items) {
+                    setOutboundRecords(response.items);
+                }
+            } catch (error) {
+                message.error('Failed to fetch outbound items');
+            } finally {
+                setOutboundLoading(false);
+            }
+        };
+
+        useEffect(() => {
+            if (!isOutboundInitialized) {
+                fetchOutboundItems();
+                setIsOutboundInitialized(true);
+            }
+        }, [isOutboundInitialized]);
+
+        useEffect(() => {
+            return () => {
+                setIsOutboundInitialized(false);
+            };
+        }, []);
+
+        return (
+            <>
+                <Row gutter={[16, 16]}>
+                    <Col span={8}>
+                        <Search
+                            placeholder="Enter serial number to add..."
+                            allowClear
+                            enterButton="Add"
+                            value={addSerialNumber}
+                            onChange={(e) => setAddSerialNumber(e.target.value)}
+                            onSearch={handleAddItem}
+                        />
+                    </Col>
+                    <Col span={8}>
+                        <Select
+                            style={{ width: '100%' }}
+                            placeholder="Select store"
+                            value={selectedStore}
+                            onChange={setSelectedStore}
+                        >
+                            {storesList.map(store => (
+                                <Option key={store.value} value={store.value}>
+                                    {store.label}
+                                </Option>
+                            ))}
+                        </Select>
+                    </Col>
+                    <Col span={8}>
+                        <Button
+                            type="primary"
+                            onClick={handleSendToStore}
+                            disabled={!selectedStore || outboundRecords.length === 0}
+                            loading={outboundLoading}
+                        >
+                            Send to Store
+                        </Button>
+                    </Col>
+                </Row>
+                <Table
+                    columns={[
+                        {
+                            title: 'Serial Number',
+                            dataIndex: 'serialnumber',
+                            key: 'serialnumber'
+                        },
+                        {
+                            title: 'Computer Name',
+                            dataIndex: 'computername',
+                            key: 'computername'
+                        },
+                        {
+                            title: 'Model',
+                            dataIndex: 'model',
+                            key: 'model'
+                        },
+                        {
+                            title: 'Actions',
+                            key: 'actions',
+                            render: (_, record) => (
+                                <Button
+                                    type="link"
+                                    danger
+                                    onClick={() => handleRemoveItem(record.outbound_item_id)}
+                                >
+                                    Remove
+                                </Button>
+                            )
+                        }
+                    ]}
+                    dataSource={outboundRecords}
+                    rowKey="outbound_item_id"
+                    loading={outboundLoading}
+                    style={{ marginTop: 16 }}
+                />
+            </>
+        );
+    };
+
+    const columns = useMemo(() => [
+        {
+            title: 'Location',
+            dataIndex: 'location',
+            key: 'location',
+            width: 120,
+            render: (location, record) => {
+                let displayLocation = '';
+                let color = 'default';
+
+                if (typeof location === 'object') {
+                    displayLocation = location.storeName || location.store_name || 'Inventory';
+                    color = location.storeName || location.store_name ? 'blue' : 'green';
+                } else if (typeof location === 'string') {
+                    displayLocation = location === 'Unknown' ? 'Inventory' : location;
+                    if (location === 'Inventory') {
+                        color = 'green';
+                    } else if (location !== 'Unknown') {
+                        color = 'blue';
+                    } else {
+                        color = 'green';
+                    }
+                } else {
+                    displayLocation = 'Inventory';
+                    color = 'green';
+                }
+
                 return (
-                    <Tag color="blue" style={tagStyle}>
-                        {location.store_name || 'Store'}
+                    <Tag color={color} style={{ minWidth: '80px', textAlign: 'center' }}>
+                        {displayLocation}
                     </Tag>
                 );
             }
-            return (
-                <Tag color="green" style={tagStyle}>
-                    Inventory
-                </Tag>
-            );
-        }
-    },
+        },
         {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
             width: 150,
             filterable: true,
-            render: (text) => {
-                const isDuplicate = duplicateSerials.has(text);
-                return (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {text}
-                        {isDuplicate && (
-                            <Tag style={tagStyle} color="red">
-                                Duplicate
-                            </Tag>
-                        )}
-                    </div>
-                );
-            }
+            render: (text) => (
+                <span>
+                    {text}
+                    {duplicateSerials.has(text) && (
+                        <Tag color="red" style={{ marginLeft: 8 }}>
+                            Duplicate
+                        </Tag>
+                    )}
+                </span>
+            ),
         },
         {
             title: 'Computer Name',
@@ -142,14 +602,35 @@ const createColumns = ({ itemLocations, duplicateSerials, handleDelete, handleEd
             key: 'systemsku',
             width: 150,
             filterable: true,
-        render: formatSystemSku
+            render: (text) => {
+                if (!text) return 'N/A';
+                const parts = text.split('_');
+                const thinkpadPart = parts.find(part => part.includes('ThinkPad'));
+                if (thinkpadPart) {
+                    return parts.slice(parts.indexOf(thinkpadPart)).join(' ')
+                        .replace(/Gen (\d+)$/, 'Gen$1').trim();
+                }
+                return text;
+            }
         },
         {
             title: 'Operating System',
             dataIndex: 'operatingsystem',
             key: 'operatingsystem',
             width: 150,
-        render: formatOS
+            render: (text) => {
+                if (!text || text === 'N/A') return 'N/A';
+                const osLower = text.toLowerCase();
+                if (osLower.includes('windows')) {
+                    const mainVersion = osLower.includes('11') ? '11' : 
+                                    osLower.includes('10') ? '10' : '';
+                    const edition = osLower.includes('pro') ? 'Pro' :
+                                osLower.includes('home') ? 'Home' : 
+                                osLower.includes('enterprise') ? 'Enterprise' : '';
+                    return `Windows ${mainVersion} ${edition}`.trim();
+                }
+                return text;
+            }
         },
         {
             title: 'CPU',
@@ -236,611 +717,67 @@ const createColumns = ({ itemLocations, duplicateSerials, handleDelete, handleEd
             dataIndex: 'created_at',
             key: 'created_at',
             width: 150,
-        render: formatDate
-    },
-];
-
-const InventoryPage = () => {
-    const { user } = useAuth();
-    const navigate = useNavigate();
-    const { store } = useParams();
-
-    // State management with performance optimizations
-    const [loading, setLoading] = useState(false);
-    const [refreshing, setRefreshing] = useState(false);
-    const refreshTimeoutRef = useRef(null);
-    const [records, setRecords] = useState([]);
-    const [duplicateSerials, setDuplicateSerials] = useState(new Set());
-    const [itemLocations, setItemLocations] = useState({});
-    const [stores, setStores] = useState([{ value: 'all', label: 'All Stores' }]);
-    const [selectedStore, setSelectedStore] = useState(store || 'all');
-    const [searchText, setSearchText] = useState('');
-    const [pagination, setPagination] = useState({
-        current: 1,
-        pageSize: INITIAL_PAGE_SIZE,
-        total: 0,
-    });
-    const [editingRecord, setEditingRecord] = useState(null);
-    const [editModalVisible, setEditModalVisible] = useState(false);
-    const [form] = Form.useForm();
-    const [error, setError] = useState(null);
-
-    // Add loading ref to prevent duplicate calls
-    const loadingRef = useRef(false);
-
-    // Add request cancellation
-    const abortControllerRef = useRef(null);
-
-    // Add loading state for locations
-    const loadingLocationsRef = useRef(false);
-
-    // Memoized function for fetching records with debounce and cancellation
-    const fetchRecords = useCallback(async () => {
-        try {
-            console.log('Fetching records...');
-            const params = {
-                page: pagination.current,
-                pageSize: pagination.pageSize,
-                store: selectedStore === 'all' ? undefined : selectedStore
-            };
-            
-            const response = await inventoryDataService.getRecords(params);
-            console.log('Records response:', response);
-            
-            if (!response?.success) {
-                throw new Error(response?.error || 'Failed to fetch records');
+            render: (text) => {
+                if (!text) return 'N/A';
+                return new Date(text).toLocaleString();
             }
-
-            const records = response.records || [];
-            console.log(`Fetched ${records.length} records`);
-            
-            setRecords(records);
-            setPagination(prev => ({
-                ...prev,
-                total: response.total || records.length
-            }));
-            
-            return { success: true, records };
-        } catch (error) {
-            console.error('Error fetching records:', error);
-            message.error('Failed to load records');
-            return { success: false, error: error.message };
+        },
+        {
+            title: 'Actions',
+            key: 'actions',
+            fixed: 'right',
+            width: 100,
+            render: (_, record) => (
+                <Space size="middle">
+                    <Button type="link" onClick={() => handleEdit(record)}>
+                        Edit
+                    </Button>
+                    {duplicateSerials.has(record.serialnumber) && (
+                        <Popconfirm
+                            title="Delete this record?"
+                            onConfirm={() => handleDelete(record.id)}
+                            okText="Yes"
+                            cancelText="No"
+                        >
+                            <Button danger type="link">Delete</Button>
+                        </Popconfirm>
+                    )}
+                </Space>
+            )
         }
-    }, [pagination.current, pagination.pageSize, selectedStore]);
-
-    // Track user activity with debounce
-    useEffect(() => {
-        let activityTimeout;
-        const handleActivity = () => {
-            if (activityTimeout) {
-                clearTimeout(activityTimeout);
-            }
-            activityTimeout = setTimeout(() => {
-                inventoryDataService.updateActivityTime();
-            }, 1000); // Debounce for 1 second
-        };
-
-        window.addEventListener('mousemove', handleActivity);
-        window.addEventListener('keydown', handleActivity);
-        window.addEventListener('click', handleActivity);
-        window.addEventListener('scroll', handleActivity);
-
-        // Start background refresh
-        inventoryDataService.startBackgroundRefresh();
-
-        // Cleanup
-        return () => {
-            if (activityTimeout) {
-                clearTimeout(activityTimeout);
-            }
-            window.removeEventListener('mousemove', handleActivity);
-            window.removeEventListener('keydown', handleActivity);
-            window.removeEventListener('click', handleActivity);
-            window.removeEventListener('scroll', handleActivity);
-            inventoryDataService.stopBackgroundRefresh();
-        };
-    }, []);
-
-    // Cleanup refresh timeout
-    useEffect(() => {
-        return () => {
-            if (refreshTimeoutRef.current) {
-                clearTimeout(refreshTimeoutRef.current);
-            }
-        };
-    }, []);
-
-    // Cleanup function for all refs and controllers
-    useEffect(() => {
-        return () => {
-            const controller = abortControllerRef.current;
-            if (controller) {
-                controller.abort();
-            }
-            loadingRef.current = false;
-            if (refreshTimeoutRef.current) {
-                clearTimeout(refreshTimeoutRef.current);
-            }
-            abortControllerRef.current = null;
-        };
-    }, []);
-
-    // Update filtered data with useMemo
-    const filteredData = useMemo(() => {
-        console.log('Filtering records:', { records, searchText, selectedStore });
-        
-        if (!Array.isArray(records)) {
-            console.log('Records is not an array');
-            return { data: [], total: 0 };
-        }
-
-        let filtered = [...records];
-        console.log('Initial records count:', filtered.length);
-
-        if (searchText) {
-            const searchLower = searchText.toLowerCase();
-            filtered = filtered.filter(record => 
-                Object.entries(record).some(([key, val]) => 
-                    ['serialnumber', 'computername', 'manufacturer', 'model', 'systemsku'].includes(key) && 
-                    val && 
-                    val.toString().toLowerCase().includes(searchLower)
-                )
-            );
-            console.log('After search filter:', filtered.length);
-        }
-
-        if (selectedStore !== 'all') {
-            const selectedStoreData = stores.find(s => s.value === selectedStore);
-            console.log('Selected store:', selectedStoreData);
-            
-            filtered = filtered.filter(record => {
-                const location = itemLocations[record.serialnumber];
-                console.log('Record location:', { serialnumber: record.serialnumber, location });
-                
-                return location?.location === selectedStore || 
-                       (location?.location === 'store' && 
-                        location?.storeName?.toLowerCase() === selectedStoreData?.name?.toLowerCase());
-            });
-            console.log('After store filter:', filtered.length);
-        }
-        
-        const result = { 
-            data: filtered, 
-            total: filtered.length 
-        };
-        console.log('Final filtered data:', result);
-        return result;
-    }, [records, searchText, selectedStore, itemLocations, stores]);
-
-    // Memoize pagination values to prevent unnecessary re-renders
-    const paginationConfig = useMemo(() => ({
-        current: pagination.current,
-        pageSize: pagination.pageSize,
-        total: filteredData.total,
-        showSizeChanger: true,
-        showQuickJumper: true,
-        pageSizeOptions: PAGE_SIZE_OPTIONS,
-        onChange: (page, pageSize) => {
-            setPagination(prev => ({
-                ...prev,
-                current: page,
-                pageSize: pageSize
-            }));
-        }
-    }), [pagination, filteredData.total]);
-
-    // Event handlers
-    const handleEdit = useCallback((record) => {
-        setEditingRecord(record);
-        form.setFieldsValue(record);
-        setEditModalVisible(true);
-    }, [form]);
-
-    const handleDelete = useCallback(async (id) => {
-        try {
-            const response = await inventoryDataService.deleteRecord(id);
-            if (response?.success) {
-                message.success('Record deleted successfully');
-                fetchRecords();
-            } else {
-                throw new Error(response?.message || 'Failed to delete record');
-            }
-        } catch (error) {
-            console.error('Error deleting record:', error);
-            message.error(error.message || 'Failed to delete record');
-        }
-    }, [fetchRecords]);
-
-    const handleUpdate = useCallback(async (values) => {
-        if (!editingRecord?.id) return;
-
-        try {
-            const response = await inventoryDataService.updateRecord(editingRecord.id, values);
-            if (response?.success) {
-                message.success('Record updated successfully');
-                setEditModalVisible(false);
-                fetchRecords();
-            } else {
-                throw new Error(response?.message || 'Failed to update record');
-            }
-        } catch (error) {
-            console.error('Error updating record:', error);
-            message.error(error.message || 'Failed to update record');
-        }
-    }, [editingRecord?.id, fetchRecords]);
-
-    // Memoized store loading function
-    const loadStores = useCallback(async () => {
-        if (loadingRef.current) {
-            console.log('Store loading blocked - already loading');
-            return { success: false, error: new Error('Already loading') };
-        }
-        
-        loadingRef.current = true;
-        try {
-            console.log('Loading stores...');
-            const storesResponse = await inventoryDataService.getStores();
-            console.log('Stores response:', storesResponse);
-
-            if (!storesResponse?.success) {
-                throw new Error(storesResponse?.error || 'Failed to load stores');
-            }
-
-            // Log the raw stores data for debugging
-            console.log('Raw stores data:', storesResponse.stores);
-
-            const validStores = (storesResponse.stores || [])
-                .filter(store => {
-                    // Log each store for debugging
-                    console.log('Processing store:', store);
-                    return store && (store.value || store.id);
-                })
-                .map(store => ({
-                    value: store.value || store.id?.toString(),
-                    label: store.label || store.name || 'Unknown Store',
-                    id: store.id?.toString()
-                }));
-
-            console.log('Valid stores:', validStores);
-            
-            const updatedStores = [
-                { value: 'all', label: 'All Stores' },
-                ...validStores
-            ];
-            
-            console.log('Updated stores list:', updatedStores);
-            setStores(updatedStores);
-
-            // If current store is invalid, reset to 'all'
-            if (store && !validStores.some(s => s.value === store)) {
-                console.log('Current store is invalid, resetting to all:', store);
-                navigate('/inventory');
-            }
-
-            return { success: true, data: validStores };
-        } catch (error) {
-            console.error('Error loading stores:', error);
-            setStores([{ value: 'all', label: 'All Stores' }]);
-            return { success: false, error };
-        } finally {
-            loadingRef.current = false;
-        }
-    }, [store, navigate]);
-
-    // Add a new function for background location loading with loading state check
-    const loadLocationsForCurrentPage = useCallback(async (currentRecords) => {
-        if (!currentRecords?.length || loadingLocationsRef.current) return;
-        
-        try {
-            loadingLocationsRef.current = true;
-            console.log('Loading locations for current page in background...');
-            const locations = await inventoryDataService.batchCheckLocations(currentRecords);
-            setItemLocations(prev => ({
-                ...prev,
-                ...Object.fromEntries(locations)
-            }));
-        } catch (error) {
-            console.error('Error loading locations:', error);
-        } finally {
-            loadingLocationsRef.current = false;
-        }
-    }, []);
-
-    // Modify loadInitialData to not load all locations at once
-    const loadInitialData = useCallback(async () => {
-        try {
-            if (!user) {
-                console.log('No user, skipping initial load');
-                return { success: false, error: 'No user available' };
-            }
-
-            console.log('Starting initial data load');
-            setLoading(true);
-            
-            if (loadingRef.current) {
-                console.log('Store loading blocked - already loading');
-                throw new Error('Store loading already in progress');
-            }
-
-            console.log('Loading stores...');
-            const storesResponse = await loadStores();
-            
-            if (!storesResponse?.success) {
-                throw new Error(storesResponse?.error || 'Failed to load stores');
-            }
-
-            console.log('Loading records...');
-            const recordsResponse = await fetchRecords();
-            
-            if (!recordsResponse?.success) {
-                throw new Error(recordsResponse?.error || 'Failed to load records');
-            }
-
-            const records = recordsResponse.records || [];
-            setRecords(records);
-
-            // Load locations for current page in background
-            const currentPageRecords = records.slice(
-                (pagination.current - 1) * pagination.pageSize,
-                pagination.current * pagination.pageSize
-            );
-            loadLocationsForCurrentPage(currentPageRecords);
-
-            setLoading(false);
-            return { success: true };
-        } catch (error) {
-            console.error('Initial load error:', error);
-            setError(error.message || 'Failed to load initial data');
-            setLoading(false);
-            return { 
-                success: false, 
-                error: error.message || 'An unknown error occurred during initial load'
-            };
-        }
-    }, [user, loadStores, fetchRecords, pagination.current, pagination.pageSize, loadLocationsForCurrentPage]);
-
-    // Modify handleRefresh to only load current page locations
-    const handleRefresh = useCallback(async () => {
-        if (refreshing || loading) return;
-        setRefreshing(true);
-        try {
-            const recordsResponse = await fetchRecords();
-            if (recordsResponse?.success) {
-                const records = recordsResponse.records || [];
-                setRecords(records);
-                
-                // Load locations for current page in background
-                const currentPageRecords = records.slice(
-                    (pagination.current - 1) * pagination.pageSize,
-                    pagination.current * pagination.pageSize
-                );
-                loadLocationsForCurrentPage(currentPageRecords);
-            }
-        } catch (error) {
-            console.error('Error refreshing data:', error);
-            message.error('Failed to refresh data');
-        } finally {
-            setRefreshing(false);
-        }
-    }, [fetchRecords, refreshing, loading, pagination.current, pagination.pageSize, loadLocationsForCurrentPage]);
-
-    // Add effect to load locations when page changes with debounce
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            const currentPageRecords = records.slice(
-                (pagination.current - 1) * pagination.pageSize,
-                pagination.current * pagination.pageSize
-            );
-            loadLocationsForCurrentPage(currentPageRecords);
-        }, 100); // Add small delay to prevent rapid consecutive calls
-
-        return () => clearTimeout(timer);
-    }, [pagination.current, pagination.pageSize, records, loadLocationsForCurrentPage]);
-
-    // Handle table interaction with debounce
-    const handleTableChange = useCallback((paginationData) => {
-        setPagination(prev => ({
-            ...prev,
-            current: paginationData.current,
-            pageSize: paginationData.pageSize
-        }));
-        inventoryDataService.updateActivityTime();
-    }, []);
-
-    // Update the columns definition to handle location rendering
-    const columns = useMemo(() => {
-        const processedLocations = {};
-        Object.entries(itemLocations).forEach(([key, value]) => {
-            if (!value) {
-                processedLocations[key] = { location: 'unknown' };
-            } else if (typeof value === 'string') {
-                processedLocations[key] = { location: String(value) };
-            } else {
-                processedLocations[key] = {
-                    location: String(value.location || 'unknown'),
-                    storeName: String(value.storeName || '')
-                };
-            }
-        });
-
-        return createColumns({
-            itemLocations: processedLocations,
-            duplicateSerials,
-            handleDelete,
-            handleEdit,
-            userRole: user?.role
-        });
-    }, [itemLocations, duplicateSerials, handleDelete, handleEdit, user?.role]);
-
-    // Memoized table props for performance
-    const tableProps = useMemo(() => ({
-        columns,
-        dataSource: filteredData.data,
-        rowKey: "id",
-        loading,
-        scroll: { x: 1500 },
-        pagination: paginationConfig,
-        onChange: handleTableChange
-    }), [
-        columns,
-        filteredData.data,
-        loading,
-        paginationConfig,
-        handleTableChange
-    ]);
-
-    // Add store access control
-    useEffect(() => {
-        // If user is not admin and tries to access all stores, redirect to their assigned store
-        if (user && user.role !== 'admin' && selectedStore === 'all') {
-            const userStore = user.store_id;
-            if (userStore) {
-                setSelectedStore(userStore);
-                navigate(`/stores/${userStore}`);
-            }
-        }
-    }, [user, selectedStore, navigate]);
-
-    // Add the renderStoreStatistics function
-    const renderStoreStatistics = useCallback(() => {
-        const storesList = stores.filter(store => store.value !== 'all');
-        if (storesList.length === 0) {
-            return null;
-        }
-
-        return (
-            <Row gutter={16}>
-                {storesList.map((store) => {
-                    const storeCount = Object.values(itemLocations).reduce((count, location) => {
-                        if (!location) return count;
-                        if (typeof location === 'string') return count;
-                        
-                        const storeName = (location.store_name || '').toLowerCase();
-                        const storeLabel = (store.label || '').toLowerCase();
-                        
-                        return (location.location === 'store' && storeName === storeLabel) ? count + 1 : count;
-                    }, 0);
-                    
-                    return (
-                        <Col span={6} key={`store-stat-${store.value}`}>
-                            <Statistic
-                                title={<span style={{ fontSize: '16px', fontWeight: 500 }}>
-                                    {store.label || 'Unknown Store'}
-                                </span>}
-                                value={storeCount}
-                                valueStyle={statisticStyle}
-                            />
-                        </Col>
-                    );
-                })}
-            </Row>
-        );
-    }, [stores, itemLocations]);
-
-    const handleStoreChange = useCallback((value) => {
-        console.log('Store change:', { value, stores });
-        setSelectedStore(value);
-        setPagination(prev => ({ ...prev, current: 1 }));
-        
-        // Update URL and refetch data with new store
-        if (value === 'all' && user?.role === 'admin') {
-            console.log('Navigating to inventory (all stores)');
-            navigate('/inventory');
-        } else {
-            // Ensure we have a valid store ID
-            const store = stores.find(s => s.value === value || s.id?.toString() === value?.toString());
-            if (store) {
-                const storeId = store.id?.toString() || store.value?.toString();
-                console.log('Navigating to store:', { store, storeId });
-                navigate(`/stores/${storeId}`);
-            } else {
-                console.error('Invalid store selected:', { value, availableStores: stores });
-                message.error('Invalid store selected');
-                navigate('/inventory');
-            }
-        }
-    }, [navigate, user?.role, stores]);
-
-    const handleSearch = useCallback((value) => {
-        setSearchText(value);
-        setPagination(prev => ({ ...prev, current: 1 }));
-    }, []);
-
-    // Add initial data loading with loading state protection and cleanup
-    useEffect(() => {
-        let mounted = true;
-        let initializationStarted = false;
-        
-        const initialize = async () => {
-            if (!mounted || initializationStarted || !user) return;
-            
-            initializationStarted = true;
-            console.log('Starting initial data load');
-            
-            const result = await loadInitialData();
-            if (!mounted) return;
-
-            if (!result.success) {
-                console.error('Initialization failed:', result.error);
-                setError(result.error);
-                message.error(result.error);
-            }
-        };
-
-        initialize();
-        
-        return () => {
-            mounted = false;
-            initializationStarted = false;
-            // Cleanup any pending requests
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
-            }
-        };
-    }, [loadInitialData, user]);
+    ], [duplicateSerials, handleDelete, handleEdit]);
 
     return (
         <div>
-            {error && (
-                <Alert
-                    message="Error"
-                    description={error}
-                    type="error"
-                    showIcon
-                    style={{ marginBottom: 16 }}
-                />
-            )}
+            <Row gutter={[16, 16]} className="stats-row">
+                <Col span={8}>
+                    <Card>
+                        <Statistic 
+                            title="Total Items" 
+                            value={totalRecords || 0}
+                        />
+                    </Card>
+                </Col>
+            </Row>
+
             <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 <Col span={24}>
                     <Card>
                         <Row gutter={16}>
-                            <Col span={6}>
-                                <Statistic
-                                    title={<span style={{ fontSize: '16px', fontWeight: 500 }}>Total Records</span>}
-                                    value={records.length}
-                                    valueStyle={{ color: '#1890ff', fontSize: '24px' }}
-                                />
-                            </Col>
-                            {renderStoreStatistics()}
-                        </Row>
-                    </Card>
-                </Col>
-                <Col span={24}>
-                    <Card>
-                        <Row gutter={16}>
                             <Col span={24}>
-                                <Space size="middle" style={{ marginBottom: 16 }}>
-                                <Select
+                                <Space>
+                                    <Select
                                         style={{ width: 200 }}
-                                        value={selectedStore}
-                                        onChange={handleStoreChange}
+                                        value={selectedBranch}
+                                        onChange={setSelectedBranch}
                                     >
-                                        {stores.map(store => (
+                                        <Option value="all">All Stores</Option>
+                                        {storesList.map(store => (
                                             <Option key={store.value} value={store.value}>
                                                 {store.label}
-                                        </Option>
-                                    ))}
-                                </Select>
+                                            </Option>
+                                        ))}
+                                    </Select>
                                     <Search
                                         placeholder="Search records..."
                                         allowClear
@@ -849,13 +786,17 @@ const InventoryPage = () => {
                                         style={{ width: 300 }}
                                     />
                                     <Button
-                                        icon={<ReloadOutlined spin={refreshing} />}
-                                        onClick={handleRefresh}
-                                        loading={refreshing}
-                                        disabled={loading || refreshing}
-                                        style={{ minWidth: 100 }}
+                                        type="primary"
+                                        onClick={() => setOutboundModalVisible(true)}
                                     >
-                                        {refreshing ? 'Refreshing...' : 'Refresh'}
+                                        Outbound
+                                    </Button>
+                                    <Button
+                                        icon={<ReloadOutlined />}
+                                        onClick={() => fetchRecords(pagination.current, pagination.pageSize)}
+                                        loading={loading}
+                                    >
+                                        Refresh
                                     </Button>
                                 </Space>
                             </Col>
@@ -864,19 +805,42 @@ const InventoryPage = () => {
                 </Col>
 
                 <Col span={24}>
-                    <Table {...tableProps} />
+                    <Table
+                        columns={columns}
+                        dataSource={filteredRecords}
+                        rowKey="id"
+                        loading={loading}
+                        scroll={{ x: 1500 }}
+                        pagination={{
+                            ...pagination,
+                            showSizeChanger: true,
+                            showQuickJumper: true,
+                            pageSizeOptions: ['20', '50', '100']
+                        }}
+                        onChange={handleTableChange}
+                        summary={pageData => {
+                            return (
+                                <Table.Summary fixed>
+                                    <Table.Summary.Row>
+                                        <Table.Summary.Cell index={0} colSpan={columns.length}>
+                                            Total Records: {totalRecords}
+                                        </Table.Summary.Cell>
+                                    </Table.Summary.Row>
+                                </Table.Summary>
+                            );
+                        }}
+                    />
                 </Col>
             </Row>
 
             <Modal
                 title="Edit Record"
                 open={editModalVisible}
-                onOk={handleUpdate}
+                onOk={handleEditSubmit}
                 onCancel={() => {
                     setEditModalVisible(false);
                     form.resetFields();
                 }}
-                destroyOnClose
             >
                 <Form
                     form={form}
@@ -921,6 +885,16 @@ const InventoryPage = () => {
                         <Input />
                     </Form.Item>
                 </Form>
+            </Modal>
+
+            <Modal
+                title="Outbound Management"
+                open={outboundModalVisible}
+                onCancel={() => setOutboundModalVisible(false)}
+                width={1000}
+                footer={null}
+            >
+                <OutboundModal />
             </Modal>
         </div>
     );

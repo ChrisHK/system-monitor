@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Layout, Menu, Modal, Form, Input, message } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,6 +24,8 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
     const [stores, setStores] = useState([]);
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [form] = Form.useForm();
+    const storesRef = useRef(null);
+    const fetchingRef = useRef(false);
 
     const handleLogout = useCallback(() => {
         console.log('Logging out...');
@@ -31,8 +33,13 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
         navigate('/login');
     }, [logout, navigate]);
 
-    const fetchStores = async () => {
+    const fetchStores = useCallback(async () => {
+        if (fetchingRef.current) {
+            return;
+        }
+
         try {
+            fetchingRef.current = true;
             console.log('Fetching stores for sidebar...');
             const response = await storeApi.getStores();
             console.log('Sidebar stores response:', response);
@@ -43,24 +50,28 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
                     ? response.stores 
                     : response.stores.filter(store => {
                         const storeId = store.id?.toString();
-                        console.log('Comparing store IDs:', { storeId, userStoreId });
                         return storeId === userStoreId;
                     });
                 
                 console.log('Filtered stores:', filteredStores);
                 setStores(filteredStores);
+                storesRef.current = filteredStores;
             } else {
                 throw new Error(response?.error || 'Failed to load stores');
             }
         } catch (error) {
             console.error('Error fetching stores:', error);
             message.error('Failed to load stores');
+        } finally {
+            fetchingRef.current = false;
         }
-    };
+    }, [user]);
 
     useEffect(() => {
-        fetchStores();
-    }, []);
+        if (user) {
+            fetchStores();
+        }
+    }, [user, fetchStores]);
 
     const handleAddStore = async (values) => {
         try {
@@ -99,7 +110,6 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
             }
         ];
 
-        // Add Branches submenu if there are stores
         if (stores.length > 0) {
             items.push({
                 key: 'branches',
@@ -116,20 +126,6 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
             });
         }
 
-        // Add other menu items
-        items.push(
-            {
-                key: '/outbound',
-                icon: <ExportOutlined />,
-                label: 'Outbound',
-                onClick: () => {
-                    console.log('Navigating to outbound page');
-                    navigate('/outbound');
-                }
-            }
-        );
-
-        // Add settings for admin
         if (user?.role === 'admin') {
             items.push({
                 key: '/settings',
@@ -139,7 +135,6 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
             });
         }
 
-        // Add logout
         items.push({
             key: 'logout',
             icon: <LogoutOutlined />,

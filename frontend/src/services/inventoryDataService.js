@@ -248,63 +248,49 @@ class InventoryDataService {
     }
 
     // Batch check locations with optimized resource usage
-    async batchCheckLocations(records, batchSize = 10) {
-        const locations = new Map();
-        const newRecords = records.filter(record => 
-            record.serialnumber && !this.cache.locations.has(record.serialnumber)
-        );
-        
-        // Return cached locations for records that are already cached
-        const cachedLocations = new Map(
-            records
-                .filter(record => record.serialnumber && this.cache.locations.has(record.serialnumber))
-                .map(record => [record.serialnumber, this.cache.locations.get(record.serialnumber)])
-        );
-        
-        if (newRecords.length === 0) {
-            return cachedLocations;
-        }
-
-        // Process in smaller batches to prevent resource exhaustion
-        for (let i = 0; i < newRecords.length; i += batchSize) {
-            const batch = newRecords.slice(i, i + batchSize);
-            const locationPromises = batch.map(record => 
-                this.getLocation(record.serialnumber)
-                    .then(response => {
-                        if (response?.success) {
-                            const locationData = {
-                                location: response.location,
-                                store_name: response.store_name,
-                                store_id: response.store_id
-                            };
-                            this.cache.locations.set(record.serialnumber, locationData);
-                            locations.set(record.serialnumber, locationData);
-                        } else {
-                            const defaultLocation = { location: 'inventory' };
-                            this.cache.locations.set(record.serialnumber, defaultLocation);
-                            locations.set(record.serialnumber, defaultLocation);
-                        }
-                    })
-                    .catch(() => {
-                        const defaultLocation = { location: 'inventory' };
-                        this.cache.locations.set(record.serialnumber, defaultLocation);
-                        locations.set(record.serialnumber, defaultLocation);
-                    })
-            );
-
-            await Promise.all(locationPromises);
+    async batchCheckLocations(serialNumbers) {
+        try {
+            console.log('Checking locations for:', serialNumbers);
             
-            // Add a small delay between batches to prevent overwhelming the server
-            if (i + batchSize < newRecords.length) {
-                await new Promise(resolve => setTimeout(resolve, 100));
+            // Process in batches of 50
+            const BATCH_SIZE = 50;
+            const locations = {};
+            
+            for (let i = 0; i < serialNumbers.length; i += BATCH_SIZE) {
+                const batch = serialNumbers.slice(i, i + BATCH_SIZE);
+                console.log(`Processing batch ${i/BATCH_SIZE + 1}:`, batch);
+                
+                const response = await checkItemLocation(batch);
+                console.log('Location check response for batch:', response);
+                
+                if (response?.success && Array.isArray(response.locations)) {
+                    response.locations.forEach(location => {
+                        if (location.serialnumber) {
+                            locations[location.serialnumber] = {
+                                location: location.location || 'inventory',
+                                store_name: location.store_name,
+                                store_id: location.store_id
+                            };
+                            
+                            // Update cache
+                            this.cache.locations.set(location.serialnumber, locations[location.serialnumber]);
+                            this.cache.lastUpdate.locations = Date.now();
+                        }
+                    });
+                }
+                
+                // Add a small delay between batches
+                if (i + BATCH_SIZE < serialNumbers.length) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
             }
+            
+            console.log('All batches processed. Final locations:', locations);
+            return locations;
+        } catch (error) {
+            console.error('Error checking locations:', error);
+            return {};
         }
-
-        // Update cache timestamp
-        this.cache.lastUpdate.locations = Date.now();
-
-        // Merge cached and new locations
-        return new Map([...cachedLocations, ...locations]);
     }
 
     // Add method to check if refresh is needed
@@ -411,3 +397,8 @@ class InventoryDataService {
 }
 
 export const inventoryDataService = new InventoryDataService(); 
+
+export const getOutboundData = async () => {
+    const response = await api.fetchOutboundData(); // 调用新的 API 方法
+    return response;
+}; 

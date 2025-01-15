@@ -107,20 +107,45 @@ router.get('/search', auth, async (req, res) => {
             });
         }
 
-        const result = await pool.query(`
+        // Format search terms for System SKU matching
+        const searchTerms = q.toLowerCase().split(' ');
+        const formattedSearch = searchTerms.join('_');
+        const likeTerms = searchTerms.map((_, index) => `$${index + 2}`);
+
+        const query = `
             SELECT *
             FROM system_records
             WHERE 
                 is_current = true 
                 AND (
-                    serialnumber ILIKE $1 
-                    OR model ILIKE $1 
+                    serialnumber ILIKE $1
+                    OR model ILIKE $1
                     OR manufacturer ILIKE $1
+                    OR systemsku ILIKE $1
+                    OR computername ILIKE $1
+                    OR operatingsystem ILIKE $1
+                    OR cpu ILIKE $1
                     OR CAST(id AS TEXT) ILIKE $1
+                    OR systemsku ILIKE '%' || $2 || '%'
+                    ${searchTerms.slice(1).map((_, idx) => 
+                        `OR systemsku ILIKE '%' || ${likeTerms[idx + 1]} || '%'`
+                    ).join('\n')}
                 )
             ORDER BY created_at DESC
             LIMIT 50
-        `, [`%${q}%`]);
+        `;
+
+        // Debug logging
+        console.log('Search debug info:');
+        console.log('Original search term:', q);
+        console.log('Formatted search:', formattedSearch);
+        console.log('Search terms:', searchTerms);
+
+        const params = [`%${q}%`, ...searchTerms];
+        console.log('Query parameters:', params);
+
+        const result = await pool.query(query, params);
+        console.log('Search results count:', result.rows.length);
 
         res.json({
             success: true,

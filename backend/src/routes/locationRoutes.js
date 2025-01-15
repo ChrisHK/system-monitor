@@ -72,32 +72,116 @@ router.post('/:serialNumber', async (req, res) => {
 router.post('/batch', async (req, res) => {
     const { serialNumbers } = req.body;
     
-    if (!Array.isArray(serialNumbers)) {
+    if (!Array.isArray(serialNumbers) || serialNumbers.length === 0) {
         return res.status(400).json({
             success: false,
-            error: 'serialNumbers must be an array'
+            error: 'serialNumbers must be a non-empty array'
         });
     }
+
+    // Log request details
+    console.log('Batch location request:', {
+        serialNumbersCount: serialNumbers.length,
+        firstFew: serialNumbers.slice(0, 5)
+    });
     
     try {
-        const query = `
-            SELECT DISTINCT ON (serialnumber) *
-            FROM item_locations
-            WHERE serialnumber = ANY($1)
-            ORDER BY serialnumber, updated_at DESC
+        // First check if the table exists
+        const checkTableQuery = `
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'item_locations'
+            );
         `;
         
+        const tableExists = await pool.query(checkTableQuery);
+        if (!tableExists.rows[0].exists) {
+            // Create the table if it doesn't exist
+            const createTableQuery = `
+                CREATE TABLE IF NOT EXISTS item_locations (
+                    id SERIAL PRIMARY KEY,
+                    serialnumber TEXT NOT NULL,
+                    location TEXT NOT NULL DEFAULT 'inventory',
+                    store_id TEXT,
+                    store_name TEXT,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_item_locations_serialnumber ON item_locations(serialnumber);
+            `;
+            await pool.query(createTableQuery);
+            console.log('Created item_locations table');
+        }
+
+        // Get all known locations
+        const query = `
+            WITH latest_locations AS (
+                SELECT DISTINCT ON (serialnumber) 
+                    serialnumber, 
+                    location, 
+                    store_id, 
+                    store_name, 
+                    updated_at
+                FROM item_locations
+                WHERE serialnumber = ANY($1::text[])
+                ORDER BY serialnumber, updated_at DESC
+            )
+            SELECT * FROM latest_locations
+        `;
+        
+        console.log('Executing query with params:', serialNumbers);
         const result = await pool.query(query, [serialNumbers]);
+        console.log('Query result:', {
+            rowCount: result.rowCount,
+            firstRow: result.rows[0]
+        });
+        
+        // Create a map of known locations
+        const locationMap = new Map(
+            result.rows.map(row => [row.serialnumber, row])
+        );
+        
+        // Create the response array with default 'inventory' for unknown locations
+        const locations = serialNumbers.map(serialNumber => {
+            const known = locationMap.get(serialNumber);
+            if (known) {
+                return known;
+            }
+            return {
+                serialnumber: serialNumber,
+                location: 'inventory',
+                store_id: null,
+                store_name: null,
+                updated_at: new Date()
+            };
+        });
+        
+        // Log response summary
+        console.log('Response summary:', {
+            totalLocations: locations.length,
+            knownLocations: locationMap.size,
+            defaultLocations: locations.length - locationMap.size
+        });
         
         res.json({
             success: true,
-            locations: result.rows
+            locations: locations
         });
     } catch (error) {
-        console.error('Error getting batch locations:', error);
+        // Detailed error logging
+        console.error('Error in batch location check:', {
+            error: error.message,
+            stack: error.stack,
+            code: error.code,
+            detail: error.detail
+        });
+        
         res.status(500).json({
             success: false,
-            error: 'Failed to get batch locations'
+            error: 'Failed to get batch locations',
+            details: error.message,
+            code: error.code
         });
     }
 });
