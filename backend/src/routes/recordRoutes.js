@@ -188,6 +188,13 @@ router.get('/', auth, checkRole(['user', 'admin'], true), async (req, res) => {
             WHERE r.is_current = true
         `;
         
+        // Query for total items (including store items)
+        let totalItemsQuery = `
+            SELECT COUNT(DISTINCT r.id) 
+            FROM system_records r
+            WHERE r.is_current = true
+        `;
+        
         // Base query for fetching records
         let query = '';
         const queryParams = [];
@@ -252,14 +259,26 @@ router.get('/', auth, checkRole(['user', 'admin'], true), async (req, res) => {
         const countResult = await pool.query(countQuery, queryParams);
         const total = parseInt(countResult.rows[0].count);
 
+        // Get total items count
+        const totalItemsResult = await pool.query(totalItemsQuery);
+        const totalItems = parseInt(totalItemsResult.rows[0].count);
+
         // Get paginated data with store information
         const fullQuery = `
-            SELECT DISTINCT ON (r.id) r.*, 
-                   s.id as store_id,
-                   s.name as store_name
+            SELECT DISTINCT ON (r.id) 
+                r.*,
+                COALESCE(s.id, si_all.store_id) as store_id,
+                COALESCE(s.name, si_all.store_name) as store_name,
+                COALESCE(il.location, 'inventory') as current_location
             FROM system_records r
             LEFT JOIN store_items si ON r.id = si.record_id
             LEFT JOIN stores s ON si.store_id = s.id
+            LEFT JOIN item_locations il ON r.serialnumber = il.serialnumber
+            LEFT JOIN (
+                SELECT record_id, store_id, s.name as store_name
+                FROM store_items si_sub
+                JOIN stores s ON si_sub.store_id = s.id
+            ) si_all ON r.id = si_all.record_id
             WHERE r.is_current = true
             ${query}
             ORDER BY r.id, r.created_at DESC
@@ -276,7 +295,8 @@ router.get('/', auth, checkRole(['user', 'admin'], true), async (req, res) => {
         res.json({
             success: true,
             records: result.rows,
-            total: total
+            total: total,
+            totalItems: totalItems
         });
     } catch (error) {
         console.error('Error fetching records:', error);

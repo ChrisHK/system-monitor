@@ -187,9 +187,6 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
         
         // Check for additional feature permissions
         const hasFeatureAccess = (feature) => {
-            // Duplicates feature is available to all users
-            if (feature === 'duplicates') return true;
-            
             return user?.role === 'admin' || 
                 (groupPermissions?.features && groupPermissions.features.includes(feature));
         };
@@ -198,14 +195,6 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
         console.log('Available stores:', stores);
         console.log('Feature permissions:', groupPermissions?.features);
         console.log('Access rights:', groupPermissions?.access_rights);
-
-        // Add Duplicates menu item (available to all users)
-        items.push({
-            key: '/duplicates',
-            icon: <DatabaseOutlined />,
-            label: 'Duplicates',
-            onClick: () => navigate('/duplicates')
-        });
 
         // Show Branches menu if user has permissions
         if (hasStorePermissions) {
