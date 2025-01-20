@@ -32,6 +32,7 @@ const InventoryPage = () => {
     const [selectedBranch, setSelectedBranch] = useState('all');
     const [filteredRecords, setFilteredRecords] = useState([]);
     const [totalRecords, setTotalRecords] = useState(0);
+    const [totalItems, setTotalItems] = useState(0);
     const [editModalVisible, setEditModalVisible] = useState(false);
     const [editingRecord, setEditingRecord] = useState(null);
     const [form] = Form.useForm();
@@ -139,15 +140,37 @@ const InventoryPage = () => {
 
                     processedRecords = (response.records || []).map(record => {
                         const locationInfo = locationMap.get(record.serialnumber);
-                        // If item has a store_name, it's in a store
-                        if (locationInfo?.location_type === 'store') {
+                        
+                        // If we have location info from the API
+                        if (locationInfo) {
+                            // Handle store location
+                            if (locationInfo.location_type === 'store') {
+                                return {
+                                    ...record,
+                                    location: locationInfo.store_name,
+                                    locationColor: 'blue'
+                                };
+                            }
+                            // Handle outbound location
+                            if (locationInfo.location_type === 'outbound') {
+                                return {
+                                    ...record,
+                                    location: 'Outbound',
+                                    locationColor: 'orange'
+                                };
+                            }
+                        }
+                        
+                        // If the record has store_id/store_name from the original data
+                        if (record.store_id && record.store_name) {
                             return {
                                 ...record,
-                                location: locationInfo.store_name,
+                                location: record.store_name,
                                 locationColor: 'blue'
                             };
                         }
-                        // Otherwise, it's in inventory
+                        
+                        // Default to Inventory if no location info is available
                         return {
                             ...record,
                             location: 'Inventory',
@@ -172,6 +195,7 @@ const InventoryPage = () => {
                 setRecords(processedRecords);
                 setFilteredRecords(processedRecords);
                 setTotalRecords(response.total || 0);
+                setTotalItems(response.totalItems || response.total || 0);
                 setPagination(prev => ({
                     ...prev,
                     total: response.total || 0
@@ -728,8 +752,16 @@ const InventoryPage = () => {
                 <Col span={8}>
                     <Card>
                         <Statistic 
-                            title="Total Items" 
+                            title="Inventory Items" 
                             value={totalRecords || 0}
+                        />
+                    </Card>
+                </Col>
+                <Col span={8}>
+                    <Card>
+                        <Statistic 
+                            title="Total Items" 
+                            value={totalItems || 0}
                         />
                     </Card>
                 </Col>
