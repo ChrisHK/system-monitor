@@ -3,8 +3,8 @@ const router = express.Router();
 const pool = require('../db');
 const { auth, checkRole } = require('../middleware/auth');
 
-// Get duplicate records (admin only)
-router.get('/duplicates', auth, checkRole(['admin']), async (req, res) => {
+// Get duplicate records (all authenticated users)
+router.get('/duplicates', auth, async (req, res) => {
     try {
         const result = await pool.query(`
             WITH duplicates AS (
@@ -160,49 +160,123 @@ router.get('/search', auth, async (req, res) => {
     }
 });
 
-// Get all records
-router.get('/', auth, async (req, res) => {
+// Get all records with store permission check
+router.get('/', auth, checkRole(['user', 'admin'], true), async (req, res) => {
     try {
-        const result = await pool.query(`
-            WITH RankedRecords AS (
-                SELECT 
-                    r.*,
-                    s.store_id,
-                    st.name as store_name,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY r.serialnumber 
-                        ORDER BY r.created_at DESC, r.id DESC
-                    ) as rn,
-                    COUNT(*) OVER (PARTITION BY r.serialnumber) as serial_count
-                FROM system_records r
-                LEFT JOIN store_items s ON r.id = s.record_id
-                LEFT JOIN stores st ON s.store_id = st.id
-                WHERE r.is_current = true
-            )
-            SELECT 
-                rr.*,
-                CASE
-                    WHEN rr.store_id IS NOT NULL THEN 'store'
-                    ELSE 'inventory'
-                END as location,
-                rr.serial_count > 1 as is_duplicate
-            FROM RankedRecords rr
-            WHERE rr.rn = 1
-            ORDER BY rr.created_at DESC
-        `);
-        
-        const records = result.rows.map(record => ({
-            ...record,
-            location: {
-                location: record.location,
-                storeName: record.store_name
+        const { page = 1, pageSize = 20, search = '', store_id } = req.query;
+        const offset = (page - 1) * pageSize;
+
+        // Get user's group permissions if not admin
+        let userPermittedStores = [];
+        if (req.user.role !== 'admin') {
+            try {
+                const groupsResponse = await pool.query('SELECT * FROM groups WHERE id = $1', [req.user.group_id]);
+                if (groupsResponse.rows.length > 0) {
+                    userPermittedStores = groupsResponse.rows[0].permitted_stores || [];
+                }
+            } catch (error) {
+                console.error('Error fetching group permissions:', error);
             }
-        }));
+        }
+
+        // Base queries for counting total records
+        let countQuery = `
+            SELECT COUNT(DISTINCT r.id) 
+            FROM system_records r
+            LEFT JOIN store_items si ON r.id = si.record_id
+            LEFT JOIN stores s ON si.store_id = s.id
+            WHERE r.is_current = true
+        `;
         
+        // Base query for fetching records
+        let query = '';
+        const queryParams = [];
+        let paramIndex = 1;
+
+        // For non-admin users, apply store permission checks
+        if (req.user.role !== 'admin') {
+            if (userPermittedStores.length > 0) {
+                // Show records from permitted stores and inventory
+                query += ` AND (
+                    si.store_id = ANY($${paramIndex})
+                    OR si.store_id IS NULL
+                )`;
+                countQuery += ` AND (
+                    si.store_id = ANY($${paramIndex})
+                    OR si.store_id IS NULL
+                )`;
+                queryParams.push(userPermittedStores);
+                paramIndex++;
+
+                // If specific store is requested, check permission
+                if (store_id && store_id !== 'all') {
+                    if (!userPermittedStores.includes(parseInt(store_id))) {
+                        return res.status(403).json({
+                            success: false,
+                            error: 'Access denied: No permission for this store'
+                        });
+                    }
+                }
+            } else {
+                // Only show inventory items for users without store permissions
+                query += ` AND si.store_id IS NULL`;
+                countQuery += ` AND si.store_id IS NULL`;
+            }
+        }
+
+        // Add search conditions if provided
+        if (search) {
+            query += ` AND (
+                r.serialnumber ILIKE $${paramIndex} OR 
+                r.model ILIKE $${paramIndex} OR 
+                r.manufacturer ILIKE $${paramIndex}
+            )`;
+            countQuery += ` AND (
+                r.serialnumber ILIKE $${paramIndex} OR 
+                r.model ILIKE $${paramIndex} OR 
+                r.manufacturer ILIKE $${paramIndex}
+            )`;
+            queryParams.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        // Filter by store_id if specified (for both admin and non-admin)
+        if (store_id && store_id !== 'all') {
+            query += ` AND si.store_id = $${paramIndex}`;
+            countQuery += ` AND si.store_id = $${paramIndex}`;
+            queryParams.push(store_id);
+            paramIndex++;
+        }
+
+        // Get total count
+        const countResult = await pool.query(countQuery, queryParams);
+        const total = parseInt(countResult.rows[0].count);
+
+        // Get paginated data with store information
+        const fullQuery = `
+            SELECT DISTINCT ON (r.id) r.*, 
+                   s.id as store_id,
+                   s.name as store_name
+            FROM system_records r
+            LEFT JOIN store_items si ON r.id = si.record_id
+            LEFT JOIN stores s ON si.store_id = s.id
+            WHERE r.is_current = true
+            ${query}
+            ORDER BY r.id, r.created_at DESC
+            LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
+        queryParams.push(pageSize, offset);
+
+        console.log('Query:', fullQuery);
+        console.log('Params:', queryParams);
+        console.log('User permitted stores:', userPermittedStores);
+
+        const result = await pool.query(fullQuery, queryParams);
+
         res.json({
             success: true,
-            records: records,
-            total: records.length
+            records: result.rows,
+            total: total
         });
     } catch (error) {
         console.error('Error fetching records:', error);

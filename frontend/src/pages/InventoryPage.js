@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useParams, useNavigate } from 'react-router-dom';
 import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select, Card, Modal, Form, Statistic } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -13,7 +13,8 @@ import {
     removeFromOutbound,
     sendToStore,
     getOutboundItems,
-    storeApi
+    storeApi,
+    checkItemLocation
 } from '../services/api';
 
 const { Search } = Input;
@@ -25,6 +26,7 @@ const InventoryPage = () => {
     const { "*": storeId } = useParams();
     const { logout } = useAuth();
     const [loading, setLoading] = useState(false);
+    const [records, setRecords] = useState([]);
     const [duplicateSerials, setDuplicateSerials] = useState(new Set());
     const [searchText, setSearchText] = useState('');
     const [selectedBranch, setSelectedBranch] = useState('all');
@@ -41,6 +43,7 @@ const InventoryPage = () => {
     const [outboundModalVisible, setOutboundModalVisible] = useState(false);
     const [isInitialLoad, setIsInitialLoad] = useState(true);
     const [storesList, setStoresList] = useState([]);
+    const isFirstMount = useRef(true);
 
     useEffect(() => {
         const path = location.pathname;
@@ -83,82 +86,151 @@ const InventoryPage = () => {
         navigate('/login');
     }, [logout, navigate]);
 
-    const fetchRecords = useCallback(async (page = 1, pageSize = 20) => {
+    const fetchRecords = useCallback(async () => {
+        if (loading) return; // Prevent concurrent fetches
+        
         try {
             setLoading(true);
-            const params = {
-                page,
-                pageSize,
+            const searchParams = {
+                page: pagination.current,
+                limit: pagination.pageSize,
                 ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {})
             };
 
-            console.log('Fetching records with params:', params);
-            const recordsResponse = await getInventoryRecords(params);
-            console.log('Records API response:', recordsResponse);
+            console.log('Fetching records with params:', searchParams);
             
-            if (recordsResponse?.success) {
-                const newRecords = recordsResponse.records || [];
-                const total = newRecords.length;
-                
-                console.log('Setting records state:', {
-                    newRecords: newRecords.length,
-                    total,
-                });
-                
-                setFilteredRecords(newRecords);
-                setTotalRecords(total);
-                setPagination(prev => ({
-                    ...prev,
-                    current: page,
-                    pageSize,
-                    total
-                }));
+            const response = searchText ? 
+                await searchRecords(searchText, searchParams) :
+                await getInventoryRecords(searchParams);
+            
+            if (response?.success) {
+                let processedRecords = [];
+                try {
+                    // Check locations for each item individually
+                    const locationChecks = await Promise.all(
+                        response.records.map(async record => {
+                            try {
+                                const locationResponse = await checkItemLocation(record.serialnumber);
+                                return {
+                                    serialnumber: record.serialnumber,
+                                    locationInfo: locationResponse?.success ? {
+                                        store_id: locationResponse.location?.store_id,
+                                        store_name: locationResponse.location?.store_name,
+                                        location_type: locationResponse.location?.location
+                                    } : null
+                                };
+                            } catch (error) {
+                                console.warn(`Failed to check location for ${record.serialnumber}:`, error);
+                                return {
+                                    serialnumber: record.serialnumber,
+                                    locationInfo: null
+                                };
+                            }
+                        })
+                    );
 
-                // Verify state update
-                console.log('Updated records state:', {
-                    filteredRecords: newRecords.length,
-                    totalRecords: total,
-                    pagination: {
-                        current: page,
-                        pageSize,
-                        total
-                    }
-                });
-            } else {
-                console.warn('API response indicates failure:', recordsResponse?.error);
-                message.error(recordsResponse?.error || 'Failed to fetch records');
-                setFilteredRecords([]);
-                setTotalRecords(0);
+                    // Create location map from individual checks
+                    const locationMap = new Map(
+                        locationChecks.map(check => [
+                            check.serialnumber,
+                            check.locationInfo
+                        ])
+                    );
+
+                    processedRecords = (response.records || []).map(record => {
+                        const locationInfo = locationMap.get(record.serialnumber);
+                        // If item has a store_name, it's in a store
+                        if (locationInfo?.location_type === 'store') {
+                            return {
+                                ...record,
+                                location: locationInfo.store_name,
+                                locationColor: 'blue'
+                            };
+                        }
+                        // Otherwise, it's in inventory
+                        return {
+                            ...record,
+                            location: 'Inventory',
+                            locationColor: 'green'
+                        };
+                    });
+                } catch (locationError) {
+                    console.warn('Failed to check locations, falling back to record data:', locationError);
+                    // Fall back to using store information from the records
+                    processedRecords = (response.records || []).map(record => ({
+                        ...record,
+                        location: record.store_id ? {
+                            storeName: record.store_name || storesList.find(s => s.value === record.store_id)?.label,
+                            color: 'blue'
+                        } : {
+                            storeName: 'Inventory',
+                            color: 'green'
+                        }
+                    }));
+                }
+
+                setRecords(processedRecords);
+                setFilteredRecords(processedRecords);
+                setTotalRecords(response.total || 0);
                 setPagination(prev => ({
                     ...prev,
-                    total: 0
+                    total: response.total || 0
                 }));
+            } else {
+                console.error('API request succeeded but response indicates failure:', response);
+                message.error('Failed to load inventory data');
             }
         } catch (error) {
-            console.error('Error fetching records:', error);
+            console.error('Failed to fetch records:', error);
             if (error.response?.status === 401) {
                 handleSessionExpired();
             } else {
-                message.error('Failed to fetch records. Please try again.');
+                message.error('Failed to load inventory data: ' + (error.response?.data?.message || error.message));
             }
-            setFilteredRecords([]);
-            setTotalRecords(0);
-            setPagination(prev => ({
-                ...prev,
-                total: 0
-            }));
         } finally {
             setLoading(false);
         }
-    }, [storeId, handleSessionExpired]);
+    }, [pagination.current, pagination.pageSize, storeId, handleSessionExpired, searchText, loading, storesList]);
 
+    // Handle pagination changes
     const handleTableChange = useCallback((newPagination, filters, sorter) => {
-        fetchRecords(newPagination.current, newPagination.pageSize);
-    }, [fetchRecords]);
+        setPagination(prev => ({
+            ...prev,
+            current: newPagination.current,
+            pageSize: newPagination.pageSize
+        }));
+    }, []);
 
+    // Combined effect for data fetching
     useEffect(() => {
-        fetchRecords(1, pagination.pageSize);
-    }, [fetchRecords, pagination.pageSize]);
+        const fetchData = async () => {
+            // Skip if it's not the initial load and we're already loading
+            if (!isFirstMount.current && loading) return;
+            
+            // If it's the first mount, mark it as done
+            if (isFirstMount.current) {
+                isFirstMount.current = false;
+            }
+
+            // Add debounce for search and pagination changes
+            const timer = setTimeout(() => {
+                fetchRecords();
+            }, searchText ? 300 : 0); // Only debounce for search
+
+            return () => clearTimeout(timer);
+        };
+
+        fetchData();
+    }, [pagination.current, pagination.pageSize, storeId, searchText]);
+
+    // Handle search
+    const handleSearch = useCallback((value) => {
+        setSearchText(value);
+        setPagination(prev => ({
+            ...prev,
+            current: 1 // Reset to first page on new search
+        }));
+    }, []);
 
     const handleEdit = useCallback((record) => {
         setEditingRecord(record);
@@ -183,86 +255,6 @@ const InventoryPage = () => {
             message.error('Failed to delete record');
         }
     }, [fetchRecords]);
-
-    const handleSearch = useCallback(async (value) => {
-        const searchValue = value.toLowerCase().trim();
-        setSearchText(value);
-        setLoading(true);
-        
-        try {
-            if (!searchValue) {
-                await fetchRecords(1, pagination.pageSize);
-                return;
-            }
-
-            // Make a single search request
-            const searchResponse = await searchRecords(searchValue);
-            console.log('Search response:', searchResponse);
-
-            if (searchResponse?.success && searchResponse.records?.length > 0) {
-                const processedResults = searchResponse.records.map(item => {
-                    // If item has a store_name, it's in a store
-                    if (item.store_name) {
-                        return {
-                            ...item,
-                            location: item.store_name,
-                            locationColor: 'blue'
-                        };
-                    }
-                    // Otherwise, it's in inventory
-                    return {
-                        ...item,
-                        location: 'Inventory',
-                        locationColor: 'green'
-                    };
-                });
-
-                console.log('Processed results:', {
-                    total: processedResults.length,
-                    results: processedResults.map(item => ({
-                        serialnumber: item.serialnumber,
-                        location: item.location,
-                        store_name: item.store_name
-                    }))
-                });
-
-                setFilteredRecords(processedResults);
-                setTotalRecords(processedResults.length);
-                setPagination(prev => ({
-                    ...prev,
-                    current: 1,
-                    total: processedResults.length
-                }));
-            } else {
-                setFilteredRecords([]);
-                setTotalRecords(0);
-                setPagination(prev => ({
-                    ...prev,
-                    current: 1,
-                    total: 0
-                }));
-                message.info('No records found');
-            }
-        } catch (error) {
-            console.error('Search error:', error);
-            message.error('Failed to search records');
-            setFilteredRecords([]);
-            setTotalRecords(0);
-            setPagination(prev => ({
-                ...prev,
-                current: 1,
-                total: 0
-            }));
-        } finally {
-            setLoading(false);
-        }
-    }, [pagination.pageSize, fetchRecords]);
-
-    useEffect(() => {
-        if (searchText) {
-            handleSearch(searchText);
-        }
-    }, [searchText, handleSearch]);
 
     const handleEditSubmit = async () => {
         try {
@@ -531,26 +523,9 @@ const InventoryPage = () => {
             key: 'location',
             width: 120,
             render: (location, record) => {
-                let displayLocation = '';
-                let color = 'default';
-
-                if (typeof location === 'object') {
-                    displayLocation = location.storeName || location.store_name || 'Inventory';
-                    color = location.storeName || location.store_name ? 'blue' : 'green';
-                } else if (typeof location === 'string') {
-                    displayLocation = location === 'Unknown' ? 'Inventory' : location;
-                    if (location === 'Inventory') {
-                        color = 'green';
-                    } else if (location !== 'Unknown') {
-                        color = 'blue';
-                    } else {
-                        color = 'green';
-                    }
-                } else {
-                    displayLocation = 'Inventory';
-                    color = 'green';
-                }
-
+                const displayLocation = typeof location === 'string' ? location : 'Inventory';
+                const color = record.locationColor || 'green';
+                
                 return (
                     <Tag color={color} style={{ minWidth: '80px', textAlign: 'center' }}>
                         {displayLocation}

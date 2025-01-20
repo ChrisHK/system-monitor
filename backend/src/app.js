@@ -8,6 +8,7 @@ const outboundRoutes = require('./routes/outboundRoutes');
 const storeRoutes = require('./routes/storeRoutes');
 const userRoutes = require('./routes/userRoutes');
 const locationRoutes = require('./routes/locationRoutes');
+const groupRoutes = require('./routes/groupRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -37,6 +38,7 @@ app.use('/api/records', recordRoutes);
 app.use('/api/outbound', outboundRoutes);
 app.use('/api/stores', storeRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/users/groups', groupRoutes);
 app.use('/api/locations', locationRoutes);
 
 // Create WebSocket server directly

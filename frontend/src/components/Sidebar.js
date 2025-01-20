@@ -10,9 +10,11 @@ import {
     ExportOutlined,
     DatabaseOutlined,
     PlusOutlined,
-    BranchesOutlined
+    BranchesOutlined,
+    DesktopOutlined
 } from '@ant-design/icons';
-import { storeApi } from '../services/api';
+import { storeApi, groupApi } from '../services/api';
+import api from '../services/api';
 import './Sidebar.css';
 
 const { Sider } = Layout;
@@ -26,12 +28,53 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
     const [form] = Form.useForm();
     const storesRef = useRef(null);
     const fetchingRef = useRef(false);
+    const [groupPermissions, setGroupPermissions] = useState(null);
 
-    const handleLogout = useCallback(() => {
-        console.log('Logging out...');
-        logout();
-        navigate('/login');
-    }, [logout, navigate]);
+    // 獲取用戶組權限
+    const fetchGroupPermissions = useCallback(async () => {
+        if (!user?.id) return;
+        
+        try {
+            console.log('Fetching user details for user_id:', user.id);
+            const userResponse = await api.get('/users/me');
+            console.log('User response:', userResponse);
+
+            if (userResponse?.success) {
+                const userData = userResponse.user;
+                
+                if (userData.role === 'admin') {
+                    console.log('Admin user detected, fetching admin group');
+                    const groupsResponse = await groupApi.getGroups();
+                    console.log('Groups response:', groupsResponse);
+                    
+                    if (groupsResponse?.success) {
+                        const adminGroup = groupsResponse.groups.find(g => g.name.toLowerCase() === 'admin');
+                        if (adminGroup) {
+                            console.log('Found admin group:', adminGroup);
+                            setGroupPermissions({ success: true, permissions: adminGroup.permitted_stores });
+                        }
+                    }
+                } else if (userData.group_id) {
+                    console.log('Regular user, fetching group permissions for group_id:', userData.group_id);
+                    const groupResponse = await groupApi.getGroups();
+                    if (groupResponse?.success) {
+                        const userGroup = groupResponse.groups.find(g => g.id === userData.group_id);
+                        if (userGroup) {
+                            console.log('Found user group:', userGroup);
+                            setGroupPermissions({ 
+                                success: true, 
+                                permissions: userGroup.permitted_stores,
+                                features: userGroup.features || [],
+                                access_rights: userGroup.access_rights || []
+                            });
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching group permissions:', error);
+        }
+    }, [user?.id]);
 
     const fetchStores = useCallback(async () => {
         if (fetchingRef.current) {
@@ -45,19 +88,35 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
             console.log('Sidebar stores response:', response);
 
             if (response?.success) {
-                const userStoreId = user?.store_id?.toString();
-                const filteredStores = user?.role === 'admin' 
-                    ? response.stores 
-                    : response.stores.filter(store => {
-                        const storeId = store.id?.toString();
-                        return storeId === userStoreId;
-                    });
+                let filteredStores = response.stores;
                 
-                console.log('Filtered stores:', filteredStores);
+                // 檢查權限數據結構
+                console.log('Current group permissions:', groupPermissions);
+                
+                // 如果是管理員或有商店權限
+                if (user?.role === 'admin' || groupPermissions?.permissions) {
+                    console.log('User has store permissions:', 
+                        user?.role === 'admin' ? 'admin' : groupPermissions.permissions);
+                    
+                    if (user?.role === 'admin') {
+                        // Admin can see all stores
+                        filteredStores = response.stores;
+                    } else {
+                        // Regular users filter stores based on permissions
+                        const permittedStores = groupPermissions.permissions;
+                        console.log('Permitted stores:', permittedStores);
+                        filteredStores = response.stores.filter(store => 
+                            permittedStores.includes(store.id)
+                        );
+                    }
+                    console.log('Filtered stores:', filteredStores);
+                } else {
+                    console.log('No store permissions found');
+                    filteredStores = [];
+                }
+                
                 setStores(filteredStores);
                 storesRef.current = filteredStores;
-            } else {
-                throw new Error(response?.error || 'Failed to load stores');
             }
         } catch (error) {
             console.error('Error fetching stores:', error);
@@ -65,31 +124,40 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
         } finally {
             fetchingRef.current = false;
         }
-    }, [user]);
+    }, [groupPermissions, user?.role]);
 
+    // 當組權限更新時重新獲取商店列表
     useEffect(() => {
-        if (user) {
+        if (groupPermissions) {
             fetchStores();
         }
-    }, [user, fetchStores]);
+    }, [groupPermissions, fetchStores]);
+
+    // 初始化時獲取組權限
+    useEffect(() => {
+        if (user) {
+            fetchGroupPermissions();
+        }
+    }, [user, fetchGroupPermissions]);
+
+    const handleLogout = useCallback(() => {
+        console.log('Logging out...');
+        logout();
+        navigate('/login');
+    }, [logout, navigate]);
 
     const handleAddStore = async (values) => {
         try {
-            console.log('Creating new store:', values);
-            const response = await storeApi.createStore(values);
-            console.log('Create store response:', response);
-
+            const response = await storeApi.addStore(values);
             if (response?.success) {
                 message.success('Store added successfully');
                 form.resetFields();
                 setIsModalVisible(false);
                 fetchStores();
-            } else {
-                throw new Error(response?.error || 'Failed to add store');
             }
         } catch (error) {
             console.error('Error adding store:', error);
-            message.error(error.message || 'Failed to add store');
+            message.error('Failed to add store');
         }
     };
 
@@ -101,55 +169,107 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
     };
 
     const getMenuItems = useCallback(() => {
+        console.log('getMenuItems - Current stores:', stores);
+        console.log('getMenuItems - Group permissions:', groupPermissions);
+        console.log('getMenuItems - User role:', user?.role);
+
         const items = [
             {
-                key: '/inventory',
-                icon: <DatabaseOutlined />,
-                label: 'Inventory',
-                onClick: () => navigate('/inventory')
+                key: '/',
+                icon: <DesktopOutlined />,
+                label: 'Inventory'
             }
         ];
 
-        if (stores.length > 0) {
-            items.push({
+        // Check user permissions and store list
+        const hasStorePermissions = user?.role === 'admin' || 
+            (groupPermissions?.permissions && groupPermissions.permissions.length > 0);
+        
+        // Check for additional feature permissions
+        const hasFeatureAccess = (feature) => {
+            // Duplicates feature is available to all users
+            if (feature === 'duplicates') return true;
+            
+            return user?.role === 'admin' || 
+                (groupPermissions?.features && groupPermissions.features.includes(feature));
+        };
+
+        console.log('hasStorePermissions:', hasStorePermissions);
+        console.log('Available stores:', stores);
+        console.log('Feature permissions:', groupPermissions?.features);
+        console.log('Access rights:', groupPermissions?.access_rights);
+
+        // Add Duplicates menu item (available to all users)
+        items.push({
+            key: '/duplicates',
+            icon: <DatabaseOutlined />,
+            label: 'Duplicates',
+            onClick: () => navigate('/duplicates')
+        });
+
+        // Show Branches menu if user has permissions
+        if (hasStorePermissions) {
+            const branchesItem = {
                 key: 'branches',
                 icon: <BranchesOutlined />,
                 label: 'Branches',
-                children: stores.map(store => ({
-                    key: `/stores/${store.id}`,
-                    label: store.name,
-                    onClick: () => {
-                        console.log(`Navigating to store ${store.id}`);
-                        navigate(`/stores/${store.id}`);
-                    }
-                }))
-            });
+                children: []
+            };
+
+            // 如果是管理員，添加新增商店選項
+            if (user?.role === 'admin') {
+                branchesItem.children.push({
+                    key: 'add-store',
+                    icon: <PlusOutlined />,
+                    label: 'Add Store',
+                    className: 'ant-menu-item-add-store',
+                    onClick: () => setIsModalVisible(true)
+                });
+            }
+
+            // 添加商店列表
+            const storeItems = stores.map(store => ({
+                key: `/stores/${store.id}`,
+                label: store.name,
+                onClick: () => {
+                    console.log(`Navigating to store ${store.id}`);
+                    navigate(`/stores/${store.id}`);
+                }
+            }));
+
+            branchesItem.children.push(...storeItems);
+            
+            // 只有當有商店時才添加 Branches 菜單
+            if (branchesItem.children.length > 0) {
+                items.push(branchesItem);
+            }
         }
 
-        if (user?.role === 'admin') {
-            items.push({
+        items.push(
+            {
                 key: '/settings',
                 icon: <SettingOutlined />,
                 label: 'Settings',
                 onClick: () => navigate('/settings')
-            });
-        }
-
-        items.push({
-            key: 'logout',
-            icon: <LogoutOutlined />,
-            label: 'Logout',
-            onClick: handleLogout
-        });
+            },
+            {
+                key: 'logout',
+                icon: <LogoutOutlined />,
+                label: 'Logout',
+                onClick: handleLogout
+            }
+        );
 
         return items;
-    }, [stores, user?.role, navigate, handleLogout]);
+    }, [stores, groupPermissions, user?.role, navigate, handleLogout, setIsModalVisible]);
 
     const handleMenuClick = (e) => {
         if (e.key === 'logout') {
             handleLogout();
         } else if (e.key === 'add-store') {
             setIsModalVisible(true);
+        } else if (e.key.startsWith('/stores/')) {
+            return;
         } else {
             navigate(e.key);
         }

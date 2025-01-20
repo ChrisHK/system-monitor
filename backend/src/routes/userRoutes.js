@@ -81,7 +81,10 @@ router.get('/me', auth, async (req, res) => {
         user: {
             id: req.user.id,
             username: req.user.username,
-            role: req.user.role_name
+            role: req.user.role_name,
+            group_id: req.user.group_id,
+            group_name: req.user.group_name,
+            permitted_stores: req.user.permitted_stores || []
         }
     });
 });
@@ -127,9 +130,20 @@ router.post('/', auth, checkRole(['admin']), async (req, res) => {
 // Get all users (admin only)
 router.get('/', auth, checkRole(['admin']), async (req, res) => {
     try {
-        const result = await pool.query(
-            'SELECT users.id, users.username, users.is_active, users.last_login, roles.name as role FROM users JOIN roles ON users.role_id = roles.id ORDER BY users.created_at DESC'
-        );
+        const result = await pool.query(`
+            SELECT 
+                u.id, 
+                u.username, 
+                u.is_active, 
+                u.last_login, 
+                u.group_id,
+                r.name as role,
+                g.name as group_name
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            LEFT JOIN groups g ON u.group_id = g.id
+            ORDER BY u.created_at DESC
+        `);
 
         res.json({
             success: true,
@@ -148,76 +162,65 @@ router.get('/', auth, checkRole(['admin']), async (req, res) => {
 router.put('/:id', auth, checkRole(['admin']), async (req, res) => {
     try {
         const { id } = req.params;
-        const { username, password, role, is_active } = req.body;
+        const { username, role, group_id } = req.body;
 
-        let updates = [];
-        let values = [];
-        let paramCount = 1;
+        // Get role id from roles table
+        const roleResult = await pool.query(
+            'SELECT id FROM roles WHERE name = $1',
+            [role]
+        );
 
-        if (username) {
-            updates.push(`username = $${paramCount}`);
-            values.push(username);
-            paramCount++;
-        }
-
-        if (password) {
-            const passwordHash = await bcrypt.hash(password, 10);
-            updates.push(`password_hash = $${paramCount}`);
-            values.push(passwordHash);
-            paramCount++;
-        }
-
-        if (role) {
-            const roleResult = await pool.query(
-                'SELECT id FROM roles WHERE name = $1',
-                [role]
-            );
-            if (roleResult.rows.length > 0) {
-                updates.push(`role_id = $${paramCount}`);
-                values.push(roleResult.rows[0].id);
-                paramCount++;
-            }
-        }
-
-        if (typeof is_active === 'boolean') {
-            updates.push(`is_active = $${paramCount}`);
-            values.push(is_active);
-            paramCount++;
-        }
-
-        if (updates.length === 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'No updates provided'
+        if (roleResult.rows.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid role' 
             });
         }
 
-        values.push(id);
-        const query = `
+        // Update user data
+        const updateUserQuery = `
             UPDATE users 
-            SET ${updates.join(', ')} 
-            WHERE id = $${paramCount}
-            RETURNING id
+            SET username = $1, 
+                role_id = $2,
+                group_id = $3
+            WHERE id = $4 
+            RETURNING *
         `;
+        
+        const userResult = await pool.query(updateUserQuery, [
+            username,
+            roleResult.rows[0].id,
+            group_id,
+            id
+        ]);
 
-        const result = await pool.query(query, values);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: 'User not found'
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'User not found' 
             });
         }
 
-        res.json({
-            success: true,
-            message: 'User updated successfully'
+        // Get the updated user with role name
+        const getUserQuery = `
+            SELECT u.*, r.name as role
+            FROM users u
+            JOIN roles r ON u.role_id = r.id
+            WHERE u.id = $1
+        `;
+        const updatedUser = await pool.query(getUserQuery, [id]);
+
+        res.json({ 
+            success: true, 
+            message: 'User updated successfully',
+            user: updatedUser.rows[0]
         });
     } catch (error) {
-        console.error('Update user error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Error updating user'
+        console.error('Error updating user:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to update user',
+            error: error.message 
         });
     }
 });

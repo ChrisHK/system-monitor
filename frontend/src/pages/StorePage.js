@@ -218,14 +218,17 @@ const StorePage = () => {
             return;
         }
 
+        let selectedStoreData;
+        let outboundIds;
+
         try {
             setOutboundLoading(true);
-            const selectedStoreData = stores.find(s => s.value === selectedOutboundStore);
+            selectedStoreData = stores.find(s => s.value === selectedOutboundStore);
             if (!selectedStoreData) {
                 throw new Error('Store not found');
             }
 
-            const outboundIds = outboundRecords.map(r => r.outbound_item_id).filter(Boolean);
+            outboundIds = outboundRecords.map(r => r.outbound_item_id).filter(Boolean);
             if (outboundIds.length === 0) {
                 throw new Error('No valid outbound items found');
             }
@@ -235,18 +238,25 @@ const StorePage = () => {
                 message.success('Items sent to store successfully');
                 await fetchOutboundItems();
                 handleOutboundModalClose();
-            } else if (response?.error?.includes('already in stores:')) {
+            } else if (response?.error && response.error.includes('already in stores:')) {
                 Modal.confirm({
                     title: 'Items Already in Store',
                     content: `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
+                    okText: 'Yes, Move Items',
+                    cancelText: 'No, Keep Current',
                     onOk: async () => {
-                        const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
-                        if (retryResponse?.success) {
-                            message.success('Items moved to new store successfully');
-                            await fetchOutboundItems();
-                            handleOutboundModalClose();
-                        } else {
-                            throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                        try {
+                            const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
+                            if (retryResponse?.success) {
+                                message.success('Items moved to new store successfully');
+                                await fetchOutboundItems();
+                                handleOutboundModalClose();
+                            } else {
+                                throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                            }
+                        } catch (error) {
+                            console.error('Error moving items:', error);
+                            message.error(error.message || 'Failed to move items to new store');
                         }
                     }
                 });
@@ -254,8 +264,32 @@ const StorePage = () => {
                 throw new Error(response?.error || 'Failed to send items to store');
             }
         } catch (error) {
-            console.error('Error sending items to store:', error);
-            message.error(error.message || 'Failed to send items to store');
+            if (error.response?.data?.error?.includes('already in stores:')) {
+                Modal.confirm({
+                    title: 'Items Already in Store',
+                    content: `${error.response.data.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
+                    okText: 'Yes, Move Items',
+                    cancelText: 'No, Keep Current',
+                    onOk: async () => {
+                        try {
+                            const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
+                            if (retryResponse?.success) {
+                                message.success('Items moved to new store successfully');
+                                await fetchOutboundItems();
+                                handleOutboundModalClose();
+                            } else {
+                                throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                            }
+                        } catch (error) {
+                            console.error('Error moving items:', error);
+                            message.error(error.message || 'Failed to move items to new store');
+                        }
+                    }
+                });
+            } else {
+                console.error('Error sending items to store:', error);
+                message.error(error.message || 'Failed to send items to store');
+            }
         } finally {
             setOutboundLoading(false);
         }
@@ -339,9 +373,9 @@ const StorePage = () => {
             key: 'location',
             width: 120,
             render: (_, record) => (
-                <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
+                        <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
                     {record.store_name || store?.name || ''}
-                </Tag>
+                        </Tag>
             )
         },
         {
@@ -591,6 +625,12 @@ const StorePage = () => {
                 rowKey="outbound_item_id"
                 loading={outboundLoading}
                 style={{ marginTop: 16 }}
+                pagination={{
+                    total: outboundRecords.length,
+                    pageSize: 10,
+                    showSizeChanger: true,
+                    showTotal: (total) => `Total ${total} items`
+                }}
             />
         </Modal>
     );
@@ -614,15 +654,22 @@ const StorePage = () => {
                 </Col>
             </Row>
 
-            {renderToolbar()}
+                        {renderToolbar()}
             
-            <Table
-                columns={columns}
+                        <Table
+                            columns={columns}
                 dataSource={filteredRecords}
                 loading={loading}
-                rowKey="serialnumber"
-                scroll={{ x: true }}
-            />
+                            rowKey="serialnumber"
+                            scroll={{ x: true }}
+                            pagination={{
+                    total: filteredRecords.length,
+                    pageSize: 10,
+                                showSizeChanger: true,
+                    showQuickJumper: true,
+                                showTotal: (total) => `Total ${total} items`
+                            }}
+                        />
 
             {renderOutboundModal()}
         </div>

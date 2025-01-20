@@ -39,21 +39,21 @@ const LoginPage = () => {
                 error: response.error
             });
 
-            if (response.success && response.token && response.user) {
-                // Call context login
-                const loginSuccess = await login(response.token, response.user);
-                
-                if (loginSuccess) {
-                    message.success('Login successful');
-                    // Navigate to the intended page or home
-                    const from = location.state?.from || '/';
-                    navigate(from, { replace: true });
-                    return;
-                }
+            if (!response.success) {
+                throw new Error(response.error || 'Login failed');
             }
+
+            if (!response.token || !response.user) {
+                throw new Error('Invalid response from server');
+            }
+
+            // Call context login
+            await login(response.token, response.user);
             
-            // Handle login failure
-            throw new Error(response.error || 'Failed to login');
+            message.success('Login successful');
+            // Navigate to the intended page or home
+            const from = location.state?.from || '/';
+            navigate(from, { replace: true });
 
         } catch (error) {
             console.error('Login failed:', error);
