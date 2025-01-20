@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useParams, useNavigate } from 'react-router-dom';
-import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select, Card, Statistic, Modal, Form } from 'antd';
+import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select, Card, Modal, Form, Statistic } from 'antd';
 import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { 
@@ -8,26 +8,25 @@ import {
     getDuplicateRecords, 
     updateRecord,
     deleteRecord,
+    searchRecords,
+    addToOutbound,
+    removeFromOutbound,
+    sendToStore,
+    getOutboundItems,
+    storeApi,
     checkItemLocation
 } from '../services/api';
 
 const { Search } = Input;
 const { Option } = Select;
 
-const branches = [
-    { value: 'all', label: 'All Stores' },
-    { value: 'main-store', label: 'Main Store' },
-    { value: 'fmp-store', label: 'FMP Store' },
-    { value: 'mississauga-store', label: 'Mississauga Store' }
-];
-
 const InventoryPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const { "*": storeId } = useParams();
     const { logout } = useAuth();
-    const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [records, setRecords] = useState([]);
     const [duplicateSerials, setDuplicateSerials] = useState(new Set());
     const [searchText, setSearchText] = useState('');
     const [selectedBranch, setSelectedBranch] = useState('all');
@@ -36,17 +35,50 @@ const InventoryPage = () => {
     const [editModalVisible, setEditModalVisible] = useState(false);
     const [editingRecord, setEditingRecord] = useState(null);
     const [form] = Form.useForm();
-    const [itemLocations, setItemLocations] = useState({});
+    const [pagination, setPagination] = useState({
+        current: 1,
+        pageSize: 20,
+        total: 0
+    });
+    const [outboundModalVisible, setOutboundModalVisible] = useState(false);
+    const [isInitialLoad, setIsInitialLoad] = useState(true);
+    const [storesList, setStoresList] = useState([]);
+    const isFirstMount = useRef(true);
 
     useEffect(() => {
         const path = location.pathname;
         if (path.startsWith('/stores/')) {
-            const id = path.split('/')[2];
-            setSelectedBranch(id);
+            const id = parseInt(path.split('/')[2], 10);
+            if (!isNaN(id)) {
+                setSelectedBranch(id);
+            } else {
+                setSelectedBranch('all');
+            }
         } else {
             setSelectedBranch('all');
         }
     }, [location.pathname]);
+
+    // 只在組件初始化時獲取一次 duplicates
+    useEffect(() => {
+        const fetchDuplicates = async () => {
+            try {
+                const duplicatesResponse = await getDuplicateRecords();
+                if (duplicatesResponse?.success) {
+                    const duplicatesList = duplicatesResponse.duplicates.map(d => d.serialnumber);
+                    setDuplicateSerials(new Set(duplicatesList));
+                }
+            } catch (error) {
+                console.error('Failed to fetch duplicates:', error);
+                setDuplicateSerials(new Set());
+            }
+        };
+
+        if (isInitialLoad) {
+            fetchDuplicates();
+            setIsInitialLoad(false);
+        }
+    }, [isInitialLoad]);
 
     const handleSessionExpired = useCallback(() => {
         message.error('Session expired. Please login again.');
@@ -55,60 +87,150 @@ const InventoryPage = () => {
     }, [logout, navigate]);
 
     const fetchRecords = useCallback(async () => {
+        if (loading) return; // Prevent concurrent fetches
+        
         try {
             setLoading(true);
-            const params = {};
-            if (storeId && storeId !== 'all') {
-                params.store_id = storeId;
-            }
+            const searchParams = {
+                page: pagination.current,
+                limit: pagination.pageSize,
+                ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {})
+            };
 
-            const recordsResponse = await getInventoryRecords(params);
-            if (recordsResponse?.data?.success) {
-                const newRecords = recordsResponse.data.records;
-                setRecords(newRecords);
-                setFilteredRecords(newRecords);
-                setTotalRecords(newRecords.length);
-
-                // Fetch locations for all records
-                const locationPromises = newRecords.map(record => 
-                    checkItemLocation(record.serialnumber)
-                        .catch(error => {
-                            console.warn(`Failed to check location for ${record.serialnumber}:`, error);
-                            return { data: { success: true, location: 'unknown' } };
-                        })
-                );
-
-                const locations = await Promise.all(locationPromises);
-                const locationMap = {};
-                locations.forEach((loc, index) => {
-                    if (loc?.data?.success) {
-                        locationMap[newRecords[index].serialnumber] = loc.data;
-                    }
-                });
-                setItemLocations(locationMap);
-
+            console.log('Fetching records with params:', searchParams);
+            
+            const response = searchText ? 
+                await searchRecords(searchText, searchParams) :
+                await getInventoryRecords(searchParams);
+            
+            if (response?.success) {
+                let processedRecords = [];
                 try {
-                    const duplicatesResponse = await getDuplicateRecords();
-                    if (duplicatesResponse?.data?.success) {
-                        const duplicatesList = duplicatesResponse.data.duplicates.map(d => d.serialnumber);
-                        setDuplicateSerials(new Set(duplicatesList));
-                    }
-                } catch (duplicateError) {
-                    console.error('Failed to fetch duplicates:', duplicateError);
-                    setDuplicateSerials(new Set());
+                    // Check locations for each item individually
+                    const locationChecks = await Promise.all(
+                        response.records.map(async record => {
+                            try {
+                                const locationResponse = await checkItemLocation(record.serialnumber);
+                                return {
+                                    serialnumber: record.serialnumber,
+                                    locationInfo: locationResponse?.success ? {
+                                        store_id: locationResponse.location?.store_id,
+                                        store_name: locationResponse.location?.store_name,
+                                        location_type: locationResponse.location?.location
+                                    } : null
+                                };
+                            } catch (error) {
+                                console.warn(`Failed to check location for ${record.serialnumber}:`, error);
+                                return {
+                                    serialnumber: record.serialnumber,
+                                    locationInfo: null
+                                };
+                            }
+                        })
+                    );
+
+                    // Create location map from individual checks
+                    const locationMap = new Map(
+                        locationChecks.map(check => [
+                            check.serialnumber,
+                            check.locationInfo
+                        ])
+                    );
+
+                    processedRecords = (response.records || []).map(record => {
+                        const locationInfo = locationMap.get(record.serialnumber);
+                        // If item has a store_name, it's in a store
+                        if (locationInfo?.location_type === 'store') {
+                            return {
+                                ...record,
+                                location: locationInfo.store_name,
+                                locationColor: 'blue'
+                            };
+                        }
+                        // Otherwise, it's in inventory
+                        return {
+                            ...record,
+                            location: 'Inventory',
+                            locationColor: 'green'
+                        };
+                    });
+                } catch (locationError) {
+                    console.warn('Failed to check locations, falling back to record data:', locationError);
+                    // Fall back to using store information from the records
+                    processedRecords = (response.records || []).map(record => ({
+                        ...record,
+                        location: record.store_id ? {
+                            storeName: record.store_name || storesList.find(s => s.value === record.store_id)?.label,
+                            color: 'blue'
+                        } : {
+                            storeName: 'Inventory',
+                            color: 'green'
+                        }
+                    }));
                 }
+
+                setRecords(processedRecords);
+                setFilteredRecords(processedRecords);
+                setTotalRecords(response.total || 0);
+                setPagination(prev => ({
+                    ...prev,
+                    total: response.total || 0
+                }));
+            } else {
+                console.error('API request succeeded but response indicates failure:', response);
+                message.error('Failed to load inventory data');
             }
         } catch (error) {
-            console.error('Error fetching records:', error);
+            console.error('Failed to fetch records:', error);
             if (error.response?.status === 401) {
                 handleSessionExpired();
             } else {
-                message.error('Failed to fetch records. Please try again.');
+                message.error('Failed to load inventory data: ' + (error.response?.data?.message || error.message));
             }
         } finally {
             setLoading(false);
         }
-    }, [storeId, handleSessionExpired]);
+    }, [pagination.current, pagination.pageSize, storeId, handleSessionExpired, searchText, loading, storesList]);
+
+    // Handle pagination changes
+    const handleTableChange = useCallback((newPagination, filters, sorter) => {
+        setPagination(prev => ({
+            ...prev,
+            current: newPagination.current,
+            pageSize: newPagination.pageSize
+        }));
+    }, []);
+
+    // Combined effect for data fetching
+    useEffect(() => {
+        const fetchData = async () => {
+            // Skip if it's not the initial load and we're already loading
+            if (!isFirstMount.current && loading) return;
+            
+            // If it's the first mount, mark it as done
+            if (isFirstMount.current) {
+                isFirstMount.current = false;
+            }
+
+            // Add debounce for search and pagination changes
+            const timer = setTimeout(() => {
+                fetchRecords();
+            }, searchText ? 300 : 0); // Only debounce for search
+
+            return () => clearTimeout(timer);
+        };
+
+        fetchData();
+    }, [pagination.current, pagination.pageSize, storeId, searchText]);
+
+    // Handle search
+    const handleSearch = useCallback((value) => {
+        setSearchText(value);
+        setPagination(prev => ({
+            ...prev,
+            current: 1 // Reset to first page on new search
+        }));
+    }, []);
 
     const handleEdit = useCallback((record) => {
         setEditingRecord(record);
@@ -134,34 +256,279 @@ const InventoryPage = () => {
         }
     }, [fetchRecords]);
 
+    const handleEditSubmit = async () => {
+        try {
+            const values = await form.validateFields();
+            const response = await updateRecord(editingRecord.id, values);
+            if (response.data.success) {
+                message.success('Record updated successfully');
+                setEditModalVisible(false);
+                fetchRecords();
+            }
+        } catch (error) {
+            console.error('Update failed:', error);
+            message.error('Failed to update record');
+        }
+    };
+
+    const fetchStores = useCallback(async () => {
+        try {
+            const response = await storeApi.getStores();
+            if (response?.success) {
+                const stores = response.stores.map(store => ({
+                    value: store.id,
+                    label: store.name
+                }));
+                setStoresList(stores);
+            }
+        } catch (error) {
+            console.error('Error fetching stores:', error);
+            message.error('Failed to load stores');
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchStores();
+    }, [fetchStores]);
+
+    const OutboundModal = () => {
+        const [outboundRecords, setOutboundRecords] = useState([]);
+        const [outboundLoading, setOutboundLoading] = useState(false);
+        const [selectedStore, setSelectedStore] = useState(null);
+        const [addSerialNumber, setAddSerialNumber] = useState('');
+        const [isOutboundInitialized, setIsOutboundInitialized] = useState(false);
+
+        const handleRemoveItem = async (itemId) => {
+            try {
+                setOutboundLoading(true);
+                const response = await removeFromOutbound(itemId);
+                if (response?.success) {
+                    message.success('Item removed successfully');
+                    await fetchOutboundItems();
+                } else {
+                    throw new Error(response?.error || 'Failed to remove item');
+                }
+            } catch (error) {
+                console.error('Remove item error:', error);
+                message.error(error.message || 'Failed to remove item');
+            } finally {
+                setOutboundLoading(false);
+            }
+        };
+
+        const handleAddItem = async (serialNumber) => {
+            if (!serialNumber) return;
+            try {
+                setOutboundLoading(true);
+                const searchResponse = await searchRecords(serialNumber);
+                if (searchResponse?.success && searchResponse.records?.length > 0) {
+                    const record = searchResponse.records[0];
+                    const addResponse = await addToOutbound(record.id);
+                    if (addResponse?.success) {
+                        message.success('Item added to outbound successfully');
+                        await fetchOutboundItems();
+                        setAddSerialNumber('');
+                    } else {
+                        throw new Error(addResponse?.error || 'Failed to add item to outbound');
+                    }
+                } else {
+                    message.warning('No record found with this serial number');
+                }
+            } catch (error) {
+                console.error('Add item error:', error);
+                if (error.response?.data?.error?.includes('already in outbound')) {
+                    message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
+                } else {
+                    message.error(error.message || 'Failed to add item');
+                }
+            } finally {
+                setOutboundLoading(false);
+                setAddSerialNumber('');
+            }
+        };
+
+        const handleSendToStore = async () => {
+            if (!selectedStore) {
+                message.error('Please select a store first');
+                return;
+            }
+
+            try {
+                setOutboundLoading(true);
+                const selectedStoreData = storesList.find(s => s.value === selectedStore);
+                if (!selectedStoreData) {
+                    throw new Error('Store not found');
+                }
+
+                const outboundIds = outboundRecords.map(r => r.outbound_item_id).filter(Boolean);
+                if (outboundIds.length === 0) {
+                    throw new Error('No valid outbound items found');
+                }
+
+                console.log('Sending items to store:', {
+                    storeId: selectedStore,
+                    outboundIds,
+                    storeName: selectedStoreData.label
+                });
+
+                const response = await sendToStore(selectedStore, outboundIds);
+                if (response?.success) {
+                    message.success(`Items sent to ${selectedStoreData.label} successfully`);
+                    await fetchOutboundItems();
+                    fetchRecords(); // 刷新主列表
+                    setOutboundModalVisible(false); // 關閉模態框
+                } else if (response?.error?.includes('already in stores:')) {
+                    Modal.confirm({
+                        title: 'Items Already in Store',
+                        content: `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
+                        onOk: async () => {
+                            try {
+                                const retryResponse = await sendToStore(selectedStore, outboundIds, true);
+                                if (retryResponse?.success) {
+                                    message.success('Items moved to new store successfully');
+                                    await fetchOutboundItems();
+                                    fetchRecords(); // 刷新主列表
+                                    setOutboundModalVisible(false); // 關閉模態框
+                                } else {
+                                    throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                                }
+                            } catch (error) {
+                                console.error('Error moving items:', error);
+                                message.error(error.message || 'Failed to move items to new store');
+                            }
+                        }
+                    });
+                } else {
+                    throw new Error(response?.error || 'Failed to send items to store');
+                }
+            } catch (error) {
+                console.error('Error sending items to store:', error);
+                message.error(error.message || 'Failed to send items to store');
+            } finally {
+                setOutboundLoading(false);
+            }
+        };
+
+        const fetchOutboundItems = async () => {
+            if (!outboundModalVisible) return;
+            
+            try {
+                setOutboundLoading(true);
+                const response = await getOutboundItems();
+                if (response?.items) {
+                    setOutboundRecords(response.items);
+                }
+            } catch (error) {
+                message.error('Failed to fetch outbound items');
+            } finally {
+                setOutboundLoading(false);
+            }
+        };
+
+        useEffect(() => {
+            if (!isOutboundInitialized) {
+                fetchOutboundItems();
+                setIsOutboundInitialized(true);
+            }
+        }, [isOutboundInitialized]);
+
+        useEffect(() => {
+            return () => {
+                setIsOutboundInitialized(false);
+            };
+        }, []);
+
+        return (
+            <>
+                <Row gutter={[16, 16]}>
+                    <Col span={8}>
+                        <Search
+                            placeholder="Enter serial number to add..."
+                            allowClear
+                            enterButton="Add"
+                            value={addSerialNumber}
+                            onChange={(e) => setAddSerialNumber(e.target.value)}
+                            onSearch={handleAddItem}
+                        />
+                    </Col>
+                    <Col span={8}>
+                        <Select
+                            style={{ width: '100%' }}
+                            placeholder="Select store"
+                            value={selectedStore}
+                            onChange={setSelectedStore}
+                        >
+                            {storesList.map(store => (
+                                <Option key={store.value} value={store.value}>
+                                    {store.label}
+                                </Option>
+                            ))}
+                        </Select>
+                    </Col>
+                    <Col span={8}>
+                        <Button
+                            type="primary"
+                            onClick={handleSendToStore}
+                            disabled={!selectedStore || outboundRecords.length === 0}
+                            loading={outboundLoading}
+                        >
+                            Send to Store
+                        </Button>
+                    </Col>
+                </Row>
+                <Table
+                    columns={[
+                        {
+                            title: 'Serial Number',
+                            dataIndex: 'serialnumber',
+                            key: 'serialnumber'
+                        },
+                        {
+                            title: 'Computer Name',
+                            dataIndex: 'computername',
+                            key: 'computername'
+                        },
+                        {
+                            title: 'Model',
+                            dataIndex: 'model',
+                            key: 'model'
+                        },
+                        {
+                            title: 'Actions',
+                            key: 'actions',
+                            render: (_, record) => (
+                                <Button
+                                    type="link"
+                                    danger
+                                    onClick={() => handleRemoveItem(record.outbound_item_id)}
+                                >
+                                    Remove
+                                </Button>
+                            )
+                        }
+                    ]}
+                    dataSource={outboundRecords}
+                    rowKey="outbound_item_id"
+                    loading={outboundLoading}
+                    style={{ marginTop: 16 }}
+                />
+            </>
+        );
+    };
+
     const columns = useMemo(() => [
         {
             title: 'Location',
-            dataIndex: 'serialnumber',
+            dataIndex: 'location',
             key: 'location',
             width: 120,
-            render: (serialnumber) => {
-                const location = itemLocations[serialnumber];
-                if (!location) {
-                    return <Tag color="default">Unknown</Tag>;
-                }
-                if (location.location === 'store') {
-                    return (
-                        <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
-                            {location.storeName || 'Store'}
-                        </Tag>
-                    );
-                }
-                if (location.location === 'inventory') {
-                    return (
-                        <Tag color="green" style={{ minWidth: '80px', textAlign: 'center' }}>
-                            Inventory
-                        </Tag>
-                    );
-                }
+            render: (location, record) => {
+                const displayLocation = typeof location === 'string' ? location : 'Inventory';
+                const color = record.locationColor || 'green';
+                
                 return (
-                    <Tag color="default" style={{ minWidth: '80px', textAlign: 'center' }}>
-                        {location.location || 'Unknown'}
+                    <Tag color={color} style={{ minWidth: '80px', textAlign: 'center' }}>
+                        {displayLocation}
                     </Tag>
                 );
             }
@@ -353,97 +720,24 @@ const InventoryPage = () => {
                 </Space>
             )
         }
-    ], [itemLocations, duplicateSerials, handleDelete, handleEdit]);
-
-    const handleSearch = useCallback((value) => {
-        const searchValue = value.toLowerCase();
-        setSearchText(value);
-        
-        if (!searchValue) {
-            setFilteredRecords(records);
-            return;
-        }
-        
-        const filtered = records.filter(record => {
-            if (!record) return false;
-            return Object.entries(record).some(([key, val]) => {
-                if (columns.find(col => col.dataIndex === key && col.filterable)) {
-                    return val && val.toString().toLowerCase().includes(searchValue);
-                }
-                return false;
-            });
-        });
-        
-        setFilteredRecords(filtered);
-    }, [records, columns]);
-
-    useEffect(() => {
-        fetchRecords();
-    }, [fetchRecords]);
-
-    useEffect(() => {
-        if (searchText) {
-            handleSearch(searchText);
-        }
-    }, [searchText, handleSearch]);
-
-    const handleEditSubmit = async () => {
-        try {
-            const values = await form.validateFields();
-            const response = await updateRecord(editingRecord.id, values);
-            if (response.data.success) {
-                message.success('Record updated successfully');
-                setEditModalVisible(false);
-                fetchRecords();
-            }
-        } catch (error) {
-            console.error('Update failed:', error);
-            message.error('Failed to update record');
-        }
-    };
-
-    const getStoreCount = useCallback((storeName) => {
-        return Object.values(itemLocations).filter(location => 
-            location?.location === 'store' && 
-            location?.storeName?.toLowerCase().includes(storeName.toLowerCase().replace('-store', ''))
-        ).length;
-    }, [itemLocations]);
+    ], [duplicateSerials, handleDelete, handleEdit]);
 
     return (
         <div>
+            <Row gutter={[16, 16]} className="stats-row">
+                <Col span={8}>
+                    <Card>
+                        <Statistic 
+                            title="Total Items" 
+                            value={totalRecords || 0}
+                        />
+                    </Card>
+                </Col>
+            </Row>
+
             <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
                 <Col span={24}>
                     <Card>
-                        <Row gutter={16}>
-                            <Col span={6}>
-                                <Statistic
-                                    title="Total Records"
-                                    value={totalRecords}
-                                    style={{ marginBottom: 16 }}
-                                />
-                            </Col>
-                            <Col span={6}>
-                                <Statistic
-                                    title="Main Store"
-                                    value={getStoreCount('main-store')}
-                                    style={{ marginBottom: 16 }}
-                                />
-                            </Col>
-                            <Col span={6}>
-                                <Statistic
-                                    title="FMP Store"
-                                    value={getStoreCount('fmp-store')}
-                                    style={{ marginBottom: 16 }}
-                                />
-                            </Col>
-                            <Col span={6}>
-                                <Statistic
-                                    title="Mississauga Store"
-                                    value={getStoreCount('mississauga-store')}
-                                    style={{ marginBottom: 16 }}
-                                />
-                            </Col>
-                        </Row>
                         <Row gutter={16}>
                             <Col span={24}>
                                 <Space>
@@ -452,9 +746,10 @@ const InventoryPage = () => {
                                         value={selectedBranch}
                                         onChange={setSelectedBranch}
                                     >
-                                        {branches.map(branch => (
-                                            <Option key={branch.value} value={branch.value}>
-                                                {branch.label}
+                                        <Option value="all">All Stores</Option>
+                                        {storesList.map(store => (
+                                            <Option key={store.value} value={store.value}>
+                                                {store.label}
                                             </Option>
                                         ))}
                                     </Select>
@@ -466,8 +761,14 @@ const InventoryPage = () => {
                                         style={{ width: 300 }}
                                     />
                                     <Button
+                                        type="primary"
+                                        onClick={() => setOutboundModalVisible(true)}
+                                    >
+                                        Outbound
+                                    </Button>
+                                    <Button
                                         icon={<ReloadOutlined />}
-                                        onClick={fetchRecords}
+                                        onClick={() => fetchRecords(pagination.current, pagination.pageSize)}
                                         loading={loading}
                                     >
                                         Refresh
@@ -486,18 +787,18 @@ const InventoryPage = () => {
                         loading={loading}
                         scroll={{ x: 1500 }}
                         pagination={{
-                            total: filteredRecords.length,
-                            pageSize: 20,
+                            ...pagination,
                             showSizeChanger: true,
                             showQuickJumper: true,
                             pageSizeOptions: ['20', '50', '100']
                         }}
+                        onChange={handleTableChange}
                         summary={pageData => {
                             return (
                                 <Table.Summary fixed>
                                     <Table.Summary.Row>
                                         <Table.Summary.Cell index={0} colSpan={columns.length}>
-                                            Total Records: {totalRecords} | Main Store: {getStoreCount('main-store')} | FMP Store: {getStoreCount('fmp-store')} | Mississauga Store: {getStoreCount('mississauga-store')}
+                                            Total Records: {totalRecords}
                                         </Table.Summary.Cell>
                                     </Table.Summary.Row>
                                 </Table.Summary>
@@ -559,6 +860,16 @@ const InventoryPage = () => {
                         <Input />
                     </Form.Item>
                 </Form>
+            </Modal>
+
+            <Modal
+                title="Outbound Management"
+                open={outboundModalVisible}
+                onCancel={() => setOutboundModalVisible(false)}
+                width={1000}
+                footer={null}
+            >
+                <OutboundModal />
             </Modal>
         </div>
     );

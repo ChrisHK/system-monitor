@@ -1,13 +1,13 @@
 import React from 'react';
-import { Table, Button, message } from 'antd';
+import { Typography } from 'antd';
+
+const { Title } = Typography;
 
 const InboundPage = () => {
     return (
-        <div style={{ padding: '24px' }}>
-            <h1>Inbound Management</h1>
-            <div style={{ marginTop: '16px' }}>
-                <p>This feature is under development...</p>
-            </div>
+        <div>
+            <Title level={2}>Inbound Management</Title>
+            <p>This feature is coming soon...</p>
         </div>
     );
 };

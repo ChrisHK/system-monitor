@@ -1,101 +1,120 @@
 import axios from 'axios';
 
-// Get the API base URL from environment variables or construct it
-const API_HOST = process.env.REACT_APP_API_HOST || '192.168.0.10';
-const API_PORT = process.env.REACT_APP_API_PORT || '4000';
-const DEFAULT_API_URL = `http://${API_HOST}:${API_PORT}`;
-
-// Get the complete API URL or use constructed default
-const API_BASE_URL = process.env.REACT_APP_API_URL || DEFAULT_API_URL;
-
-// Remove /api from the end of the base URL if it exists
-const normalizedBaseURL = API_BASE_URL.endsWith('/api') 
-    ? API_BASE_URL.slice(0, -4) 
-    : API_BASE_URL;
-
-// Create axios instance with default config
 const api = axios.create({
-    baseURL: `${normalizedBaseURL}/api`,
+    baseURL: 'http://192.168.0.10:4000/api',
     timeout: 10000,
     headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
     }
 });
 
-// Request interceptor for adding auth token
+// Add request interceptor to add auth token
 api.interceptors.request.use(
     (config) => {
         const token = localStorage.getItem('token');
         if (token) {
-            config.headers['Authorization'] = `Bearer ${token}`;
+            config.headers.Authorization = `Bearer ${token}`;
         }
-        // Remove any duplicate /api in the URL
-        if (config.url && config.url.startsWith('/api/')) {
-            config.url = config.url.replace('/api/', '/');
-        }
+        console.log('API Request:', {
+            url: config.url,
+            method: config.method,
+            params: config.params,
+            headers: config.headers
+        });
         return config;
     },
     (error) => {
+        console.error('API Request Error:', error);
         return Promise.reject(error);
     }
 );
 
-// Response interceptor for handling errors
+// Add response interceptor for better error handling
 api.interceptors.response.use(
     (response) => {
-        // Transform successful responses
-        if (response.data) {
-            return {
-                ...response,
-                data: {
-                    success: true,
-                    ...response.data
-                }
-            };
-        }
-        return response;
+        console.log('API Response:', {
+            url: response.config.url,
+            status: response.status,
+            data: response.data
+        });
+        return response.data;
     },
     (error) => {
+        console.error('API Error:', {
+            url: error.config?.url,
+            status: error.response?.status,
+            data: error.response?.data,
+            message: error.message
+        });
         if (error.response?.status === 401) {
+            // Handle unauthorized access
             localStorage.removeItem('token');
-            localStorage.removeItem('user');
             window.location.href = '/login';
         }
         return Promise.reject(error);
     }
 );
 
-// Inventory Management
+// Group Management APIs
+export const groupApi = {
+    getGroups: () => api.get('/users/groups'),
+    createGroup: (groupData) => api.post('/users/groups', groupData),
+    updateGroup: (id, groupData) => api.put(`/users/groups/${id}`, groupData),
+    deleteGroup: (id) => api.delete(`/users/groups/${id}`),
+    getGroupPermissions: (id) => api.get(`/users/groups/${id}/permissions`),
+    updateGroupPermissions: (id, permissions) => api.put(`/users/groups/${id}/permissions`, permissions)
+};
+
+// Store Management APIs
+export const storeApi = {
+    getStores: () => api.get('/stores'),
+    getStore: (id) => api.get(`/stores/${id}`),
+    createStore: (data) => api.post('/stores', data),
+    updateStore: (id, data) => api.put(`/stores/${id}`, data),
+    deleteStore: (id) => api.delete(`/stores/${id}`),
+    getStoreItems: (storeId) => api.get(`/stores/${storeId}/items`),
+    deleteStoreItem: (storeId, itemId) => api.delete(`/stores/${storeId}/items/${itemId}`),
+    exportStoreInventory: (storeId) => api.get(`/stores/${storeId}/export`, { responseType: 'blob' }),
+    findItemStore: (serialNumber) => api.get(`/stores/find-item/${serialNumber}`)
+};
+
+// User Management APIs
+export const userApi = {
+    getUsers: () => api.get('/users'),
+    createUser: (userData) => api.post('/users', userData),
+    updateUser: (id, userData) => api.put(`/users/${id}`, userData),
+    deleteUser: (id) => api.delete(`/users/${id}`)
+};
+
+// Authentication APIs
+export const login = (credentials) => api.post('/users/login', credentials);
+export const logout = () => api.post('/users/logout');
+export const checkAuth = () => api.get('/users/check');
+
+// Inventory Management APIs
 export const getInventoryRecords = (params) => api.get('/records', { params });
 export const getDuplicateRecords = () => api.get('/records/duplicates');
-export const searchRecords = (query) => api.get(`/records/search?q=${query}`);
+export const searchRecords = (searchTerm, params = {}) => {
+    const queryParams = {
+        ...params,
+        q: searchTerm
+    };
+    return api.get('/records/search', { params: queryParams });
+};
 export const updateRecord = (id, data) => api.put(`/records/${id}`, data);
 export const deleteRecord = (id) => api.delete(`/records/${id}`);
 export const addRecord = (data) => api.post('/records', data);
-export const importRecords = (formData) => api.post('/records/import', formData, {
-    headers: {
-        'Content-Type': 'multipart/form-data'
-    }
-});
-export const exportRecords = (params) => api.get('/records/export', { 
-    params,
-    responseType: 'blob' 
-});
 
-// Store Management
-export const getStoreItems = (storeId) => api.get(`/stores/${storeId}/items`);
-export const deleteStoreItem = (storeId, itemId) => api.delete(`/stores/${storeId}/items/${itemId}`);
-export const exportStoreItems = (storeId) => api.get(`/stores/${storeId}/export`, { responseType: 'blob' });
-export const getStores = () => api.get('/stores');
-export const checkStoreItems = (storeId, serialNumbers) => api.post(`/stores/${storeId}/check`, { serialNumbers });
-export const sendToStore = (storeId, items) => api.post(`/stores/${storeId}/outbound`, { items });
-
-// Outbound Management
+// Outbound Management APIs
 export const getOutboundItems = () => api.get('/outbound/items');
 export const addToOutbound = (recordId) => api.post('/outbound/items', { recordId });
 export const removeFromOutbound = (itemId) => api.delete(`/outbound/items/${itemId}`);
-export const checkItemLocation = (serialNumber) => api.get(`/records/check-location/${serialNumber}`);
+export const sendToStore = (storeId, itemIds, force = false) => 
+    api.post(`/stores/${storeId}/outbound`, { itemIds, force });
 
-// Default export for general API calls
+// Location Management APIs
+export const checkItemLocation = (serialNumber) => api.get(`/locations/${serialNumber}`);
+export const checkItemLocations = (serialNumbers) => api.post('/locations/batch', { serialNumbers });
+export const updateLocation = (serialNumber, data) => api.post(`/locations/${serialNumber}`, data);
+
 export default api; 

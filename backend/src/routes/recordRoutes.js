@@ -3,8 +3,8 @@ const router = express.Router();
 const pool = require('../db');
 const { auth, checkRole } = require('../middleware/auth');
 
-// Get duplicate records (admin only)
-router.get('/duplicates', auth, checkRole(['admin']), async (req, res) => {
+// Get duplicate records (all authenticated users)
+router.get('/duplicates', auth, async (req, res) => {
     try {
         const result = await pool.query(`
             WITH duplicates AS (
@@ -107,20 +107,45 @@ router.get('/search', auth, async (req, res) => {
             });
         }
 
-        const result = await pool.query(`
+        // Format search terms for System SKU matching
+        const searchTerms = q.toLowerCase().split(' ');
+        const formattedSearch = searchTerms.join('_');
+        const likeTerms = searchTerms.map((_, index) => `$${index + 2}`);
+
+        const query = `
             SELECT *
             FROM system_records
             WHERE 
                 is_current = true 
                 AND (
-                    serialnumber ILIKE $1 
-                    OR model ILIKE $1 
+                    serialnumber ILIKE $1
+                    OR model ILIKE $1
                     OR manufacturer ILIKE $1
+                    OR systemsku ILIKE $1
+                    OR computername ILIKE $1
+                    OR operatingsystem ILIKE $1
+                    OR cpu ILIKE $1
                     OR CAST(id AS TEXT) ILIKE $1
+                    OR systemsku ILIKE '%' || $2 || '%'
+                    ${searchTerms.slice(1).map((_, idx) => 
+                        `OR systemsku ILIKE '%' || ${likeTerms[idx + 1]} || '%'`
+                    ).join('\n')}
                 )
             ORDER BY created_at DESC
             LIMIT 50
-        `, [`%${q}%`]);
+        `;
+
+        // Debug logging
+        console.log('Search debug info:');
+        console.log('Original search term:', q);
+        console.log('Formatted search:', formattedSearch);
+        console.log('Search terms:', searchTerms);
+
+        const params = [`%${q}%`, ...searchTerms];
+        console.log('Query parameters:', params);
+
+        const result = await pool.query(query, params);
+        console.log('Search results count:', result.rows.length);
 
         res.json({
             success: true,
@@ -135,28 +160,123 @@ router.get('/search', auth, async (req, res) => {
     }
 });
 
-// Get all records
-router.get('/', auth, async (req, res) => {
+// Get all records with store permission check
+router.get('/', auth, checkRole(['user', 'admin'], true), async (req, res) => {
     try {
-        const result = await pool.query(`
-            WITH RankedRecords AS (
-                SELECT *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY serialnumber 
-                        ORDER BY created_at DESC, id DESC
-                    ) as rn
-                FROM system_records
-                WHERE is_current = true
-            )
-            SELECT * FROM RankedRecords 
-            WHERE rn = 1
-            ORDER BY created_at DESC
-        `);
+        const { page = 1, pageSize = 20, search = '', store_id } = req.query;
+        const offset = (page - 1) * pageSize;
+
+        // Get user's group permissions if not admin
+        let userPermittedStores = [];
+        if (req.user.role !== 'admin') {
+            try {
+                const groupsResponse = await pool.query('SELECT * FROM groups WHERE id = $1', [req.user.group_id]);
+                if (groupsResponse.rows.length > 0) {
+                    userPermittedStores = groupsResponse.rows[0].permitted_stores || [];
+                }
+            } catch (error) {
+                console.error('Error fetching group permissions:', error);
+            }
+        }
+
+        // Base queries for counting total records
+        let countQuery = `
+            SELECT COUNT(DISTINCT r.id) 
+            FROM system_records r
+            LEFT JOIN store_items si ON r.id = si.record_id
+            LEFT JOIN stores s ON si.store_id = s.id
+            WHERE r.is_current = true
+        `;
         
+        // Base query for fetching records
+        let query = '';
+        const queryParams = [];
+        let paramIndex = 1;
+
+        // For non-admin users, apply store permission checks
+        if (req.user.role !== 'admin') {
+            if (userPermittedStores.length > 0) {
+                // Show records from permitted stores and inventory
+                query += ` AND (
+                    si.store_id = ANY($${paramIndex})
+                    OR si.store_id IS NULL
+                )`;
+                countQuery += ` AND (
+                    si.store_id = ANY($${paramIndex})
+                    OR si.store_id IS NULL
+                )`;
+                queryParams.push(userPermittedStores);
+                paramIndex++;
+
+                // If specific store is requested, check permission
+                if (store_id && store_id !== 'all') {
+                    if (!userPermittedStores.includes(parseInt(store_id))) {
+                        return res.status(403).json({
+                            success: false,
+                            error: 'Access denied: No permission for this store'
+                        });
+                    }
+                }
+            } else {
+                // Only show inventory items for users without store permissions
+                query += ` AND si.store_id IS NULL`;
+                countQuery += ` AND si.store_id IS NULL`;
+            }
+        }
+
+        // Add search conditions if provided
+        if (search) {
+            query += ` AND (
+                r.serialnumber ILIKE $${paramIndex} OR 
+                r.model ILIKE $${paramIndex} OR 
+                r.manufacturer ILIKE $${paramIndex}
+            )`;
+            countQuery += ` AND (
+                r.serialnumber ILIKE $${paramIndex} OR 
+                r.model ILIKE $${paramIndex} OR 
+                r.manufacturer ILIKE $${paramIndex}
+            )`;
+            queryParams.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        // Filter by store_id if specified (for both admin and non-admin)
+        if (store_id && store_id !== 'all') {
+            query += ` AND si.store_id = $${paramIndex}`;
+            countQuery += ` AND si.store_id = $${paramIndex}`;
+            queryParams.push(store_id);
+            paramIndex++;
+        }
+
+        // Get total count
+        const countResult = await pool.query(countQuery, queryParams);
+        const total = parseInt(countResult.rows[0].count);
+
+        // Get paginated data with store information
+        const fullQuery = `
+            SELECT DISTINCT ON (r.id) r.*, 
+                   s.id as store_id,
+                   s.name as store_name
+            FROM system_records r
+            LEFT JOIN store_items si ON r.id = si.record_id
+            LEFT JOIN stores s ON si.store_id = s.id
+            WHERE r.is_current = true
+            ${query}
+            ORDER BY r.id, r.created_at DESC
+            LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+        `;
+        queryParams.push(pageSize, offset);
+
+        console.log('Query:', fullQuery);
+        console.log('Params:', queryParams);
+        console.log('User permitted stores:', userPermittedStores);
+
+        const result = await pool.query(fullQuery, queryParams);
+
         res.json({
             success: true,
             records: result.rows,
-            total: result.rows.length
+            total: total
         });
     } catch (error) {
         console.error('Error fetching records:', error);
@@ -407,6 +527,42 @@ router.get('/check-location/:serialNumber', async (req, res) => {
         });
     } catch (error) {
         console.error('Error checking item location:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
+// Get records with locations
+router.get('/with-locations', async (req, res) => {
+    const client = await pool.connect();
+    try {
+        const query = `
+            SELECT 
+                r.*,
+                CASE
+                    WHEN si.store_id IS NOT NULL THEN 'store'
+                    ELSE 'inventory'
+                END as location,
+                s.name as store_name
+            FROM system_records r
+            LEFT JOIN store_items si ON r.id = si.record_id
+            LEFT JOIN stores s ON si.store_id = s.id
+            WHERE r.is_current = true
+            ORDER BY r.created_at DESC
+        `;
+        
+        const result = await client.query(query);
+        
+        res.json({
+            success: true,
+            records: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching records with locations:', error);
         res.status(500).json({
             success: false,
             error: error.message

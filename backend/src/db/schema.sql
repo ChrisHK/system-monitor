@@ -2,6 +2,7 @@
 DROP TABLE IF EXISTS store_items CASCADE;
 DROP TABLE IF EXISTS outbound_items CASCADE;
 DROP TABLE IF EXISTS stores CASCADE;
+DROP TABLE IF EXISTS item_locations CASCADE;
 
 -- Create stores table
 CREATE TABLE IF NOT EXISTS stores (
@@ -20,7 +21,8 @@ CREATE TABLE outbound_items (
     record_id INTEGER REFERENCES system_records(id) ON DELETE CASCADE,
     status VARCHAR(50) DEFAULT 'pending',
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    processed_at TIMESTAMP
 );
 
 -- Create store_items table
@@ -32,10 +34,24 @@ CREATE TABLE IF NOT EXISTS store_items (
     UNIQUE(record_id)  -- Ensures each record can only be in one store
 );
 
+-- Create item_locations table
+CREATE TABLE IF NOT EXISTS item_locations (
+    id SERIAL PRIMARY KEY,
+    serialnumber VARCHAR(100) NOT NULL UNIQUE,
+    location VARCHAR(50) NOT NULL,
+    store_id INTEGER REFERENCES stores(id),
+    store_name VARCHAR(100),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create indexes
 CREATE INDEX idx_outbound_items_status ON outbound_items(status);
 CREATE INDEX idx_store_items_store_id ON store_items(store_id);
 CREATE INDEX idx_store_items_record_id ON store_items(record_id);
+CREATE INDEX idx_item_locations_serialnumber ON item_locations(serialnumber);
+CREATE INDEX idx_item_locations_location ON item_locations(location);
+CREATE INDEX idx_item_locations_store_id ON item_locations(store_id);
 
 -- Insert default stores if they don't exist
 INSERT INTO stores (name, address, phone, email, description)

@@ -16,7 +16,7 @@ import {
 } from '@mui/material';
 import { Edit as EditIcon, Delete as DeleteIcon, LocationOn, Phone, Email } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import api from '../../services/api';
+import { storeApi } from '../../services/api';
 
 const StoreManagement = () => {
     const [stores, setStores] = useState([]);
@@ -39,11 +39,17 @@ const StoreManagement = () => {
 
     const fetchStores = async () => {
         try {
-            const response = await api.get('/stores');
-            if (response.data.success) {
-                setStores(response.data.stores);
+            console.log('Fetching stores...');
+            const response = await storeApi.getStores();
+            console.log('Stores response:', response);
+            
+            if (response?.success) {
+                setStores(response.stores);
+            } else {
+                throw new Error(response?.error || 'Failed to fetch stores');
             }
         } catch (error) {
+            console.error('Error fetching stores:', error);
             setError('Failed to fetch stores');
         }
     };
@@ -90,33 +96,45 @@ const StoreManagement = () => {
         setSuccess('');
 
         try {
+            let response;
             if (editingStore) {
-                const response = await api.put(`/stores/${editingStore.id}`, formData);
-                if (response.data.success) {
-                    setSuccess('Store updated successfully');
-                }
+                console.log('Updating store:', editingStore.id);
+                response = await storeApi.updateStore(editingStore.id, formData);
             } else {
-                const response = await api.post('/stores', formData);
-                if (response.data.success) {
-                    setSuccess('Store created successfully');
-                }
+                console.log('Creating new store');
+                response = await storeApi.createStore(formData);
             }
-            handleCloseDialog();
-            fetchStores();
+
+            console.log('Store operation response:', response);
+            
+            if (response?.success) {
+                setSuccess(editingStore ? 'Store updated successfully' : 'Store created successfully');
+                handleCloseDialog();
+                fetchStores();
+            } else {
+                throw new Error(response?.error || 'Operation failed');
+            }
         } catch (error) {
-            setError(error.response?.data?.error || 'Operation failed');
+            console.error('Error in store operation:', error);
+            setError(error.message || 'Operation failed');
         }
     };
 
     const handleDelete = async (storeId) => {
         try {
-            const response = await api.delete(`/stores/${storeId}`);
-            if (response.data.success) {
+            console.log('Deleting store:', storeId);
+            const response = await storeApi.deleteStore(storeId);
+            console.log('Delete store response:', response);
+            
+            if (response?.success) {
                 setSuccess('Store deleted successfully');
                 fetchStores();
+            } else {
+                throw new Error(response?.error || 'Failed to delete store');
             }
         } catch (error) {
-            setError('Failed to delete store');
+            console.error('Error deleting store:', error);
+            setError(error.message || 'Failed to delete store');
         }
     };
 

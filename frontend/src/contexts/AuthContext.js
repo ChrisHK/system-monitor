@@ -1,53 +1,89 @@
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import api from '../services/api';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
+    const initRef = useRef(false);
 
+    // Helper function to clear auth data
+    const clearAuthData = useCallback(() => {
+        console.log('Clearing auth data');
+        setUser(null);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        delete axios.defaults.headers.common['Authorization'];
+        delete api.defaults.headers.common['Authorization'];
+    }, []);
+
+    // Initialize auth state
     useEffect(() => {
         const initializeAuth = async () => {
+            if (initRef.current) {
+                return;
+            }
+            initRef.current = true;
+
             try {
-                console.log('Initializing auth...');
                 const token = localStorage.getItem('token');
                 const storedUser = localStorage.getItem('user');
 
-                if (token && storedUser) {
-                    try {
-                        console.log('Found stored credentials');
-                        const parsedUser = JSON.parse(storedUser);
-                        console.log('Stored user data:', parsedUser);
-                        
-                        if (parsedUser && parsedUser.username && parsedUser.role) {
-                            setUser(parsedUser);
-                            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-                            console.log('Auth initialized successfully');
-                        } else {
-                            console.error('Invalid stored user data');
-                            localStorage.removeItem('token');
-                            localStorage.removeItem('user');
-                        }
-                    } catch (parseError) {
-                        console.error('Failed to parse stored user data:', parseError);
-                        localStorage.removeItem('token');
-                        localStorage.removeItem('user');
-                    }
-                } else {
+                if (!token || !storedUser) {
                     console.log('No stored credentials found');
+                    clearAuthData();
+                    if (window.location.pathname !== '/login') {
+                        window.location.replace('/login');
+                    }
+                    return;
                 }
-            } catch (error) {
-                console.error('Auth initialization error:', error);
-                localStorage.removeItem('token');
-                localStorage.removeItem('user');
+
+                try {
+                    const parsedUser = JSON.parse(storedUser);
+                    
+                    // Set auth headers
+                    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+                    api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+                    
+                    // Set initial user state
+                    setUser(parsedUser);
+                    
+                    // Verify token
+                    try {
+                        const checkResponse = await api.get('/users/me');
+                        
+                        if (checkResponse?.data?.success) {
+                            const userData = checkResponse.data.user;
+                            setUser(userData);
+                            localStorage.setItem('user', JSON.stringify(userData));
+                        } else {
+                            // Token validation failed but we still have stored credentials
+                            // Keep the user logged in with stored data
+                            console.warn('Token validation failed, using stored credentials');
+                            setUser(parsedUser);
+                        }
+                    } catch (apiError) {
+                        // API error but we still have stored credentials
+                        // Keep the user logged in with stored data
+                        console.warn('API validation error, using stored credentials:', apiError);
+                        setUser(parsedUser);
+                    }
+                } catch (parseError) {
+                    console.error('Failed to parse stored user data:', parseError);
+                    clearAuthData();
+                    if (window.location.pathname !== '/login') {
+                        window.location.replace('/login');
+                    }
+                }
             } finally {
                 setLoading(false);
             }
         };
 
         initializeAuth();
-    }, []);
+    }, [clearAuthData]);
 
     const login = async (token, userData) => {
         console.log('Setting user data:', userData);
@@ -57,20 +93,20 @@ export const AuthProvider = ({ children }) => {
             return false;
         }
 
-        // Validate required fields
         if (!userData.username || !userData.role) {
             console.error('Missing required user data fields');
             return false;
         }
 
         try {
-            // Set user state and localStorage
-            setUser(userData);
+            // First set the token in axios headers
+            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+            api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+            // Store credentials
             localStorage.setItem('token', token);
             localStorage.setItem('user', JSON.stringify(userData));
-
-            // Set axios default headers
-            axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+            setUser(userData);
             
             console.log('Auth state updated:', {
                 user: userData,
@@ -81,59 +117,34 @@ export const AuthProvider = ({ children }) => {
             return true;
         } catch (error) {
             console.error('Failed to set auth state:', error);
-            return false;
+            clearAuthData();
+            throw error;
         }
     };
 
-    const logout = () => {
+    const logout = useCallback(() => {
         console.log('Logging out...');
-        setUser(null);
-        localStorage.removeItem('token');
-        localStorage.removeItem('user');
-        delete axios.defaults.headers.common['Authorization'];
-        window.location.href = '/login';
-    };
+        clearAuthData();
+        window.location.replace('/login');
+    }, [clearAuthData]);
 
-    const isAdmin = () => {
-        const isAdminUser = user?.role === 'admin';
-        console.log('Checking admin status:', { 
-            user, 
-            role: user?.role,
-            isAdmin: isAdminUser
-        });
-        return isAdminUser;
-    };
+    const isAdmin = useCallback(() => {
+        return user?.role === 'admin';
+    }, [user]);
 
-    const isAuthenticated = () => {
+    const isAuthenticated = useCallback(() => {
         const token = localStorage.getItem('token');
-        const storedUser = localStorage.getItem('user');
         const hasUser = !!user;
         const hasToken = !!token;
-        const hasStoredUser = !!storedUser;
-        
-        try {
-            if (storedUser) {
-                const parsedUser = JSON.parse(storedUser);
-                if (!parsedUser.username || !parsedUser.role) {
-                    console.error('Invalid stored user data');
-                    return false;
-                }
-            }
-        } catch (error) {
-            console.error('Failed to parse stored user data');
-            return false;
-        }
         
         console.log('Checking authentication status:', { 
             hasUser,
             hasToken,
-            hasStoredUser,
-            user,
-            token: token ? 'exists' : 'missing'
+            user
         });
         
-        return hasUser && hasToken && hasStoredUser;
-    };
+        return hasUser && hasToken;
+    }, [user]);
 
     if (loading) {
         return <div>Loading...</div>;

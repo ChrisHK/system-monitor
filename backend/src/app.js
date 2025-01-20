@@ -7,6 +7,8 @@ const recordRoutes = require('./routes/recordRoutes');
 const outboundRoutes = require('./routes/outboundRoutes');
 const storeRoutes = require('./routes/storeRoutes');
 const userRoutes = require('./routes/userRoutes');
+const locationRoutes = require('./routes/locationRoutes');
+const groupRoutes = require('./routes/groupRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -15,8 +17,7 @@ const server = http.createServer(app);
 const corsOptions = {
     origin: [
         'http://localhost:4001',
-        'http://192.168.0.10:4001',
-        'http://192.168.0.239:4001'
+        'http://192.168.0.10:4001'
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
@@ -37,6 +38,8 @@ app.use('/api/records', recordRoutes);
 app.use('/api/outbound', outboundRoutes);
 app.use('/api/stores', storeRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/users/groups', groupRoutes);
+app.use('/api/locations', locationRoutes);
 
 // Create WebSocket server directly
 const wss = new WebSocket.Server({ 
@@ -110,22 +113,28 @@ app.get('/api/health', (req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 3000;
-const HOST = '192.168.0.10';  // Hardcode the IP
+const PORT = process.env.PORT || 4000;
+const HOST = process.env.HOST || '192.168.0.10';
 
 server.listen(PORT, HOST, () => {
+    console.log(`Server Configuration:`, {
+        host: HOST,
+        port: PORT,
+        environment: process.env.NODE_ENV || 'development',
+        cors_origins: corsOptions.origin
+    });
     console.log(`Server running on http://${HOST}:${PORT}`);
     console.log(`WebSocket server running on ws://${HOST}:${PORT}/ws`);
-    console.log('Available routes:');
-    console.log('- GET  /api/records');
-    console.log('- POST /api/records');
-    console.log('- PUT  /api/records/:id');
-    console.log('- DELETE /api/records/:id');
 });
 
 // Error handling
 server.on('error', (error) => {
     console.error('Server error:', error);
+    // Attempt graceful shutdown
+    if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use`);
+        process.exit(1);
+    }
 });
 
 process.on('unhandledRejection', (error) => {
@@ -134,4 +143,8 @@ process.on('unhandledRejection', (error) => {
 
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
+    // Attempt graceful shutdown
+    setTimeout(() => {
+        process.exit(1);
+    }, 1000);
 }); 

@@ -1,81 +1,422 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Input, Button, message, Row, Col, Tag, Popconfirm } from 'antd';
-import { SearchOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
-import { useParams } from 'react-router-dom';
-import { getStoreItems, deleteStoreItem, exportStoreItems } from '../services/api';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select } from 'antd';
+import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined } from '@ant-design/icons';
+import { useAuth } from '../contexts/AuthContext';
+import { storeApi, removeFromOutbound, searchRecords, addToOutbound, sendToStore, getOutboundItems } from '../services/api';
+import { formatSystemSku } from '../utils/formatters';
 
 const { Search } = Input;
+const { Option } = Select;
+
+// Utility functions
+const formatDate = (text) => {
+    if (!text) return 'N/A';
+    return new Date(text).toLocaleString();
+};
+
+const formatOS = (text) => {
+    if (!text || text === 'N/A') return 'N/A';
+    const osLower = text.toLowerCase();
+    if (osLower.includes('windows')) {
+        const mainVersion = osLower.includes('11') ? '11' : 
+                        osLower.includes('10') ? '10' : '';
+        const edition = osLower.includes('pro') ? 'Pro' :
+                    osLower.includes('home') ? 'Home' : 
+                    osLower.includes('enterprise') ? 'Enterprise' : '';
+        return `Windows ${mainVersion} ${edition}`.trim();
+    }
+    return text;
+};
 
 const StorePage = () => {
     const { storeId } = useParams();
+    const navigate = useNavigate();
+    const { user } = useAuth();
+    const [store, setStore] = useState(null);
+    const [stores, setStores] = useState([]);
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [searchText, setSearchText] = useState('');
     const [filteredRecords, setFilteredRecords] = useState([]);
+    const [outboundModalVisible, setOutboundModalVisible] = useState(false);
+    const [outboundRecords, setOutboundRecords] = useState([]);
+    const [outboundLoading, setOutboundLoading] = useState(false);
+    const [selectedOutboundStore, setSelectedOutboundStore] = useState(null);
+
+    // Modify stores fetching to use storeApi
+    const fetchStores = useCallback(async () => {
+        try {
+            const response = await storeApi.getStores();
+            if (response?.success) {
+                const storesList = response.stores.map(store => ({
+                    value: store.id.toString(),
+                    label: store.name
+                }));
+                setStores(storesList);
+            }
+        } catch (error) {
+            console.error('Error fetching stores:', error);
+            message.error('Failed to load stores');
+        }
+    }, []);
+
+    const fetchStoreData = useCallback(async () => {
+        if (!user || !storeId) return;
+
+        try {
+            setLoading(true);
+            // First get the store details from the stores list
+            const storesResponse = await storeApi.getStores();
+            console.log('Stores response:', storesResponse);
+            
+            if (storesResponse?.success) {
+                const currentStore = storesResponse.stores.find(store => store.id.toString() === storeId.toString());
+                if (currentStore) {
+                    setStore(currentStore);
+                } else {
+                    message.error('Store not found');
+                    navigate('/inventory');
+                    return;
+                }
+            }
+
+            // Then get the store items
+            const itemsResponse = await storeApi.getStoreItems(storeId);
+            console.log('Store items response:', itemsResponse);
+            
+            if (itemsResponse?.success && itemsResponse.items) {
+                const items = itemsResponse.items.map(item => ({
+                    ...item,
+                    location: store?.name || '',
+                    store_name: store?.name || ''
+                }));
+                setRecords(items);
+                setFilteredRecords(items);
+            }
+        } catch (error) {
+            console.error('Error loading store data:', error);
+            if (error.response?.status === 404) {
+                message.error('Store not found');
+                navigate('/inventory');
+            } else {
+                message.error('Failed to load store data');
+            }
+        } finally {
+            setLoading(false);
+        }
+    }, [storeId, user, navigate, store?.name]);
+
+    useEffect(() => {
+        if (!user) return;
+        
+        const userStoreId = user.store_id?.toString();
+        const requestedStoreId = storeId?.toString();
+
+        if (user.role !== 'admin' && userStoreId !== requestedStoreId) {
+            message.error('Access denied');
+            navigate('/inventory');
+            return;
+        }
+
+        fetchStores();
+        fetchStoreData();
+    }, [user, storeId, navigate, fetchStoreData, fetchStores]);
+
+    const handleSearch = (value) => {
+        if (!value) {
+            setFilteredRecords(records);
+            return;
+        }
+        
+        const filtered = records.filter(record => 
+            record.serialnumber.toLowerCase().includes(value.toLowerCase()) ||
+            record.computername?.toLowerCase().includes(value.toLowerCase()) ||
+            record.model?.toLowerCase().includes(value.toLowerCase())
+        );
+        setFilteredRecords(filtered);
+    };
+
+    const handleRefresh = () => {
+        fetchStoreData();
+    };
+
+    const handleOutboundModalOpen = async () => {
+        setOutboundModalVisible(true);
+        await fetchOutboundItems();
+    };
+
+    const handleOutboundModalClose = () => {
+        setOutboundModalVisible(false);
+        setSelectedOutboundStore(null);
+        setOutboundRecords([]);
+    };
+
+    const fetchOutboundItems = async () => {
+        try {
+            setOutboundLoading(true);
+            const response = await getOutboundItems();
+            if (response?.items) {
+                setOutboundRecords(response.items);
+            }
+        } catch (error) {
+            console.error('Error fetching outbound items:', error);
+            message.error('Failed to fetch outbound items');
+        } finally {
+            setOutboundLoading(false);
+        }
+    };
+
+    const handleAddToOutbound = async (serialNumber) => {
+        try {
+            setOutboundLoading(true);
+            const searchResponse = await searchRecords(serialNumber);
+            if (searchResponse?.success && searchResponse.records?.length > 0) {
+                const record = searchResponse.records[0];
+                const addResponse = await addToOutbound(record.id);
+                if (addResponse?.success) {
+                    message.success('Item added to outbound successfully');
+                    await fetchOutboundItems();
+                } else {
+                    throw new Error(addResponse?.error || 'Failed to add item to outbound');
+                }
+            } else {
+                message.warning('No record found with this serial number');
+            }
+        } catch (error) {
+            console.error('Add to outbound error:', error);
+            if (error.response?.data?.error?.includes('already in outbound')) {
+                message.warning(`Item is already in the outbound list`);
+            } else {
+                message.error(error.message || 'Failed to add item');
+            }
+        } finally {
+            setOutboundLoading(false);
+        }
+    };
+
+    const handleRemoveFromOutbound = async (itemId) => {
+        try {
+            setOutboundLoading(true);
+            const response = await removeFromOutbound(itemId);
+            if (response?.success) {
+                message.success('Item removed successfully');
+                await fetchOutboundItems();
+            } else {
+                throw new Error(response?.error || 'Failed to remove item');
+            }
+        } catch (error) {
+            console.error('Remove from outbound error:', error);
+            message.error(error.message || 'Failed to remove item');
+        } finally {
+            setOutboundLoading(false);
+        }
+    };
+
+    const handleSendToStore = async () => {
+        if (!selectedOutboundStore) {
+            message.error('Please select a store first');
+            return;
+        }
+
+        let selectedStoreData;
+        let outboundIds;
+
+        try {
+            setOutboundLoading(true);
+            selectedStoreData = stores.find(s => s.value === selectedOutboundStore);
+            if (!selectedStoreData) {
+                throw new Error('Store not found');
+            }
+
+            outboundIds = outboundRecords.map(r => r.outbound_item_id).filter(Boolean);
+            if (outboundIds.length === 0) {
+                throw new Error('No valid outbound items found');
+            }
+
+            const response = await sendToStore(selectedOutboundStore, outboundIds);
+            if (response?.success) {
+                message.success('Items sent to store successfully');
+                await fetchOutboundItems();
+                handleOutboundModalClose();
+            } else if (response?.error && response.error.includes('already in stores:')) {
+                Modal.confirm({
+                    title: 'Items Already in Store',
+                    content: `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
+                    okText: 'Yes, Move Items',
+                    cancelText: 'No, Keep Current',
+                    onOk: async () => {
+                        try {
+                            const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
+                            if (retryResponse?.success) {
+                                message.success('Items moved to new store successfully');
+                                await fetchOutboundItems();
+                                handleOutboundModalClose();
+                            } else {
+                                throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                            }
+                        } catch (error) {
+                            console.error('Error moving items:', error);
+                            message.error(error.message || 'Failed to move items to new store');
+                        }
+                    }
+                });
+            } else {
+                throw new Error(response?.error || 'Failed to send items to store');
+            }
+        } catch (error) {
+            if (error.response?.data?.error?.includes('already in stores:')) {
+                Modal.confirm({
+                    title: 'Items Already in Store',
+                    content: `${error.response.data.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
+                    okText: 'Yes, Move Items',
+                    cancelText: 'No, Keep Current',
+                    onOk: async () => {
+                        try {
+                            const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
+                            if (retryResponse?.success) {
+                                message.success('Items moved to new store successfully');
+                                await fetchOutboundItems();
+                                handleOutboundModalClose();
+                            } else {
+                                throw new Error(retryResponse?.error || 'Failed to move items to new store');
+                            }
+                        } catch (error) {
+                            console.error('Error moving items:', error);
+                            message.error(error.message || 'Failed to move items to new store');
+                        }
+                    }
+                });
+            } else {
+                console.error('Error sending items to store:', error);
+                message.error(error.message || 'Failed to send items to store');
+            }
+        } finally {
+            setOutboundLoading(false);
+        }
+    };
+
+    const handleExportCSV = () => {
+        try {
+            const headers = [
+                'Serial Number',
+                'Computer Name',
+                'Manufacturer',
+                'Model',
+                'System SKU',
+                'Operating System',
+                'CPU',
+                'Resolution',
+                'Graphics Card',
+                'Touch Screen',
+                'RAM (GB)',
+                'Disks',
+                'Design Capacity',
+                'Full Charge',
+                'Cycle Count',
+                'Battery Health',
+                'Created Time'
+            ];
+
+            const csvData = filteredRecords.map(record => [
+                record.serialnumber,
+                record.computername || '',
+                record.manufacturer || '',
+                record.model || '',
+                record.systemsku || '',
+                formatOS(record.operatingsystem) || '',
+                record.cpu || '',
+                record.resolution || '',
+                record.graphicscard || '',
+                record.touchscreen ? 'Yes' : 'No',
+                record.ram_gb || '',
+                record.disks || '',
+                record.design_capacity || '',
+                record.full_charge_capacity || '',
+                record.cycle_count || '',
+                record.battery_health ? `${record.battery_health}%` : '',
+                record.created_at ? new Date(record.created_at).toLocaleString() : ''
+            ]);
+
+            // Add headers to CSV data
+            csvData.unshift(headers);
+
+            // Convert to CSV string
+            const csvString = csvData.map(row => row.map(cell => {
+                // Handle cells that contain commas or quotes
+                if (cell && (cell.includes(',') || cell.includes('"') || cell.includes('\n'))) {
+                    return `"${cell.replace(/"/g, '""')}"`;
+                }
+                return cell;
+            }).join(',')).join('\n');
+
+            // Create blob and download
+            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', `store_${storeId}_inventory_${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            message.success('Export successful');
+        } catch (error) {
+            console.error('Export error:', error);
+            message.error('Failed to export data');
+        }
+    };
 
     const columns = [
+        {
+            title: 'Location',
+            dataIndex: 'location',
+            key: 'location',
+            width: 120,
+            render: (_, record) => (
+                        <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
+                    {record.store_name || store?.name || ''}
+                        </Tag>
+            )
+        },
         {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
-            width: 150
+            width: 150,
+            sorter: (a, b) => a.serialnumber.localeCompare(b.serialnumber)
         },
         {
             title: 'Computer Name',
             dataIndex: 'computername',
             key: 'computername',
             width: 150,
-            filterable: true
+            sorter: (a, b) => (a.computername || '').localeCompare(b.computername || '')
         },
         {
             title: 'Manufacturer',
             dataIndex: 'manufacturer',
             key: 'manufacturer',
-            width: 100,
-            filterable: true
+            width: 100
         },
         {
             title: 'Model',
             dataIndex: 'model',
             key: 'model',
-            width: 120,
-            filterable: true
+            width: 120
         },
         {
             title: 'System SKU',
             dataIndex: 'systemsku',
             key: 'systemsku',
             width: 150,
-            filterable: true,
-            render: (text) => {
-                if (!text) return 'N/A';
-                const parts = text.split('_');
-                const thinkpadPart = parts.find(part => part.includes('ThinkPad'));
-                if (thinkpadPart) {
-                    return parts.slice(parts.indexOf(thinkpadPart)).join(' ')
-                        .replace(/Gen (\d+)$/, 'Gen$1').trim();
-                }
-                return text;
-            }
+            render: formatSystemSku
         },
         {
             title: 'Operating System',
             dataIndex: 'operatingsystem',
             key: 'operatingsystem',
             width: 150,
-            render: (text) => {
-                if (!text || text === 'N/A') return 'N/A';
-                const osLower = text.toLowerCase();
-                if (osLower.includes('windows')) {
-                    const mainVersion = osLower.includes('11') ? '11' : 
-                                    osLower.includes('10') ? '10' : '';
-                    const edition = osLower.includes('pro') ? 'Pro' :
-                                osLower.includes('home') ? 'Home' : 
-                                osLower.includes('enterprise') ? 'Enterprise' : '';
-                    return `Windows ${mainVersion} ${edition}`.trim();
-                }
-                return text;
-            }
+            render: formatOS
         },
         {
             title: 'CPU',
@@ -158,181 +499,179 @@ const StorePage = () => {
             }
         },
         {
-            title: 'Received Time',
+            title: 'Received At',
             dataIndex: 'received_at',
             key: 'received_at',
             width: 150,
-            render: (text) => {
-                if (!text) return 'N/A';
-                return new Date(text).toLocaleString();
-            }
-        },
-        {
-            title: 'Actions',
-            key: 'actions',
-            fixed: 'right',
-            width: 100,
-            render: (_, record) => (
-                <Popconfirm
-                    title="Delete this item?"
-                    onConfirm={() => handleDelete(record.id)}
-                    okText="Yes"
-                    cancelText="No"
-                >
-                    <Button type="link" danger icon={<DeleteOutlined />}>
-                        Delete
-                    </Button>
-                </Popconfirm>
-            )
+            render: formatDate,
+            sorter: (a, b) => new Date(a.received_at) - new Date(b.received_at)
         }
     ];
 
-    const handleSearch = useCallback((value) => {
-        const searchValue = value.toLowerCase().trim();
-        setSearchText(value);
-        
-        if (!searchValue) {
-            setFilteredRecords([]);
-            return;
-        }
-        
-        const filtered = records.filter(record => 
-            Object.values(record)
-                .some(val => 
-                    val && 
-                    val.toString().toLowerCase().includes(searchValue)
-                )
-        );
-        
-        setFilteredRecords(filtered);
-        
-        if (filtered.length === 0 && searchValue) {
-            message.info('No matching records found in this store');
-        }
-    }, [records]);
+    // Modify toolbar to use handleOutboundModalOpen
+    const renderToolbar = () => (
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+            <Col flex="auto">
+                <Search
+                    placeholder="Search records..."
+                    allowClear
+                    enterButton={<SearchOutlined />}
+                    onSearch={handleSearch}
+                    style={{ width: 300 }}
+                />
+            </Col>
+            <Col>
+                <Space>
+                    <Button
+                        type="primary"
+                        icon={<ExportOutlined />}
+                        onClick={handleOutboundModalOpen}
+                    >
+                        Outbound
+                    </Button>
+                    <Button
+                        icon={<DownloadOutlined />}
+                        onClick={handleExportCSV}
+                    >
+                        Export CSV
+                    </Button>
+                    <Button
+                        icon={<ReloadOutlined />}
+                        onClick={handleRefresh}
+                        loading={loading}
+                    >
+                        Refresh
+                    </Button>
+                </Space>
+            </Col>
+        </Row>
+    );
 
-    const fetchStoreItems = useCallback(async () => {
-        try {
-            setLoading(true);
-            const response = await getStoreItems(storeId);
-
-            if (response?.data?.success) {
-                setRecords(response.data.items || []);
-                // Clear filtered records when fetching new data
-                setFilteredRecords([]);
-                setSearchText('');
-            } else {
-                console.warn('Invalid response format:', response);
-                message.error('Failed to fetch items: Invalid response format');
-            }
-        } catch (error) {
-            console.error('Error fetching store items:', error);
-            message.error(`Failed to fetch items: ${error.message}`);
-        } finally {
-            setLoading(false);
-        }
-    }, [storeId]);
-
-    useEffect(() => {
-        fetchStoreItems();
-    }, [fetchStoreItems]);
-
-    const handleDelete = async (recordId) => {
-        try {
-            setLoading(true);
-            const response = await deleteStoreItem(storeId, recordId);
-
-            if (response?.data?.success) {
-                message.success('Item deleted successfully');
-                await fetchStoreItems();
-            } else {
-                throw new Error(response?.data?.error || 'Failed to delete item');
-            }
-        } catch (error) {
-            console.error('Error deleting item:', error);
-            message.error(`Failed to delete item: ${error.response?.data?.error || error.message}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleExport = async () => {
-        try {
-            setLoading(true);
-            const csvData = await exportStoreItems(storeId);
-            
-            // Create blob and download
-            const blob = new Blob([csvData], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `store-items-${new Date().toISOString().split('T')[0]}.csv`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            
-            message.success('Export completed');
-        } catch (error) {
-            message.error(`Failed to export: ${error.message}`);
-        } finally {
-            setLoading(false);
-        }
-    };
+    // Add OutboundModal component
+    const renderOutboundModal = () => (
+        <Modal
+            title="Outbound Management"
+            visible={outboundModalVisible}
+            onCancel={handleOutboundModalClose}
+            width={1000}
+            footer={null}
+        >
+            <Row gutter={[16, 16]}>
+                <Col span={8}>
+                    <Search
+                        placeholder="Enter serial number to add..."
+                        allowClear
+                        enterButton="Add"
+                        onSearch={handleAddToOutbound}
+                    />
+                </Col>
+                <Col span={8}>
+                    <Select
+                        style={{ width: '100%' }}
+                        placeholder="Select store"
+                        value={selectedOutboundStore}
+                        onChange={setSelectedOutboundStore}
+                    >
+                        {stores.filter(store => store.value !== 'all').map(store => (
+                            <Option key={store.value} value={store.value}>
+                                {store.label}
+                            </Option>
+                        ))}
+                    </Select>
+                </Col>
+                <Col span={8}>
+                    <Button
+                        type="primary"
+                        onClick={handleSendToStore}
+                        disabled={!selectedOutboundStore || outboundRecords.length === 0}
+                        loading={outboundLoading}
+                    >
+                        Send to Store
+                    </Button>
+                </Col>
+            </Row>
+            <Table
+                columns={[
+                    {
+                        title: 'Serial Number',
+                        dataIndex: 'serialnumber',
+                        key: 'serialnumber'
+                    },
+                    {
+                        title: 'Computer Name',
+                        dataIndex: 'computername',
+                        key: 'computername'
+                    },
+                    {
+                        title: 'Model',
+                        dataIndex: 'model',
+                        key: 'model'
+                    },
+                    {
+                        title: 'Actions',
+                        key: 'actions',
+                        render: (_, record) => (
+                            <Button
+                                type="link"
+                                danger
+                                onClick={() => handleRemoveFromOutbound(record.outbound_item_id)}
+                            >
+                                Remove
+                            </Button>
+                        )
+                    }
+                ]}
+                dataSource={outboundRecords}
+                rowKey="outbound_item_id"
+                loading={outboundLoading}
+                style={{ marginTop: 16 }}
+                pagination={{
+                    total: outboundRecords.length,
+                    pageSize: 10,
+                    showSizeChanger: true,
+                    showTotal: (total) => `Total ${total} items`
+                }}
+            />
+        </Modal>
+    );
 
     return (
-        <div>
-            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                <Col flex="auto">
-                    <Input.Group compact style={{ display: 'flex' }}>
-                        <Search
-                            placeholder="Search in current store..."
-                            allowClear
-                            enterButton={<SearchOutlined />}
-                            onSearch={handleSearch}
-                            value={searchText}
-                            onChange={(e) => handleSearch(e.target.value)}
-                            style={{ flex: 1 }}
-                        />
-                        <Button
-                            type="primary"
-                            icon={<DownloadOutlined />}
-                            onClick={handleExport}
-                            loading={loading}
-                        >
-                            Export
-                        </Button>
-                    </Input.Group>
+        <div className="page-container">
+            <Row gutter={[16, 16]} className="header-row">
+                <Col span={24}>
+                    <h1>{store?.name || 'Store'} Inventory</h1>
                 </Col>
             </Row>
 
-            <Table
-                columns={columns}
-                dataSource={searchText ? filteredRecords : records}
-                rowKey="id"
+            <Row gutter={[16, 16]} className="stats-row">
+                <Col span={8}>
+                    <Card>
+                        <Statistic 
+                            title="Total Items" 
+                            value={records.length} 
+                        />
+                    </Card>
+                </Col>
+            </Row>
+
+                        {renderToolbar()}
+            
+                        <Table
+                            columns={columns}
+                dataSource={filteredRecords}
                 loading={loading}
-                scroll={{ x: 1500 }}
-                pagination={{
-                    total: (searchText ? filteredRecords : records).length,
-                    pageSize: 20,
-                    showSizeChanger: true,
+                            rowKey="serialnumber"
+                            scroll={{ x: true }}
+                            pagination={{
+                    total: filteredRecords.length,
+                    pageSize: 10,
+                                showSizeChanger: true,
                     showQuickJumper: true,
-                    pageSizeOptions: ['20', '50', '100'],
-                    defaultPageSize: 20
-                }}
-                summary={pageData => {
-                    const total = pageData.length;
-                    return (
-                        <Table.Summary fixed>
-                            <Table.Summary.Row>
-                                <Table.Summary.Cell index={0} colSpan={columns.length}>
-                                    Total Records: {total}
-                                </Table.Summary.Cell>
-                            </Table.Summary.Row>
-                        </Table.Summary>
-                    );
-                }}
-            />
+                                showTotal: (total) => `Total ${total} items`
+                            }}
+                        />
+
+            {renderOutboundModal()}
         </div>
     );
 };

@@ -1,72 +1,62 @@
 import React from 'react';
-import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import {
-    Box,
-    Paper,
-    Tabs,
-    Tab,
-    Typography,
-    Container
-} from '@mui/material';
-import { styled } from '@mui/material/styles';
-import UserManagement from '../components/settings/UserManagement';
+import { Routes, Route, useLocation, Navigate, useNavigate } from 'react-router-dom';
+import { Tabs, Card, Typography } from 'antd';
+import GroupManagement from '../components/settings/GroupManagement';
 import StoreManagement from '../components/settings/StoreManagement';
+import UserManagement from '../components/settings/UserManagement';
 
-const StyledTab = styled(Tab)(({ theme }) => ({
-    textTransform: 'none',
-    fontWeight: 500,
-    fontSize: '1rem',
-    marginRight: theme.spacing(1),
-    '&.Mui-selected': {
-        color: theme.palette.primary.main,
-    },
-}));
+const { Title } = Typography;
 
 const SettingsPage = () => {
     const location = useLocation();
+    const navigate = useNavigate();
     const currentPath = location.pathname;
 
-    const getTabValue = () => {
-        if (currentPath.includes('/settings/stores')) return 0;
-        if (currentPath.includes('/settings/users')) return 1;
-        return 0;
+    const getActiveKey = () => {
+        if (currentPath === '/settings/stores') return 'stores';
+        if (currentPath === '/settings/groups') return 'groups';
+        if (currentPath === '/settings/users') return 'users';
+        return 'stores';
     };
 
-    return (
-        <Container maxWidth="lg">
-            <Box sx={{ width: '100%', mb: 3 }}>
-                <Typography variant="h4" component="h1" gutterBottom>
-                    Settings
-                </Typography>
-                <Paper sx={{ width: '100%', mb: 2 }}>
-                    <Tabs
-                        value={getTabValue()}
-                        indicatorColor="primary"
-                        textColor="primary"
-                        sx={{ borderBottom: 1, borderColor: 'divider' }}
-                    >
-                        <StyledTab
-                            label="Store Management"
-                            component={Link}
-                            to="/settings/stores"
-                        />
-                        <StyledTab
-                            label="User Management"
-                            component={Link}
-                            to="/settings/users"
-                        />
-                    </Tabs>
-                </Paper>
+    const items = [
+        {
+            key: 'stores',
+            label: 'Store Management',
+        },
+        {
+            key: 'groups',
+            label: 'Group Management',
+        },
+        {
+            key: 'users',
+            label: 'User Management',
+        }
+    ];
 
-                <Box sx={{ mt: 3 }}>
+    return (
+        <div style={{ padding: '24px' }}>
+            <Title level={2} style={{ marginBottom: '24px' }}>
+                Settings
+            </Title>
+            <Card>
+                <Tabs
+                    activeKey={getActiveKey()}
+                    items={items}
+                    onChange={(key) => {
+                        navigate(`/settings/${key}`);
+                    }}
+                />
+                <div style={{ padding: '16px' }}>
                     <Routes>
-                        <Route path="/" element={<StoreManagement />} />
-                        <Route path="/stores" element={<StoreManagement />} />
-                        <Route path="/users" element={<UserManagement />} />
+                        <Route index element={<Navigate to="stores" replace />} />
+                        <Route path="stores" element={<StoreManagement />} />
+                        <Route path="groups" element={<GroupManagement />} />
+                        <Route path="users" element={<UserManagement />} />
                     </Routes>
-                </Box>
-            </Box>
-        </Container>
+                </div>
+            </Card>
+        </div>
     );
 };
 

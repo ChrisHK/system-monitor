@@ -121,19 +121,50 @@ router.get('/:storeId/items', async (req, res) => {
 // Process outbound items to store
 router.post('/:storeId/outbound', async (req, res) => {
     const { storeId } = req.params;
-    const { items } = req.body;
+    const { itemIds, force = false } = req.body;
     const client = await pool.connect();
     
     try {
+        console.log('=== POST /stores/:storeId/outbound - Processing outbound items ===');
+        console.log('Request params:', { storeId, itemIds, force });
+
+        if (!storeId || !itemIds || !Array.isArray(itemIds) || itemIds.length === 0) {
+            console.log('Invalid request parameters:', { storeId, itemIds });
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid request parameters'
+            });
+        }
+
         await client.query('BEGIN');
         
-        // Get outbound items
-        const outboundItems = await client.query(
-            'SELECT id, record_id FROM outbound_items WHERE id = ANY($1)',
-            [items]
-        );
+        // Check if store exists
+        console.log('Checking store existence:', storeId);
+        const storeCheck = await client.query('SELECT id, name FROM stores WHERE id = $1', [storeId]);
+        console.log('Store check result:', storeCheck.rows);
+        
+        if (storeCheck.rows.length === 0) {
+            console.log('Store not found:', storeId);
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                success: false,
+                error: 'Store not found'
+            });
+        }
+        
+        // Get outbound items with more details
+        console.log('Fetching outbound items:', itemIds);
+        const outboundQuery = `
+            SELECT o.id, o.record_id, o.status, r.serialnumber
+            FROM outbound_items o
+            JOIN system_records r ON r.id = o.record_id
+            WHERE o.id = ANY($1) AND o.status = $2
+        `;
+        const outboundItems = await client.query(outboundQuery, [itemIds, 'pending']);
+        console.log('Found outbound items:', outboundItems.rows);
         
         if (outboundItems.rows.length === 0) {
+            console.log('No pending outbound items found for IDs:', itemIds);
             await client.query('ROLLBACK');
             return res.status(404).json({
                 success: false,
@@ -143,43 +174,148 @@ router.post('/:storeId/outbound', async (req, res) => {
         
         // Get record IDs and serial numbers
         const recordIds = outboundItems.rows.map(item => item.record_id);
+        console.log('Fetching system records:', recordIds);
         const recordsQuery = await client.query(
             'SELECT id, serialnumber FROM system_records WHERE id = ANY($1)',
             [recordIds]
         );
+        console.log('Found system records:', recordsQuery.rows);
         
-        // Remove items from their current stores
-        await client.query(`
-            DELETE FROM store_items 
-            WHERE record_id = ANY($1)
+        if (recordsQuery.rows.length === 0) {
+            console.log('No system records found for record IDs:', recordIds);
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                success: false,
+                error: 'No system records found for the outbound items'
+            });
+        }
+        
+        // Check if any items are already in any store
+        console.log('Checking existing store assignments:', recordIds);
+        const existingItems = await client.query(`
+            SELECT si.record_id, s.name as store_name, r.serialnumber
+            FROM store_items si
+            JOIN stores s ON s.id = si.store_id
+            JOIN system_records r ON r.id = si.record_id
+            WHERE si.record_id = ANY($1)
         `, [recordIds]);
+        console.log('Found existing store assignments:', existingItems.rows);
+        
+        if (existingItems.rows.length > 0 && !force) {
+            const itemsInStores = existingItems.rows.map(item => 
+                `Serial number ${item.serialnumber} is in store "${item.store_name}"`
+            ).join(', ');
+            
+            console.log('Items already in stores:', itemsInStores);
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                success: false,
+                error: `Some items are already in stores: ${itemsInStores}`
+            });
+        }
+        
+        // If force is true or no existing items, remove any existing store assignments
+        if (existingItems.rows.length > 0) {
+            console.log('Removing existing store assignments');
+            await client.query(`
+                DELETE FROM store_items 
+                WHERE record_id = ANY($1)
+            `, [recordIds]);
+        }
         
         // Add items to new store
-        for (const item of outboundItems.rows) {
-            await client.query(
-                'INSERT INTO store_items (store_id, record_id, received_at) VALUES ($1, $2, NOW())',
-                [storeId, item.record_id]
-            );
+        try {
+            console.log('Adding items to store:', {
+                storeId,
+                storeName: storeCheck.rows[0].name,
+                items: outboundItems.rows.map(item => ({
+                    id: item.id,
+                    record_id: item.record_id,
+                    serialnumber: item.serialnumber
+                }))
+            });
+
+            for (const item of outboundItems.rows) {
+                console.log('Processing item:', {
+                    id: item.id,
+                    record_id: item.record_id,
+                    serialnumber: item.serialnumber
+                });
+                
+                // Insert into store_items
+                const insertResult = await client.query(
+                    'INSERT INTO store_items (store_id, record_id, received_at) VALUES ($1, $2, NOW()) RETURNING id, store_id, record_id',
+                    [storeId, item.record_id]
+                );
+                console.log('Inserted store item:', insertResult.rows[0]);
+                
+                // Update item location
+                await client.query(`
+                    INSERT INTO item_locations (serialnumber, location, store_id, store_name, updated_at)
+                    VALUES ($1, 'store', $2, $3, NOW())
+                    ON CONFLICT (serialnumber) 
+                    DO UPDATE SET 
+                        location = 'store',
+                        store_id = EXCLUDED.store_id,
+                        store_name = EXCLUDED.store_name,
+                        updated_at = NOW()
+                `, [item.serialnumber, storeId, storeCheck.rows[0].name]);
+                console.log('Updated item location for:', item.serialnumber);
+                
+                // Mark outbound item as processed
+                const updateResult = await client.query(
+                    'UPDATE outbound_items SET status = $1, processed_at = NOW() WHERE id = $2 RETURNING id, status, processed_at',
+                    ['processed', item.id]
+                );
+                console.log('Updated outbound item:', updateResult.rows[0]);
+            }
+        } catch (insertError) {
+            console.error('Error inserting items:', insertError);
+            console.error('Error details:', {
+                code: insertError.code,
+                message: insertError.message,
+                detail: insertError.detail,
+                hint: insertError.hint,
+                where: insertError.where
+            });
             
-            // Mark outbound item as processed
-            await client.query(
-                'UPDATE outbound_items SET status = $1 WHERE id = $2',
-                ['processed', item.id]
-            );
+            await client.query('ROLLBACK');
+            
+            // Check if it's a unique constraint violation
+            if (insertError.code === '23505') {
+                return res.status(400).json({
+                    success: false,
+                    error: 'One or more items are already assigned to a store'
+                });
+            }
+            
+            return res.status(500).json({
+                success: false,
+                error: insertError.message || 'Failed to insert items into store'
+            });
         }
         
         await client.query('COMMIT');
+        console.log('Transaction committed successfully');
         
         res.json({
             success: true,
-            message: 'Items processed successfully'
+            message: force ? 'Items moved to new store successfully' : 'Items sent to store successfully'
         });
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error processing outbound items:', error);
+        console.error('Error details:', {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+            hint: error.hint,
+            detail: error.detail
+        });
+        
         res.status(500).json({
             success: false,
-            error: 'Failed to process outbound items'
+            error: error.message || 'Failed to process outbound items'
         });
     } finally {
         client.release();
@@ -397,6 +533,77 @@ router.post('/:storeId/check', async (req, res) => {
         });
     } finally {
         client.release();
+    }
+});
+
+// Get store items with locations
+router.get('/:storeId/items-with-locations', async (req, res) => {
+    const { storeId } = req.params;
+    
+    try {
+        const query = `
+            SELECT 
+                r.*,
+                s.received_at,
+                s.store_id,
+                st.name as store_name,
+                COALESCE(l.location, 'unknown') as location
+            FROM store_items s
+            JOIN system_records r ON s.record_id = r.id
+            JOIN stores st ON s.store_id = st.id
+            LEFT JOIN item_locations l ON r.serialnumber = l.serialnumber
+            WHERE s.store_id = $1
+            ORDER BY s.received_at DESC
+        `;
+        
+        const result = await pool.query(query, [storeId]);
+        
+        res.json({
+            success: true,
+            items: result.rows
+        });
+    } catch (error) {
+        console.error('Error fetching store items with locations:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch store items'
+        });
+    }
+});
+
+// Find which store an item is in
+router.get('/find-item/:serialNumber', async (req, res) => {
+    const { serialNumber } = req.params;
+    
+    try {
+        const query = `
+            SELECT s.* 
+            FROM stores s
+            JOIN store_items si ON s.id = si.store_id
+            JOIN system_records r ON si.record_id = r.id
+            WHERE r.serialnumber = $1
+            LIMIT 1
+        `;
+        
+        const result = await pool.query(query, [serialNumber]);
+        
+        if (result.rows.length === 0) {
+            return res.json({
+                success: false,
+                error: 'Item not found in any store'
+            });
+        }
+        
+        res.json({
+            success: true,
+            store: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Error finding item store:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to find item store'
+        });
     }
 });
 
