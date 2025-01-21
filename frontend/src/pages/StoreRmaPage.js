@@ -348,41 +348,38 @@ const StoreRmaPage = () => {
 
                 {/* Completed RMA */}
                 <Card title="Completed RMA">
-                    <Collapse>
-                        <Panel header="View Completed Items" key="1">
-                            <Table
-                                columns={[
-                                    ...columns,
-                                    {
-                                        title: 'Actions',
-                                        key: 'actions',
-                                        width: 150,
-                                        render: (_, record) => (
-                                            <Space>
-                                                {record.store_status === 'completed' && (
-                                                    <Button
-                                                        type="primary"
-                                                        onClick={() => handleSendToStore(record.rma_id)}
-                                                    >
-                                                        Send to Store
-                                                    </Button>
-                                                )}
-                                            </Space>
-                                        )
-                                    }
-                                ]}
-                                dataSource={completedItems}
-                                rowKey="rma_id"
-                                loading={loading}
-                                scroll={{ x: 1500 }}
-                                pagination={{
-                                    showSizeChanger: true,
-                                    showQuickJumper: true,
-                                    pageSizeOptions: ['10', '20', '50']
-                                }}
-                            />
-                        </Panel>
-                    </Collapse>
+                    <Table
+                        columns={[
+                            ...columns.slice(0, -1), // Remove the last column (original Actions)
+                            {
+                                title: 'Actions',
+                                key: 'actions',
+                                fixed: 'right',
+                                width: 150,
+                                render: (_, record) => (
+                                    <Space>
+                                        {record.store_status === 'completed' && (
+                                            <Button
+                                                type="primary"
+                                                onClick={() => handleSendToStore(record.rma_id)}
+                                            >
+                                                Send to Store
+                                            </Button>
+                                        )}
+                                    </Space>
+                                )
+                            }
+                        ]}
+                        dataSource={completedItems}
+                        rowKey="rma_id"
+                        loading={loading}
+                        scroll={{ x: 1500 }}
+                        pagination={{
+                            showSizeChanger: true,
+                            showQuickJumper: true,
+                            pageSizeOptions: ['10', '20', '50']
+                        }}
+                    />
                 </Card>
 
                 {/* Add RMA Modal */}
