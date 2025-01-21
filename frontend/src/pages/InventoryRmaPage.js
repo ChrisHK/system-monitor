@@ -1,33 +1,40 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
 import { Table, Card, message, Space, Tag, Button, Input, Collapse } from 'antd';
 import { rmaApi } from '../services/api';
-import AddRmaModal from '../components/AddRmaModal';
 
 const { Search } = Input;
 const { Panel } = Collapse;
 const { TextArea } = Input;
 
-const StoreRmaPage = () => {
-    const { storeId } = useParams();
+const InventoryRmaPage = () => {
     const [loading, setLoading] = useState(false);
     const [rmaItems, setRmaItems] = useState([]);
     const [searchText, setSearchText] = useState('');
     const [filteredItems, setFilteredItems] = useState([]);
     const [editingItem, setEditingItem] = useState(null);
-    const [showAddModal, setShowAddModal] = useState(false);
 
-    const fetchRmaItems = useCallback(async () => {
+    useEffect(() => {
+        fetchRmaItems();
+    }, []);
+
+    const fetchRmaItems = async () => {
         try {
             setLoading(true);
-            const response = await rmaApi.getRmaItems(storeId);
-            if (response?.success) {
+            console.log('Fetching inventory RMA items...');
+            const response = await rmaApi.getInventoryRmaItems();
+            console.log('Inventory RMA response:', response);
+            
+            if (response?.success && Array.isArray(response.rma_items)) {
                 const items = response.rma_items.map(item => ({
                     ...item,
-                    key: item.rma_id
+                    key: item.rma_id || item.id
                 }));
+                console.log('Processed items:', items);
                 setRmaItems(items);
                 setFilteredItems(items);
+            } else {
+                console.error('Invalid response format:', response);
+                message.error('Failed to load RMA data: Invalid response format');
             }
         } catch (error) {
             console.error('Error fetching RMA items:', error);
@@ -35,13 +42,7 @@ const StoreRmaPage = () => {
         } finally {
             setLoading(false);
         }
-    }, [storeId]);
-
-    useEffect(() => {
-        if (storeId) {
-            fetchRmaItems();
-        }
-    }, [storeId, fetchRmaItems]);
+    };
 
     const handleSearch = (value) => {
         setSearchText(value);
@@ -52,42 +53,42 @@ const StoreRmaPage = () => {
         setFilteredItems(filtered);
     };
 
-    const handleDelete = async (rmaId) => {
+    const handleProcess = async (rmaId) => {
         try {
-            const response = await rmaApi.deleteRma(storeId, rmaId);
+            const response = await rmaApi.processRma(rmaId);
             if (response?.success) {
-                message.success('RMA item deleted successfully');
+                message.success('RMA item moved to processing');
                 await fetchRmaItems();
             }
         } catch (error) {
-            console.error('Error deleting RMA:', error);
-            message.error('Failed to delete RMA item');
+            console.error('Error processing RMA:', error);
+            message.error('Failed to process RMA item');
         }
     };
 
-    const handleSendToInventory = async (rmaId) => {
+    const handleComplete = async (rmaId) => {
         try {
-            const response = await rmaApi.sendToInventory(storeId, rmaId);
+            const response = await rmaApi.completeRma(rmaId);
             if (response?.success) {
-                message.success('Item sent to inventory successfully');
+                message.success('RMA item completed successfully');
                 await fetchRmaItems();
             }
         } catch (error) {
-            console.error('Error sending to inventory:', error);
-            message.error('Failed to send item to inventory');
+            console.error('Error completing RMA:', error);
+            message.error('Failed to complete RMA item');
         }
     };
 
-    const handleSendToStore = async (rmaId) => {
+    const handleFail = async (rmaId) => {
         try {
-            const response = await rmaApi.sendToStore(storeId, rmaId);
+            const response = await rmaApi.failRma(rmaId);
             if (response?.success) {
-                message.success('Item sent to store inventory successfully');
+                message.success('RMA item marked as failed and returned to store');
                 await fetchRmaItems();
             }
         } catch (error) {
-            console.error('Error sending to store:', error);
-            message.error('Failed to send item to store');
+            console.error('Error marking RMA as failed:', error);
+            message.error('Failed to mark RMA item as failed');
         }
     };
 
@@ -106,7 +107,7 @@ const StoreRmaPage = () => {
                 notes: field === 'notes' ? value : item.notes
             };
 
-            const response = await rmaApi.updateRmaFields(storeId, rmaId, updatedFields);
+            const response = await rmaApi.updateRmaFields(item.store_id, rmaId, updatedFields);
             if (response?.success) {
                 message.success('Updated successfully');
                 await fetchRmaItems();
@@ -119,12 +120,6 @@ const StoreRmaPage = () => {
         }
     };
 
-    const handleAddSuccess = async () => {
-        setShowAddModal(false);
-        await fetchRmaItems();
-        message.success('RMA item added successfully');
-    };
-
     const columns = [
         {
             title: 'Serial Number',
@@ -133,9 +128,9 @@ const StoreRmaPage = () => {
             width: 150
         },
         {
-            title: 'Computer Name',
-            dataIndex: 'computername',
-            key: 'computername',
+            title: 'Store',
+            dataIndex: 'store_name',
+            key: 'store_name',
             width: 150
         },
         {
@@ -151,51 +146,45 @@ const StoreRmaPage = () => {
             width: 150
         },
         {
-            title: 'RAM (GB)',
-            dataIndex: 'ram_gb',
-            key: 'ram_gb',
-            width: 100
-        },
-        {
-            title: 'OS',
-            dataIndex: 'operating_system',
-            key: 'operating_system',
-            width: 150
-        },
-        {
-            title: 'CPU',
-            dataIndex: 'cpu',
-            key: 'cpu',
-            width: 150
-        },
-        {
-            title: 'Disks',
-            dataIndex: 'disks',
-            key: 'disks',
-            width: 150
+            title: 'From Store',
+            dataIndex: 'store_name',
+            key: 'store_name',
+            width: 120,
         },
         {
             title: 'Status',
-            dataIndex: 'store_status',
-            key: 'store_status',
+            dataIndex: 'inventory_status',
+            key: 'inventory_status',
             width: 120,
             render: (status) => {
                 const color = 
-                    !status || status === 'pending' ? 'orange' :
-                    status === 'sent_to_inventory' ? 'blue' :
-                    status === 'completed' ? 'green' :
+                    status === 'receive' ? 'orange' : 
+                    status === 'process' ? 'blue' :
+                    status === 'complete' ? 'green' : 
                     status === 'failed' ? 'red' : 'default';
-                const displayText = status === 'sent_to_inventory' ? 'SENT' : 
-                                  status?.toUpperCase() || 'PENDING';
-                return <Tag color={color}>{displayText}</Tag>;
+                return <Tag color={color}>{status?.toUpperCase()}</Tag>;
             }
         },
         {
-            title: 'RMA Date',
-            dataIndex: 'rma_date',
-            key: 'rma_date',
+            title: 'Received Date',
+            dataIndex: 'received_at',
+            key: 'received_at',
             width: 150,
-            render: (date) => new Date(date).toLocaleString()
+            render: (date) => date ? new Date(date).toLocaleString() : '-'
+        },
+        {
+            title: 'Processed Date',
+            dataIndex: 'processed_at',
+            key: 'processed_at',
+            width: 150,
+            render: (date) => date ? new Date(date).toLocaleString() : '-'
+        },
+        {
+            title: 'Completed Date',
+            dataIndex: 'completed_at',
+            key: 'completed_at',
+            width: 150,
+            render: (date) => date ? new Date(date).toLocaleString() : '-'
         },
         {
             title: 'Reason',
@@ -203,9 +192,9 @@ const StoreRmaPage = () => {
             key: 'reason',
             width: 200,
             render: (text, record) => {
-                const isPending = !record.store_status || record.store_status === 'pending';
+                const isProcessing = record.inventory_status === 'process';
                 
-                if (isPending) {
+                if (isProcessing) {
                     return (
                         <TextArea
                             value={text}
@@ -235,9 +224,9 @@ const StoreRmaPage = () => {
             key: 'notes',
             width: 200,
             render: (text, record) => {
-                const isPending = !record.store_status || record.store_status === 'pending';
+                const isProcessing = record.inventory_status === 'process';
                 
-                if (isPending) {
+                if (isProcessing) {
                     return (
                         <TextArea
                             value={text}
@@ -264,24 +253,33 @@ const StoreRmaPage = () => {
             title: 'Actions',
             key: 'actions',
             fixed: 'right',
-            width: 200,
+            width: 150,
             render: (_, record) => (
                 <Space>
-                    {(!record.store_status || record.store_status === 'pending') && (
+                    {record.inventory_status === 'receive' && (
+                        <Button
+                            type="primary"
+                            size="small"
+                            onClick={() => handleProcess(record.rma_id)}
+                        >
+                            Process
+                        </Button>
+                    )}
+                    {record.inventory_status === 'process' && (
                         <>
                             <Button
                                 type="primary"
                                 size="small"
-                                onClick={() => handleSendToInventory(record.rma_id)}
+                                onClick={() => handleComplete(record.rma_id)}
                             >
-                                Send to Inventory
+                                Complete
                             </Button>
                             <Button
                                 danger
                                 size="small"
-                                onClick={() => handleDelete(record.rma_id)}
+                                onClick={() => handleFail(record.rma_id)}
                             >
-                                Delete
+                                Failed
                             </Button>
                         </>
                     )}
@@ -290,31 +288,26 @@ const StoreRmaPage = () => {
         }
     ];
 
-    const pendingItems = filteredItems.filter(item => !item.store_status || item.store_status === 'pending');
-    const sentItems = filteredItems.filter(item => item.store_status === 'sent_to_inventory');
-    const completedItems = filteredItems.filter(item => item.store_status === 'completed');
-    const failedItems = filteredItems.filter(item => item.store_status === 'failed');
+    const receiveItems = filteredItems.filter(item => item.inventory_status === 'receive');
+    const processItems = filteredItems.filter(item => item.inventory_status === 'process');
+    const completeItems = filteredItems.filter(item => item.inventory_status === 'complete');
+    const failedItems = filteredItems.filter(item => item.inventory_status === 'failed');
 
     return (
         <div style={{ padding: '24px' }}>
             <Space direction="vertical" style={{ width: '100%' }} size="large">
-                <Space>
-                    <Search
-                        placeholder="Search by Serial Number or Notes"
-                        allowClear
-                        onSearch={handleSearch}
-                        style={{ width: 300 }}
-                    />
-                    <Button type="primary" onClick={() => setShowAddModal(true)}>
-                        Add RMA
-                    </Button>
-                </Space>
+                <Search
+                    placeholder="Search by Serial Number or Notes"
+                    allowClear
+                    onSearch={handleSearch}
+                    style={{ width: 300 }}
+                />
 
-                {/* Pending RMA */}
-                <Card title="Pending RMA">
+                {/* Receive RAM */}
+                <Card title="Receive RAM">
                     <Table
                         columns={columns}
-                        dataSource={pendingItems}
+                        dataSource={receiveItems}
                         rowKey="rma_id"
                         loading={loading}
                         scroll={{ x: 1500 }}
@@ -322,11 +315,11 @@ const StoreRmaPage = () => {
                     />
                 </Card>
 
-                {/* Sent to Inventory */}
-                <Card title="Sent to Inventory">
+                {/* Process RAM */}
+                <Card title="Process RAM">
                     <Table
                         columns={columns}
-                        dataSource={sentItems}
+                        dataSource={processItems}
                         rowKey="rma_id"
                         loading={loading}
                         scroll={{ x: 1500 }}
@@ -334,8 +327,8 @@ const StoreRmaPage = () => {
                     />
                 </Card>
 
-                {/* Failed RMA */}
-                <Card title="Failed RMA">
+                {/* Failed RAM */}
+                <Card title="Failed RAM">
                     <Table
                         columns={columns}
                         dataSource={failedItems}
@@ -346,32 +339,13 @@ const StoreRmaPage = () => {
                     />
                 </Card>
 
-                {/* Completed RMA */}
-                <Card title="Completed RMA">
+                {/* Complete RAM */}
+                <Card title="Complete RAM">
                     <Collapse>
                         <Panel header="View Completed Items" key="1">
                             <Table
-                                columns={[
-                                    ...columns,
-                                    {
-                                        title: 'Actions',
-                                        key: 'actions',
-                                        width: 150,
-                                        render: (_, record) => (
-                                            <Space>
-                                                {record.store_status === 'completed' && (
-                                                    <Button
-                                                        type="primary"
-                                                        onClick={() => handleSendToStore(record.rma_id)}
-                                                    >
-                                                        Send to Store
-                                                    </Button>
-                                                )}
-                                            </Space>
-                                        )
-                                    }
-                                ]}
-                                dataSource={completedItems}
+                                columns={columns}
+                                dataSource={completeItems}
                                 rowKey="rma_id"
                                 loading={loading}
                                 scroll={{ x: 1500 }}
@@ -384,17 +358,9 @@ const StoreRmaPage = () => {
                         </Panel>
                     </Collapse>
                 </Card>
-
-                {/* Add RMA Modal */}
-                <AddRmaModal
-                    visible={showAddModal}
-                    onCancel={() => setShowAddModal(false)}
-                    onSuccess={handleAddSuccess}
-                    storeId={storeId}
-                />
             </Space>
         </div>
     );
 };
 
-export default StoreRmaPage; 
+export default InventoryRmaPage; 

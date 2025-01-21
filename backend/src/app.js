@@ -12,6 +12,7 @@ const groupRoutes = require('./routes/groupRoutes');
 const salesRoutes = require('./routes/salesRoutes');
 const rmaRoutes = require('./routes/rmaRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const inventoryRmaRoutes = require('./routes/inventoryRmaRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -45,6 +46,7 @@ app.use('/api/users/groups', groupRoutes);
 app.use('/api/locations', locationRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/rma', rmaRoutes);
+app.use('/api/inventory/rma', inventoryRmaRoutes);
 app.use('/api/orders', orderRoutes);
 
 // Create WebSocket server directly

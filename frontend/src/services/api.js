@@ -185,13 +185,13 @@ export const rmaApi = {
         }
     },
 
-    // Update RMA status
-    updateRmaStatus: async (storeId, rmaId, status) => {
+    // Send to Inventory
+    sendToInventory: async (storeId, rmaId) => {
         try {
-            const response = await api.put(`/rma/${storeId}/${rmaId}/status`, { status });
-            return response.data;
+            const response = await api.put(`/rma/${storeId}/${rmaId}/send-to-inventory`);
+            return response;
         } catch (error) {
-            console.error('Error updating RMA status:', error);
+            console.error('Error sending to inventory:', error);
             throw error;
         }
     },
@@ -214,6 +214,63 @@ export const rmaApi = {
             return response;
         } catch (error) {
             console.error('Error deleting RMA:', error);
+            throw error;
+        }
+    },
+
+    // Get inventory RMA items
+    getInventoryRmaItems: async () => {
+        try {
+            console.log('Calling getInventoryRmaItems API...');
+            const response = await api.get('/inventory/rma');
+            console.log('API response:', response);
+            return response;
+        } catch (error) {
+            console.error('Error fetching inventory RMA items:', error);
+            throw error;
+        }
+    },
+
+    // Process RMA item
+    processRma: async (rmaId) => {
+        try {
+            const response = await api.put(`/inventory/rma/${rmaId}/process`);
+            return response;
+        } catch (error) {
+            console.error('Error processing RMA:', error);
+            throw error;
+        }
+    },
+
+    // Complete RMA item
+    completeRma: async (rmaId) => {
+        try {
+            const response = await api.put(`/inventory/rma/${rmaId}/complete`);
+            return response;
+        } catch (error) {
+            console.error('Error completing RMA:', error);
+            throw error;
+        }
+    },
+
+    // Fail RMA item
+    failRma: async (rmaId) => {
+        try {
+            const response = await api.put(`/inventory/rma/${rmaId}/fail`);
+            return response;
+        } catch (error) {
+            console.error('Error failing RMA:', error);
+            throw error;
+        }
+    },
+
+    // Send RMA item to store inventory
+    sendToStore: async (storeId, rmaId) => {
+        try {
+            const response = await api.put(`/rma/${storeId}/${rmaId}/send-to-store`);
+            return response;
+        } catch (error) {
+            console.error('Error sending RMA to store:', error);
             throw error;
         }
     }
@@ -282,6 +339,31 @@ export const orderApi = {
             return response;
         } catch (error) {
             console.error('Error updating price:', error);
+            throw error;
+        }
+    },
+
+    // Export completed orders as CSV
+    exportOrders: async (storeId, startDate, endDate) => {
+        try {
+            const response = await api.get(`/orders/${storeId}/export`, {
+                params: { startDate, endDate },
+                responseType: 'blob'
+            });
+            
+            // Create a download link
+            const url = window.URL.createObjectURL(new Blob([response]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `orders_${startDate.split('T')[0]}_${endDate.split('T')[0]}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+            
+            return { success: true };
+        } catch (error) {
+            console.error('Error exporting orders:', error);
             throw error;
         }
     }

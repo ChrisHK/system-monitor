@@ -64,7 +64,14 @@ try {
                     r.reason,
                     r.notes,
                     r.rma_date,
-                    r.status,
+                    r.store_status,
+                    r.inventory_status,
+                    r.location_type,
+                    r.received_at,
+                    r.processed_at,
+                    r.completed_at,
+                    r.failed_at,
+                    r.failed_reason,
                     s.name as store_name
                 FROM store_rma r
                 LEFT JOIN system_records sr ON r.record_id = sr.id
@@ -296,6 +303,181 @@ try {
             });
         } catch (error) {
             console.error('Error deleting RMA:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        } finally {
+            client.release();
+        }
+    });
+
+    // Send to Inventory
+    router.put('/:storeId/:rmaId/send-to-inventory', auth, async (req, res) => {
+        const { storeId, rmaId } = req.params;
+        const client = await pool.connect();
+        
+        try {
+            console.log('=== Starting Send to Inventory ===');
+            console.log('Params:', { storeId, rmaId });
+
+            await client.query('BEGIN');
+
+            // 檢查RMA項目是否存在
+            const checkResult = await client.query(`
+                SELECT id, store_status, location_type, inventory_status
+                FROM store_rma 
+                WHERE id = $1 AND store_id = $2
+            `, [rmaId, storeId]);
+
+            console.log('Check result:', checkResult.rows[0]);
+
+            if (checkResult.rows.length === 0) {
+                throw new Error('RMA item not found');
+            }
+
+            // 更新RMA狀態
+            const result = await client.query(`
+                UPDATE store_rma
+                SET 
+                    store_status = 'sent_to_inventory'::rma_store_status,
+                    inventory_status = 'receive'::rma_inventory_status,
+                    location_type = 'inventory',
+                    received_at = CURRENT_TIMESTAMP
+                WHERE id = $1 AND store_id = $2
+                RETURNING *
+            `, [rmaId, storeId]);
+
+            console.log('Update result:', result.rows[0]);
+
+            await client.query('COMMIT');
+            
+            res.json({
+                success: true,
+                rma: result.rows[0]
+            });
+
+            console.log('=== Send to Inventory completed successfully ===');
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('Error sending to inventory:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        } finally {
+            client.release();
+        }
+    });
+
+    // Send RMA item back to store inventory
+    router.put('/:storeId/:rmaId/send-to-store', auth, async (req, res) => {
+        const { storeId, rmaId } = req.params;
+        const client = await pool.connect();
+
+        try {
+            console.log('=== Starting Send to Store ===');
+            console.log('Params:', { storeId, rmaId });
+
+            await client.query('BEGIN');
+
+            // Get RMA item details
+            const rmaQuery = `
+                SELECT r.*, sr.serialnumber, sr.model
+                FROM store_rma r
+                JOIN system_records sr ON r.record_id = sr.id
+                WHERE r.store_id = $1 AND r.id = $2
+            `;
+            console.log('Executing RMA query:', rmaQuery);
+            console.log('Query params:', [storeId, rmaId]);
+            
+            const rmaResult = await client.query(rmaQuery, [storeId, rmaId]);
+            console.log('RMA query result:', rmaResult.rows);
+
+            if (rmaResult.rows.length === 0) {
+                throw new Error('RMA item not found');
+            }
+
+            const rmaItem = rmaResult.rows[0];
+            console.log('RMA item found:', rmaItem);
+
+            // Check if the item is in completed status
+            console.log('Current store_status:', rmaItem.store_status);
+            if (rmaItem.store_status !== 'completed') {
+                throw new Error('Only completed RMA items can be sent back to store inventory');
+            }
+
+            // Check if item already exists in store_items
+            console.log('Checking if item exists in store_items...');
+            const existingItem = await client.query(
+                'SELECT id FROM store_items WHERE store_id = $1 AND record_id = $2',
+                [storeId, rmaItem.record_id]
+            );
+            console.log('Existing item check result:', existingItem.rows);
+
+            if (existingItem.rows.length > 0) {
+                throw new Error('Item already exists in store inventory');
+            }
+
+            // Insert into store_items
+            console.log('Inserting into store_items...');
+            const insertResult = await client.query(
+                'INSERT INTO store_items (store_id, record_id, received_at) VALUES ($1, $2, NOW()) RETURNING *',
+                [storeId, rmaItem.record_id]
+            );
+            console.log('Insert result:', insertResult.rows[0]);
+
+            // Update RMA status
+            console.log('Updating RMA status...');
+            const updateResult = await client.query(`
+                UPDATE store_rma 
+                SET 
+                    store_status = 'sent_to_store'::rma_store_status,
+                    location_type = 'store',
+                    last_updated = CURRENT_TIMESTAMP
+                WHERE id = $1 
+                RETURNING *
+            `, [rmaId]);
+            console.log('Update result:', updateResult.rows[0]);
+
+            // Update item location
+            console.log('Updating item location...');
+            const locationResult = await client.query(`
+                UPDATE item_locations 
+                SET location = 'store', 
+                    store_id = $1,
+                    updated_at = NOW()
+                WHERE serialnumber = $2
+                RETURNING *
+            `, [storeId, rmaItem.serialnumber]);
+            console.log('Location update result:', locationResult.rows[0]);
+
+            await client.query('COMMIT');
+            console.log('=== Send to Store completed successfully ===');
+
+            res.json({
+                success: true,
+                message: 'RMA item sent back to store inventory successfully'
+            });
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('Error sending RMA to store:', error);
+            console.error('Error details:', {
+                name: error.name,
+                message: error.message,
+                code: error.code,
+                detail: error.detail,
+                hint: error.hint,
+                position: error.position,
+                internalPosition: error.internalPosition,
+                internalQuery: error.internalQuery,
+                where: error.where,
+                schema: error.schema,
+                table: error.table,
+                column: error.column,
+                dataType: error.dataType,
+                constraint: error.constraint
+            });
             res.status(500).json({
                 success: false,
                 error: error.message

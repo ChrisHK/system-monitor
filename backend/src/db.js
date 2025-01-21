@@ -1,4 +1,5 @@
 const { Pool } = require('pg');
+const { updateRmaTables } = require('./db/migrations/update_rma_tables');
 
 const pool = new Pool({
     user: process.env.DB_USER,
@@ -63,11 +64,14 @@ const createTables = async () => {
             CREATE INDEX IF NOT EXISTS idx_store_rma_record_id ON store_rma(record_id);
         `);
 
+        // 添加RMA表更新
+        await updateRmaTables();
+
         await client.query('COMMIT');
-        console.log('Tables created successfully');
+        console.log('All tables created and updated successfully');
     } catch (error) {
         await client.query('ROLLBACK');
-        console.error('Error creating tables:', error);
+        console.error('Error creating/updating tables:', error);
         throw error;
     } finally {
         client.release();

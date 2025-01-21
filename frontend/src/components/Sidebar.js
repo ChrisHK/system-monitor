@@ -19,6 +19,7 @@ import {
 import { storeApi, groupApi } from '../services/api';
 import api from '../services/api';
 import './Sidebar.css';
+import { Link } from 'react-router-dom';
 
 const { Sider } = Layout;
 
@@ -183,7 +184,21 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
             {
                 key: '/',
                 icon: <DesktopOutlined />,
-                label: 'Inventory'
+                label: 'Inventory',
+                children: [
+                    {
+                        key: '/inventory',
+                        label: 'Inventory',
+                        icon: <DatabaseOutlined />,
+                        onClick: () => navigate('/inventory')
+                    },
+                    {
+                        key: '/inventory/rma',
+                        label: 'RMA List',
+                        icon: <RollbackOutlined />,
+                        onClick: () => navigate('/inventory/rma')
+                    }
+                ]
             }
         ];
 

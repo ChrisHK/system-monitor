@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage';
 import StoreSalesPage from './pages/StoreSalesPage';
 import StoreRmaPage from './pages/StoreRmaPage';
 import StoreOrdersPage from './pages/StoreOrdersPage';
+import InventoryRmaPage from './pages/InventoryRmaPage';
 import { useAuth } from './contexts/AuthContext';
 import { AuthProvider } from './contexts/AuthContext';
 
@@ -42,6 +43,13 @@ const App = () => {
                         <PrivateRoute>
                             <Layout>
                                 <InventoryPage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="/inventory/rma" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <InventoryRmaPage />
                             </Layout>
                         </PrivateRoute>
                     } />
