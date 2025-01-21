@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Table, Button, message, Input, Collapse } from 'antd';
+import { Card, Table, Button, message, Input, Collapse, Space, Modal } from 'antd';
 import { orderApi, rmaApi } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
+import { ExclamationCircleOutlined } from '@ant-design/icons';
 
 const { TextArea, Search } = Input;
 const { Panel } = Collapse;
@@ -9,6 +11,7 @@ const { Panel } = Collapse;
 const StoreOrdersPage = () => {
     const { storeId } = useParams();
     const navigate = useNavigate();
+    const { isAdmin } = useAuth();
     const [isLoading, setIsLoading] = useState(false);
     const [orders, setOrders] = useState([]);
     const [pendingOrder, setPendingOrder] = useState(null);
@@ -177,6 +180,45 @@ const StoreOrdersPage = () => {
         }
     };
 
+    const handleDeleteOrder = async (storeId, orderId) => {
+        try {
+            const response = await fetch(`${process.env.REACT_APP_API_URL}/orders/${storeId}/${orderId}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                },
+            });
+
+            const data = await response.json();
+            
+            if (response.ok) {
+                message.success('Order deleted successfully');
+                // Refresh the orders list
+                fetchOrders();
+            } else {
+                message.error(data.message || 'Failed to delete order');
+            }
+        } catch (error) {
+            console.error('Error deleting order:', error);
+            message.error('Failed to delete order');
+        }
+    };
+
+    const showDeleteConfirm = (storeId, orderId) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this order?',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This action cannot be undone.',
+            okText: 'Yes',
+            okType: 'danger',
+            cancelText: 'No',
+            onOk() {
+                handleDeleteOrder(storeId, orderId);
+            },
+        });
+    };
+
     const filterOrders = (orders) => {
         if (!searchText) return orders;
 
@@ -316,13 +358,15 @@ const StoreOrdersPage = () => {
             title: 'Actions',
             key: 'actions',
             render: (_, record) => (
-                <Button 
-                    type="link" 
-                    danger 
-                    onClick={() => handleDeleteItem(record.id)}
-                >
-                    Delete
-                </Button>
+                <Space>
+                    <Button 
+                        type="link" 
+                        danger 
+                        onClick={() => handleDeleteItem(record.id)}
+                    >
+                        Delete
+                    </Button>
+                </Space>
             )
         }
     ];
@@ -337,17 +381,28 @@ const StoreOrdersPage = () => {
         return col;
     });
 
-    // Add Return action to completed columns
+    // Add Return and Delete actions to completed columns
     completedColumns.push({
         title: 'Actions',
         key: 'actions',
         render: (_, record) => (
-            <Button 
-                type="primary"
-                onClick={() => handleReturn(record)}
-            >
-                Return
-            </Button>
+            <Space>
+                <Button 
+                    type="primary"
+                    onClick={() => handleReturn(record)}
+                >
+                    Return
+                </Button>
+                {isAdmin() && (
+                    <Button 
+                        type="link" 
+                        danger
+                        onClick={() => showDeleteConfirm(storeId, record.order.id)}
+                    >
+                        Delete
+                    </Button>
+                )}
+            </Space>
         )
     });
 
@@ -392,7 +447,7 @@ const StoreOrdersPage = () => {
                         label: `Order #${order.id} - ${new Date(order.created_at).toLocaleString()}`,
                         children: (
                             <Table
-                                dataSource={order.items}
+                                dataSource={order.items.map(item => ({ ...item, order }))}
                                 columns={completedColumns}
                                 rowKey={record => `completed-${order.id}-${record.recordId || record.id || Date.now()}`}
                                 pagination={false}
@@ -406,4 +461,4 @@ const StoreOrdersPage = () => {
     );
 };
 
-export default StoreOrdersPage; 
+export default StoreOrdersPage;

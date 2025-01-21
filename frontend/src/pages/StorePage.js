@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select, Form, InputNumber } from 'antd';
-import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { storeApi, removeFromOutbound, searchRecords, addToOutbound, sendToStore, getOutboundItems, salesApi, rmaApi, orderApi } from '../services/api';
 import { formatSystemSku } from '../utils/formatters';
@@ -215,8 +215,8 @@ const StorePage = () => {
             }
         } catch (error) {
             console.error('Add to outbound error:', error);
-            if (error.response?.data?.error?.includes('already in outbound')) {
-                message.warning(`Item is already in the outbound list`);
+            if (error.response?.data?.error) {
+                message.warning(error.response.data.error);
             } else {
                 message.error(error.message || 'Failed to add item');
             }
@@ -414,17 +414,41 @@ const StorePage = () => {
     };
 
     const handleSalesSearch = async () => {
+        if (!searchSerialNumber) {
+            message.warning('Please enter a serial number');
+            return;
+        }
+        
         try {
-            const result = await storeApi.searchItems(storeId, searchSerialNumber);
-            if (result.data) {
-                setSelectedItem(result.data);
+            setLoading(true);
+            const response = await storeApi.searchItems(storeId, searchSerialNumber);
+            if (response.data && response.data.success) {
+                const items = response.data.items || [];
+                if (items.length === 0) {
+                    message.warning('No items found with this serial number');
+                    setFilteredRecords([]);
+                    setSearchPerformed(false);
+                    return;
+                }
+                // Process items to ensure unique keys
+                const processedItems = items.map((item, index) => ({
+                    ...item,
+                    uniqueKey: `store-${item.id}-${item.serialnumber}-${item.store_id || storeId}-${item.received_at || Date.now()}-${index}`
+                }));
+                setFilteredRecords(processedItems);
+                setSearchPerformed(true);
             } else {
-                message.error('Item not found');
-                setSelectedItem(null);
+                message.error('Failed to search items');
+                setFilteredRecords([]);
+                setSearchPerformed(false);
             }
         } catch (error) {
-            message.error('Error searching for item');
-            console.error(error);
+            console.error('Search error:', error);
+            message.error('Error searching items');
+            setFilteredRecords([]);
+            setSearchPerformed(false);
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -486,6 +510,34 @@ const StorePage = () => {
             message.error('Error adding item to RMA');
             console.error(error);
         }
+    };
+
+    const handleDeleteItem = async (itemId) => {
+        try {
+            const response = await storeApi.deleteStoreItem(storeId, itemId);
+            if (response && response.success) {
+                message.success('Item deleted successfully');
+                navigate('/inventory/items');
+            } else {
+                message.error('Failed to delete item');
+            }
+        } catch (error) {
+            console.error('Delete error:', error);
+            message.error('Error deleting item');
+        }
+    };
+
+    const showDeleteConfirm = (itemId) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this item?',
+            content: 'This action cannot be undone.',
+            okText: 'Yes',
+            okType: 'danger',
+            cancelText: 'No',
+            onOk() {
+                handleDeleteItem(itemId);
+            },
+        });
     };
 
     const columns = [
@@ -627,36 +679,65 @@ const StorePage = () => {
             width: 150,
             render: formatDate,
             sorter: (a, b) => new Date(a.received_at) - new Date(b.received_at)
+        },
+        user?.role === 'admin' && {
+            title: 'Actions',
+            key: 'actions',
+            width: 100,
+            render: (_, record) => (
+                <Button
+                    type="link"
+                    danger
+                    onClick={() => showDeleteConfirm(record.id)}
+                    icon={<DeleteOutlined />}
+                >
+                    Delete
+                </Button>
+            )
         }
-    ];
+    ].filter(Boolean);
 
-    const handleAddToOrder = async () => {
-        if (!selectedItems.length) {
+    const rowSelection = {
+        selectedRowKeys: selectedItems.map(item => item.uniqueKey || `store-${item.id}-${item.serialnumber}-${item.store_id || storeId}-${item.received_at || Date.now()}`),
+        onChange: (selectedRowKeys, selectedRows) => {
+            console.log('Selected rows:', selectedRows);
+            setSelectedItems(selectedRows);
+        }
+    };
+
+    const handleAddToOrder = async (selectedItems) => {
+        if (!selectedItems || selectedItems.length === 0) {
             message.warning('Please select items to add to order');
             return;
         }
 
         try {
+            console.log('Adding items to order:', selectedItems);
+            // Format items with required fields
             const items = selectedItems.map(item => ({
                 recordId: item.id,
-                notes: ''
+                serialnumber: item.serialnumber,
+                notes: '',
+                price: 0
             }));
 
-            await orderApi.addToOrder(storeId, items);
-            message.success('Items added to order successfully');
-            setSelectedItems([]);
-            setSearchPerformed(false);
-            fetchStoreData();
-        } catch (error) {
-            message.error('Failed to add items to order');
-            console.error(error);
-        }
-    };
+            console.log('Formatted items:', items);
+            const response = await orderApi.addToOrder(storeId, items);
 
-    const rowSelection = {
-        selectedRowKeys: selectedItems.map(item => item.id),
-        onChange: (selectedRowKeys, selectedRows) => {
-            setSelectedItems(selectedRows);
+            if (response && response.success) {
+                message.success('Items added to order successfully');
+                setSelectedItems([]);
+                setSearchPerformed(false);
+                fetchStoreData();
+            } else {
+                const errorMsg = response?.error || 'Failed to add items to order';
+                message.error(errorMsg);
+                console.error('Add to order failed:', errorMsg);
+            }
+        } catch (error) {
+            console.error('Add to order error:', error);
+            const errorMsg = error.response?.data?.error || error.message || 'Error adding items to order';
+            message.error(errorMsg);
         }
     };
 
@@ -677,10 +758,16 @@ const StorePage = () => {
                     {searchPerformed && (
                         <Button
                             type="primary"
-                            onClick={handleAddToOrder}
+                            onClick={() => {
+                                if (selectedItems.length === 0) {
+                                    message.warning('Please select items to add to order');
+                                    return;
+                                }
+                                handleAddToOrder(selectedItems);
+                            }}
                             disabled={!selectedItems.length}
                         >
-                            Add to Order
+                            Add to Order ({selectedItems.length})
                         </Button>
                     )}
                     <Button
@@ -783,7 +870,7 @@ const StorePage = () => {
                     }
                 ]}
                 dataSource={outboundRecords}
-                rowKey="outbound_item_id"
+                rowKey={record => `outbound-${record.outbound_item_id}-${record.serialnumber || 'no-serial'}-${record.created_at || Date.now()}`}
                 loading={outboundLoading}
                 style={{ marginTop: 16 }}
                 pagination={{
@@ -917,7 +1004,7 @@ const StorePage = () => {
                 columns={columns}
                 dataSource={filteredRecords}
                 loading={loading}
-                rowKey="id"
+                rowKey={record => record.uniqueKey || `store-${record.id}-${record.serialnumber}-${record.store_id || storeId}-${record.received_at || Date.now()}`}
                 scroll={{ x: true }}
                 pagination={{
                     total: filteredRecords.length,

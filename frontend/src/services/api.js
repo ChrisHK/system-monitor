@@ -273,6 +273,17 @@ export const rmaApi = {
             console.error('Error sending RMA to store:', error);
             throw error;
         }
+    },
+
+    // Delete RMA from inventory
+    deleteInventoryRma: async (rmaId) => {
+        try {
+            const response = await api.delete(`/inventory/rma/${rmaId}`);
+            return response;
+        } catch (error) {
+            console.error('Error deleting inventory RMA:', error);
+            throw error;
+        }
     }
 };
 

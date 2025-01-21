@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Table, Card, message, Space, Tag, Button, Input, Collapse } from 'antd';
+import { Table, Card, message, Space, Tag, Button, Input, Collapse, Modal } from 'antd';
+import { DeleteOutlined } from '@ant-design/icons';
 import { rmaApi } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
 const { Search } = Input;
 const { Panel } = Collapse;
 const { TextArea } = Input;
 
 const InventoryRmaPage = () => {
+    const { user } = useAuth();
     const [loading, setLoading] = useState(false);
     const [rmaItems, setRmaItems] = useState([]);
     const [filteredItems, setFilteredItems] = useState([]);
@@ -126,6 +129,32 @@ const InventoryRmaPage = () => {
         } finally {
             setEditingItem(null);
         }
+    };
+
+    const handleDelete = async (rmaId) => {
+        try {
+            const response = await rmaApi.deleteInventoryRma(rmaId);
+            if (response?.success) {
+                message.success('RMA item deleted successfully');
+                fetchRmaItems();
+            }
+        } catch (error) {
+            console.error('Error deleting RMA:', error);
+            message.error('Failed to delete RMA item');
+        }
+    };
+
+    const showDeleteConfirm = (rmaId) => {
+        Modal.confirm({
+            title: 'Are you sure you want to delete this RMA item?',
+            content: 'This action cannot be undone.',
+            okText: 'Yes',
+            okType: 'danger',
+            cancelText: 'No',
+            onOk() {
+                handleDelete(rmaId);
+            },
+        });
     };
 
     const columns = [
@@ -257,7 +286,23 @@ const InventoryRmaPage = () => {
                 return <div style={{ whiteSpace: 'pre-wrap' }}>{text}</div>;
             }
         },
-    ];
+        user?.role === 'admin' && {
+            title: 'Actions',
+            key: 'actions',
+            fixed: 'right',
+            width: 100,
+            render: (_, record) => (
+                <Button
+                    type="link"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => showDeleteConfirm(record.rma_id)}
+                >
+                    Delete
+                </Button>
+            )
+        }
+    ].filter(Boolean);
 
     const receiveItems = useMemo(() => 
         filteredItems.filter(item => item.inventory_status === 'receive'),
@@ -293,12 +338,12 @@ const InventoryRmaPage = () => {
                 <Card title="Receive RAM">
                     <Table
                         columns={[
-                            ...columns,
+                            ...columns.filter(col => col.key !== 'actions'),
                             {
                                 title: 'Actions',
                                 key: 'actions',
                                 fixed: 'right',
-                                width: 150,
+                                width: 200,
                                 render: (_, record) => (
                                     <Space>
                                         <Button
@@ -315,6 +360,16 @@ const InventoryRmaPage = () => {
                                         >
                                             Fail
                                         </Button>
+                                        {user?.role === 'admin' && (
+                                            <Button
+                                                type="link"
+                                                danger
+                                                icon={<DeleteOutlined />}
+                                                onClick={() => showDeleteConfirm(record.rma_id)}
+                                            >
+                                                Delete
+                                            </Button>
+                                        )}
                                     </Space>
                                 )
                             }
@@ -331,12 +386,12 @@ const InventoryRmaPage = () => {
                 <Card title="Process RAM">
                     <Table
                         columns={[
-                            ...columns,
+                            ...columns.filter(col => col.key !== 'actions'),
                             {
                                 title: 'Actions',
                                 key: 'actions',
                                 fixed: 'right',
-                                width: 150,
+                                width: 200,
                                 render: (_, record) => (
                                     <Space>
                                         <Button
@@ -353,6 +408,16 @@ const InventoryRmaPage = () => {
                                         >
                                             Fail
                                         </Button>
+                                        {user?.role === 'admin' && (
+                                            <Button
+                                                type="link"
+                                                danger
+                                                icon={<DeleteOutlined />}
+                                                onClick={() => showDeleteConfirm(record.rma_id)}
+                                            >
+                                                Delete
+                                            </Button>
+                                        )}
                                     </Space>
                                 )
                             }
@@ -368,7 +433,25 @@ const InventoryRmaPage = () => {
                 {/* Complete RAM */}
                 <Card title="Complete RAM">
                     <Table
-                        columns={columns}
+                        columns={[
+                            ...columns.filter(col => col.key !== 'actions'),
+                            user?.role === 'admin' && {
+                                title: 'Actions',
+                                key: 'actions',
+                                fixed: 'right',
+                                width: 100,
+                                render: (_, record) => (
+                                    <Button
+                                        type="link"
+                                        danger
+                                        icon={<DeleteOutlined />}
+                                        onClick={() => showDeleteConfirm(record.rma_id)}
+                                    >
+                                        Delete
+                                    </Button>
+                                )
+                            }
+                        ].filter(Boolean)}
                         dataSource={completeItems}
                         rowKey="rma_id"
                         loading={loading}
@@ -380,7 +463,25 @@ const InventoryRmaPage = () => {
                 {/* Failed RAM */}
                 <Card title="Failed RAM">
                     <Table
-                        columns={columns}
+                        columns={[
+                            ...columns.filter(col => col.key !== 'actions'),
+                            user?.role === 'admin' && {
+                                title: 'Actions',
+                                key: 'actions',
+                                fixed: 'right',
+                                width: 100,
+                                render: (_, record) => (
+                                    <Button
+                                        type="link"
+                                        danger
+                                        icon={<DeleteOutlined />}
+                                        onClick={() => showDeleteConfirm(record.rma_id)}
+                                    >
+                                        Delete
+                                    </Button>
+                                )
+                            }
+                        ].filter(Boolean)}
                         dataSource={failedItems}
                         rowKey="rma_id"
                         loading={loading}

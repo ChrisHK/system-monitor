@@ -1,7 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { auth } = require('../middleware/auth');
+const { auth, checkRole } = require('../middleware/auth');
+const { catchAsync } = require('../middleware/errorHandler');
+const { ValidationError, NotFoundError, AuthorizationError } = require('../middleware/errorTypes');
 
 // Get store orders
 router.get('/:storeId', auth, async (req, res) => {
@@ -354,5 +356,57 @@ router.put('/:storeId/items/:itemId/price', auth, async (req, res) => {
         client.release();
     }
 });
+
+// Delete order (admin only)
+router.delete('/:storeId/:orderId', auth, checkRole(['admin']), catchAsync(async (req, res) => {
+    const { storeId, orderId } = req.params;
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+
+        // Get order details and verify it exists
+        const orderResult = await client.query(`
+            SELECT o.*, oi.record_id
+            FROM store_orders o
+            LEFT JOIN store_order_items oi ON o.id = oi.order_id
+            WHERE o.id = $1 AND o.store_id = $2
+        `, [orderId, storeId]);
+
+        if (orderResult.rows.length === 0) {
+            throw new NotFoundError('Order not found');
+        }
+
+        // If order is completed, return items to store inventory
+        if (orderResult.rows[0].status === 'completed') {
+            for (const row of orderResult.rows) {
+                if (row.record_id) {
+                    await client.query(
+                        'INSERT INTO store_items (store_id, record_id) VALUES ($1, $2)',
+                        [storeId, row.record_id]
+                    );
+                }
+            }
+        }
+
+        // Delete order items first
+        await client.query('DELETE FROM store_order_items WHERE order_id = $1', [orderId]);
+        
+        // Then delete the order
+        await client.query('DELETE FROM store_orders WHERE id = $1', [orderId]);
+
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            message: 'Order deleted successfully'
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
+}));
 
 module.exports = router; 

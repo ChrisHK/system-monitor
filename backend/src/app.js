@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const WebSocket = require('ws');
+const { errorHandler } = require('./middleware/errorHandler');
 const recordRoutes = require('./routes/recordRoutes');
 const outboundRoutes = require('./routes/outboundRoutes');
 const storeRoutes = require('./routes/storeRoutes');
@@ -96,35 +97,16 @@ app.get('/', (req, res) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Detailed Error:', {
-        message: err.message,
-        stack: err.stack,
-        code: err.code,
-        name: err.name,
-        path: req.path,
-        method: req.method,
-        headers: req.headers,
-        query: req.query,
-        params: req.params,
-        body: req.body
-    });
-    
-    res.status(500).json({
-        success: false,
-        error: 'Internal Server Error',
-        details: err.message,
-        path: req.path
-    });
-});
+app.use(errorHandler);
 
 // 404 handling
 app.use((req, res) => {
-    console.log('404 Not Found:', req.url);
     res.status(404).json({
         success: false,
-        error: 'Not Found',
-        path: req.url
+        error: {
+            code: 'NOT_FOUND',
+            message: `Path ${req.url} not found`
+        }
     });
 });
 

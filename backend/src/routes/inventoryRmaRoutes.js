@@ -333,4 +333,54 @@ router.get('/search/:serialNumber', auth, async (req, res) => {
     }
 });
 
+// Delete RMA item
+router.delete('/:rmaId', auth, checkRole(['admin']), async (req, res) => {
+    let client;
+    const { rmaId } = req.params;
+    
+    try {
+        client = await pool.connect();
+        
+        await client.query('BEGIN');
+
+        // Check if RMA exists and is in inventory
+        const checkResult = await client.query(`
+            SELECT id, inventory_status 
+            FROM store_rma 
+            WHERE id = $1 AND location_type = 'inventory'
+        `, [rmaId]);
+
+        if (checkResult.rows.length === 0) {
+            throw new Error('RMA item not found');
+        }
+
+        // Delete RMA
+        const result = await client.query(`
+            DELETE FROM store_rma
+            WHERE id = $1
+            RETURNING *
+        `, [rmaId]);
+
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            message: 'RMA item deleted successfully'
+        });
+    } catch (error) {
+        if (client) {
+            await client.query('ROLLBACK');
+        }
+        console.error('Error deleting RMA:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        if (client) {
+            client.release();
+        }
+    }
+});
+
 module.exports = router; 
