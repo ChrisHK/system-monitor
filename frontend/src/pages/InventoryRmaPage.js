@@ -22,8 +22,8 @@ const InventoryRmaPage = () => {
             const response = await rmaApi.getInventoryRmaItems();
             console.log('Inventory RMA response:', response);
             
-            if (response?.data?.success) {
-                const items = response.data.rma_items.map(item => ({
+            if (response?.success && Array.isArray(response.rma_items)) {
+                const items = response.rma_items.map(item => ({
                     ...item,
                     key: item.rma_id
                 }));
@@ -64,7 +64,7 @@ const InventoryRmaPage = () => {
     const handleProcess = async (rmaId) => {
         try {
             const response = await rmaApi.processRma(rmaId);
-            if (response?.data?.success) {
+            if (response?.success) {
                 message.success('RMA item processed successfully');
                 fetchRmaItems();
             }
@@ -77,7 +77,7 @@ const InventoryRmaPage = () => {
     const handleComplete = async (rmaId) => {
         try {
             const response = await rmaApi.completeRma(rmaId);
-            if (response?.data?.success) {
+            if (response?.success) {
                 message.success('RMA item completed successfully');
                 fetchRmaItems();
             }
@@ -90,7 +90,7 @@ const InventoryRmaPage = () => {
     const handleFail = async (rmaId) => {
         try {
             const response = await rmaApi.failRma(rmaId);
-            if (response?.data?.success) {
+            if (response?.success) {
                 message.success('RMA item marked as failed');
                 fetchRmaItems();
             }
