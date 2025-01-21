@@ -9,6 +9,9 @@ const storeRoutes = require('./routes/storeRoutes');
 const userRoutes = require('./routes/userRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const groupRoutes = require('./routes/groupRoutes');
+const salesRoutes = require('./routes/salesRoutes');
+const rmaRoutes = require('./routes/rmaRoutes');
+const orderRoutes = require('./routes/orderRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +43,9 @@ app.use('/api/stores', storeRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/users/groups', groupRoutes);
 app.use('/api/locations', locationRoutes);
+app.use('/api/sales', salesRoutes);
+app.use('/api/rma', rmaRoutes);
+app.use('/api/orders', orderRoutes);
 
 // Create WebSocket server directly
 const wss = new WebSocket.Server({ 
@@ -89,11 +95,24 @@ app.get('/', (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
+    console.error('Detailed Error:', {
+        message: err.message,
+        stack: err.stack,
+        code: err.code,
+        name: err.name,
+        path: req.path,
+        method: req.method,
+        headers: req.headers,
+        query: req.query,
+        params: req.params,
+        body: req.body
+    });
+    
     res.status(500).json({
         success: false,
         error: 'Internal Server Error',
-        details: err.message
+        details: err.message,
+        path: req.path
     });
 });
 

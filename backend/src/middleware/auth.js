@@ -2,38 +2,67 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db');
 
 const auth = async (req, res, next) => {
+    console.log('=== Starting Authentication ===');
+    console.log('Headers:', req.headers);
+    
     try {
         const token = req.header('Authorization')?.replace('Bearer ', '');
+        console.log('Token present:', !!token);
+        
         if (!token) {
+            console.log('Authentication failed: No token provided');
             throw new Error('No token provided');
         }
 
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const result = await pool.query(`
-            SELECT 
-                u.*,
-                r.name as role_name,
-                g.name as group_name,
-                g.id as group_id,
-                ARRAY_AGG(DISTINCT gsp.store_id) FILTER (WHERE gsp.store_id IS NOT NULL) as permitted_stores
-            FROM users u
-            JOIN roles r ON u.role_id = r.id
-            LEFT JOIN groups g ON u.group_id = g.id
-            LEFT JOIN group_store_permissions gsp ON g.id = gsp.group_id
-            WHERE u.id = $1 AND u.is_active = true
-            GROUP BY u.id, r.name, g.name, g.id
-        `, [decoded.id]);
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            console.log('Token decoded successfully:', { userId: decoded.id });
+            
+            const result = await pool.query(`
+                SELECT 
+                    u.*,
+                    r.name as role_name,
+                    g.name as group_name,
+                    g.id as group_id,
+                    ARRAY_AGG(DISTINCT gsp.store_id) FILTER (WHERE gsp.store_id IS NOT NULL) as permitted_stores
+                FROM users u
+                JOIN roles r ON u.role_id = r.id
+                LEFT JOIN groups g ON u.group_id = g.id
+                LEFT JOIN group_store_permissions gsp ON g.id = gsp.group_id
+                WHERE u.id = $1 AND u.is_active = true
+                GROUP BY u.id, r.name, g.name, g.id
+            `, [decoded.id]);
 
-        if (result.rows.length === 0) {
-            throw new Error('User not found or inactive');
+            console.log('User query result rows:', result.rows.length);
+            
+            if (result.rows.length === 0) {
+                console.log('Authentication failed: User not found or inactive');
+                throw new Error('User not found or inactive');
+            }
+
+            req.user = result.rows[0];
+            console.log('Authentication successful for user:', {
+                id: req.user.id,
+                role: req.user.role_name,
+                group: req.user.group_name
+            });
+            
+            next();
+        } catch (jwtError) {
+            console.error('JWT verification failed:', jwtError);
+            throw new Error('Invalid token');
         }
-
-        req.user = result.rows[0];
-        next();
     } catch (error) {
+        console.error('=== Authentication Error ===', {
+            message: error.message,
+            stack: error.stack,
+            name: error.name
+        });
+        
         res.status(401).json({
             success: false,
-            error: 'Please authenticate'
+            error: 'Please authenticate',
+            detail: error.message
         });
     }
 };

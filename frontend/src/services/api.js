@@ -117,4 +117,174 @@ export const checkItemLocation = (serialNumber) => api.get(`/locations/${serialN
 export const checkItemLocations = (serialNumbers) => api.post('/locations/batch', { serialNumbers });
 export const updateLocation = (serialNumber, data) => api.post(`/locations/${serialNumber}`, data);
 
+export const salesApi = {
+    // Get store sales
+    getSales: async (storeId) => {
+        try {
+            const response = await api.get(`/sales/${storeId}`);
+            return response.data;
+        } catch (error) {
+            console.error('Error fetching sales:', error);
+            throw error;
+        }
+    },
+
+    // Add item to sales
+    addToSales: async (storeId, data) => {
+        try {
+            const response = await api.post(`/sales/${storeId}`, data);
+            return response.data;
+        } catch (error) {
+            console.error('Error adding to sales:', error);
+            throw error;
+        }
+    },
+
+    // Search sales by serial number
+    searchSales: async (storeId, serialNumber) => {
+        try {
+            const response = await api.get(`/sales/${storeId}/search/${serialNumber}`);
+            return response.data;
+        } catch (error) {
+            console.error('Error searching sales:', error);
+            throw error;
+        }
+    }
+};
+
+export const rmaApi = {
+    // Get store RMA items
+    getRmaItems: async (storeId) => {
+        try {
+            return await api.get(`/rma/${storeId}`);
+        } catch (error) {
+            console.error('Error fetching RMA items:', error);
+            throw error;
+        }
+    },
+
+    // Add item to RMA
+    addToRma: async (storeId, data) => {
+        try {
+            const response = await api.post(`/rma/${storeId}`, data);
+            return response;
+        } catch (error) {
+            console.error('Error adding to RMA:', error);
+            throw error;
+        }
+    },
+
+    // Search RMA by serial number
+    searchRma: async (storeId, serialNumber) => {
+        try {
+            const response = await api.get(`/rma/${storeId}/search/${serialNumber}`);
+            return response.data;
+        } catch (error) {
+            console.error('Error searching RMA:', error);
+            throw error;
+        }
+    },
+
+    // Update RMA status
+    updateRmaStatus: async (storeId, rmaId, status) => {
+        try {
+            const response = await api.put(`/rma/${storeId}/${rmaId}/status`, { status });
+            return response.data;
+        } catch (error) {
+            console.error('Error updating RMA status:', error);
+            throw error;
+        }
+    },
+
+    // Update RMA fields
+    updateRmaFields: async (storeId, rmaId, fields) => {
+        try {
+            const response = await api.put(`/rma/${storeId}/${rmaId}/fields`, fields);
+            return response;
+        } catch (error) {
+            console.error('Error updating RMA fields:', error);
+            throw error;
+        }
+    },
+
+    // Delete RMA
+    deleteRma: async (storeId, rmaId) => {
+        try {
+            const response = await api.delete(`/rma/${storeId}/${rmaId}`);
+            return response;
+        } catch (error) {
+            console.error('Error deleting RMA:', error);
+            throw error;
+        }
+    }
+};
+
+export const orderApi = {
+    // Get store orders
+    getOrders: async (storeId) => {
+        try {
+            const response = await api.get(`/orders/${storeId}`);
+            return response;
+        } catch (error) {
+            console.error('Error fetching orders:', error);
+            throw error;
+        }
+    },
+
+    // Add items to order
+    addToOrder: async (storeId, items) => {
+        try {
+            const response = await api.post(`/orders/${storeId}`, { items });
+            return response;
+        } catch (error) {
+            console.error('Error adding to order:', error);
+            throw error;
+        }
+    },
+
+    // Save order (change status to completed)
+    saveOrder: async (storeId, orderId) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/${orderId}/save`);
+            return response;
+        } catch (error) {
+            console.error('Error saving order:', error);
+            throw error;
+        }
+    },
+
+    // Delete order item
+    deleteOrderItem: async (storeId, itemId) => {
+        try {
+            const response = await api.delete(`/orders/${storeId}/items/${itemId}`);
+            return response;
+        } catch (error) {
+            console.error('Error deleting order item:', error);
+            throw error;
+        }
+    },
+
+    // Update order item notes
+    updateOrderItemNotes: async (storeId, itemId, notes) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/items/${itemId}/notes`, { notes });
+            return response;
+        } catch (error) {
+            console.error('Error updating notes:', error);
+            throw error;
+        }
+    },
+
+    // Update order item price
+    updateOrderItemPrice: async (storeId, itemId, price) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/items/${itemId}/price`, { price });
+            return response;
+        } catch (error) {
+            console.error('Error updating price:', error);
+            throw error;
+        }
+    }
+};
+
 export default api; 

@@ -11,7 +11,10 @@ import {
     DatabaseOutlined,
     PlusOutlined,
     BranchesOutlined,
-    DesktopOutlined
+    DesktopOutlined,
+    UnorderedListOutlined,
+    ShoppingCartOutlined,
+    RollbackOutlined
 } from '@ant-design/icons';
 import { storeApi, groupApi } from '../services/api';
 import api from '../services/api';
@@ -164,7 +167,10 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
     const getSelectedKey = () => {
         const path = location.pathname;
         if (path === '/') return '/inventory';
-        if (path.startsWith('/stores/')) return path;
+        if (path.startsWith('/stores/')) {
+            // Return the exact path for store routes (including sales and rma)
+            return path;
+        }
         return path;
     };
 
@@ -218,12 +224,29 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
 
             // 添加商店列表
             const storeItems = stores.map(store => ({
-                key: `/stores/${store.id}`,
+                key: `store-${store.id}`,
                 label: store.name,
-                onClick: () => {
-                    console.log(`Navigating to store ${store.id}`);
-                    navigate(`/stores/${store.id}`);
-                }
+                icon: <ShopOutlined />,
+                children: [
+                    {
+                        key: `/stores/${store.id}`,
+                        label: 'Inventory',
+                        icon: <UnorderedListOutlined />,
+                        onClick: () => navigate(`/stores/${store.id}`)
+                    },
+                    {
+                        key: `/stores/${store.id}/orders`,
+                        label: 'Orders',
+                        icon: <ShoppingCartOutlined />,
+                        onClick: () => navigate(`/stores/${store.id}/orders`)
+                    },
+                    {
+                        key: `/stores/${store.id}/rma`,
+                        label: 'RMA',
+                        icon: <RollbackOutlined />,
+                        onClick: () => navigate(`/stores/${store.id}/rma`)
+                    }
+                ]
             }));
 
             branchesItem.children.push(...storeItems);

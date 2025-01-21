@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select } from 'antd';
+import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select, Form, InputNumber } from 'antd';
 import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
-import { storeApi, removeFromOutbound, searchRecords, addToOutbound, sendToStore, getOutboundItems } from '../services/api';
+import { storeApi, removeFromOutbound, searchRecords, addToOutbound, sendToStore, getOutboundItems, salesApi, rmaApi, orderApi } from '../services/api';
 import { formatSystemSku } from '../utils/formatters';
 
 const { Search } = Input;
@@ -42,17 +42,34 @@ const StorePage = () => {
     const [outboundRecords, setOutboundRecords] = useState([]);
     const [outboundLoading, setOutboundLoading] = useState(false);
     const [selectedOutboundStore, setSelectedOutboundStore] = useState(null);
+    const [salesModalVisible, setSalesModalVisible] = useState(false);
+    const [rmaModalVisible, setRmaModalVisible] = useState(false);
+    const [searchSerialNumber, setSearchSerialNumber] = useState('');
+    const [selectedItem, setSelectedItem] = useState(null);
+    const [price, setPrice] = useState(0);
+    const [reason, setReason] = useState('');
+    const [notes, setNotes] = useState('');
+    const [form] = Form.useForm();
+    const [selectedItems, setSelectedItems] = useState([]);
+    const [searchPerformed, setSearchPerformed] = useState(false);
 
     // Modify stores fetching to use storeApi
     const fetchStores = useCallback(async () => {
         try {
+            console.log('Fetching stores list...');
             const response = await storeApi.getStores();
+            console.log('Stores response:', response);
+            
             if (response?.success) {
                 const storesList = response.stores.map(store => ({
                     value: store.id.toString(),
                     label: store.name
                 }));
+                console.log('Processed stores list:', storesList);
                 setStores(storesList);
+            } else {
+                console.error('Failed to fetch stores:', response);
+                message.error('Failed to load stores');
             }
         } catch (error) {
             console.error('Error fetching stores:', error);
@@ -65,46 +82,58 @@ const StorePage = () => {
 
         try {
             setLoading(true);
+            console.log('Fetching store data for storeId:', storeId);
+            
             // First get the store details from the stores list
             const storesResponse = await storeApi.getStores();
             console.log('Stores response:', storesResponse);
             
             if (storesResponse?.success) {
                 const currentStore = storesResponse.stores.find(store => store.id.toString() === storeId.toString());
+                console.log('Current store:', currentStore);
+                
                 if (currentStore) {
                     setStore(currentStore);
+                    
+                    // Then get the store items
+                    console.log('Fetching items for store:', currentStore.name);
+                    const itemsResponse = await storeApi.getStoreItems(storeId);
+                    console.log('Store items response:', itemsResponse);
+                    
+                    if (itemsResponse?.success && itemsResponse.items) {
+                        const items = itemsResponse.items.map(item => ({
+                            ...item,
+                            location: currentStore.name,
+                            store_name: currentStore.name
+                        }));
+                        setRecords(items);
+                        setFilteredRecords(items);
+                    } else {
+                        console.error('Failed to fetch store items:', itemsResponse);
+                        message.error('Failed to load store items');
+                    }
                 } else {
+                    console.error('Store not found in the list:', storeId);
                     message.error('Store not found');
                     navigate('/inventory');
-                    return;
                 }
-            }
-
-            // Then get the store items
-            const itemsResponse = await storeApi.getStoreItems(storeId);
-            console.log('Store items response:', itemsResponse);
-            
-            if (itemsResponse?.success && itemsResponse.items) {
-                const items = itemsResponse.items.map(item => ({
-                    ...item,
-                    location: store?.name || '',
-                    store_name: store?.name || ''
-                }));
-                setRecords(items);
-                setFilteredRecords(items);
+            } else {
+                console.error('Failed to fetch stores:', storesResponse);
+                message.error('Failed to load stores');
+                navigate('/inventory');
             }
         } catch (error) {
             console.error('Error loading store data:', error);
             if (error.response?.status === 404) {
                 message.error('Store not found');
-                navigate('/inventory');
             } else {
                 message.error('Failed to load store data');
             }
+            navigate('/inventory');
         } finally {
             setLoading(false);
         }
-    }, [storeId, user, navigate, store?.name]);
+    }, [storeId, user, navigate]);
 
     useEffect(() => {
         if (!user) return;
@@ -112,19 +141,20 @@ const StorePage = () => {
         const userStoreId = user.store_id?.toString();
         const requestedStoreId = storeId?.toString();
 
-        if (user.role !== 'admin' && userStoreId !== requestedStoreId) {
+        // 如果是管理員或者是用戶自己的商店,則獲取數據
+        if (user.role === 'admin' || userStoreId === requestedStoreId) {
+            fetchStores();
+            fetchStoreData();
+        } else {
             message.error('Access denied');
             navigate('/inventory');
-            return;
         }
-
-        fetchStores();
-        fetchStoreData();
     }, [user, storeId, navigate, fetchStoreData, fetchStores]);
 
     const handleSearch = (value) => {
         if (!value) {
             setFilteredRecords(records);
+            setSearchPerformed(false);
             return;
         }
         
@@ -134,6 +164,7 @@ const StorePage = () => {
             record.model?.toLowerCase().includes(value.toLowerCase())
         );
         setFilteredRecords(filtered);
+        setSearchPerformed(true);
     };
 
     const handleRefresh = () => {
@@ -366,6 +397,97 @@ const StorePage = () => {
         }
     };
 
+    const handleSalesClick = () => {
+        setSalesModalVisible(true);
+        setSearchSerialNumber('');
+        setSelectedItem(null);
+        setPrice(0);
+        setNotes('');
+    };
+
+    const handleRmaClick = () => {
+        setRmaModalVisible(true);
+        setSearchSerialNumber('');
+        setSelectedItem(null);
+        setReason('');
+        setNotes('');
+    };
+
+    const handleSalesSearch = async () => {
+        try {
+            const result = await storeApi.searchItems(storeId, searchSerialNumber);
+            if (result.data) {
+                setSelectedItem(result.data);
+            } else {
+                message.error('Item not found');
+                setSelectedItem(null);
+            }
+        } catch (error) {
+            message.error('Error searching for item');
+            console.error(error);
+        }
+    };
+
+    const handleRmaSearch = async () => {
+        try {
+            const result = await salesApi.searchSales(storeId, searchSerialNumber);
+            if (result.data) {
+                setSelectedItem(result.data);
+            } else {
+                message.error('Item not found in sales');
+                setSelectedItem(null);
+            }
+        } catch (error) {
+            message.error('Error searching for item');
+            console.error(error);
+        }
+    };
+
+    const handleSalesSubmit = async () => {
+        try {
+            if (!selectedItem || !price) {
+                message.error('Please select an item and enter a price');
+                return;
+            }
+
+            await salesApi.addToSales(storeId, {
+                recordId: selectedItem.id,
+                price,
+                notes
+            });
+
+            message.success('Item added to sales successfully');
+            setSalesModalVisible(false);
+            fetchStoreData(); // Refresh the items list
+            navigate(`/stores/${storeId}/sales`);
+        } catch (error) {
+            message.error('Error adding item to sales');
+            console.error(error);
+        }
+    };
+
+    const handleRmaSubmit = async () => {
+        try {
+            if (!selectedItem || !reason) {
+                message.error('Please select an item and enter a reason');
+                return;
+            }
+
+            await rmaApi.addToRma(storeId, {
+                recordId: selectedItem.id,
+                reason,
+                notes
+            });
+
+            message.success('Item added to RMA successfully');
+            setRmaModalVisible(false);
+            navigate(`/stores/${storeId}/rma`);
+        } catch (error) {
+            message.error('Error adding item to RMA');
+            console.error(error);
+        }
+    };
+
     const columns = [
         {
             title: 'Location',
@@ -508,7 +630,37 @@ const StorePage = () => {
         }
     ];
 
-    // Modify toolbar to use handleOutboundModalOpen
+    const handleAddToOrder = async () => {
+        if (!selectedItems.length) {
+            message.warning('Please select items to add to order');
+            return;
+        }
+
+        try {
+            const items = selectedItems.map(item => ({
+                recordId: item.id,
+                notes: ''
+            }));
+
+            await orderApi.addToOrder(storeId, items);
+            message.success('Items added to order successfully');
+            setSelectedItems([]);
+            setSearchPerformed(false);
+            fetchStoreData();
+        } catch (error) {
+            message.error('Failed to add items to order');
+            console.error(error);
+        }
+    };
+
+    const rowSelection = {
+        selectedRowKeys: selectedItems.map(item => item.id),
+        onChange: (selectedRowKeys, selectedRows) => {
+            setSelectedItems(selectedRows);
+        }
+    };
+
+    // Modify renderToolbar function
     const renderToolbar = () => (
         <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
             <Col flex="auto">
@@ -522,6 +674,15 @@ const StorePage = () => {
             </Col>
             <Col>
                 <Space>
+                    {searchPerformed && (
+                        <Button
+                            type="primary"
+                            onClick={handleAddToOrder}
+                            disabled={!selectedItems.length}
+                        >
+                            Add to Order
+                        </Button>
+                    )}
                     <Button
                         type="primary"
                         icon={<ExportOutlined />}
@@ -635,6 +796,101 @@ const StorePage = () => {
         </Modal>
     );
 
+    const renderSalesModal = () => (
+        <Modal
+            title="Add to Sales"
+            open={salesModalVisible}
+            onOk={handleSalesSubmit}
+            onCancel={() => setSalesModalVisible(false)}
+        >
+            <Form form={form} layout="vertical">
+                <Form.Item label="Serial Number">
+                    <Space>
+                        <Input
+                            value={searchSerialNumber}
+                            onChange={(e) => setSearchSerialNumber(e.target.value)}
+                            placeholder="Enter serial number"
+                        />
+                        <Button onClick={handleSalesSearch}>Search</Button>
+                    </Space>
+                </Form.Item>
+                {selectedItem && (
+                    <>
+                        <Form.Item label="Item Details">
+                            <div>
+                                <p>Computer Name: {selectedItem.computerName}</p>
+                                <p>Model: {selectedItem.model}</p>
+                            </div>
+                        </Form.Item>
+                        <Form.Item label="Price">
+                            <InputNumber
+                                value={price}
+                                onChange={setPrice}
+                                min={0}
+                                precision={2}
+                                style={{ width: '100%' }}
+                            />
+                        </Form.Item>
+                        <Form.Item label="Notes">
+                            <Input.TextArea
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                                rows={4}
+                            />
+                        </Form.Item>
+                    </>
+                )}
+            </Form>
+        </Modal>
+    );
+
+    const renderRmaModal = () => (
+        <Modal
+            title="Add to RMA"
+            open={rmaModalVisible}
+            onOk={handleRmaSubmit}
+            onCancel={() => setRmaModalVisible(false)}
+        >
+            <Form form={form} layout="vertical">
+                <Form.Item label="Serial Number">
+                    <Space>
+                        <Input
+                            value={searchSerialNumber}
+                            onChange={(e) => setSearchSerialNumber(e.target.value)}
+                            placeholder="Enter serial number"
+                        />
+                        <Button onClick={handleRmaSearch}>Search</Button>
+                    </Space>
+                </Form.Item>
+                {selectedItem && (
+                    <>
+                        <Form.Item label="Item Details">
+                            <div>
+                                <p>Computer Name: {selectedItem.computerName}</p>
+                                <p>Model: {selectedItem.model}</p>
+                            </div>
+                        </Form.Item>
+                        <Form.Item label="Reason">
+                            <Input.TextArea
+                                value={reason}
+                                onChange={(e) => setReason(e.target.value)}
+                                rows={4}
+                                placeholder="Enter RMA reason"
+                            />
+                        </Form.Item>
+                        <Form.Item label="Notes">
+                            <Input.TextArea
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                                rows={4}
+                            />
+                        </Form.Item>
+                    </>
+                )}
+            </Form>
+        </Modal>
+    );
+
     return (
         <div className="page-container">
             <Row gutter={[16, 16]} className="header-row">
@@ -654,24 +910,27 @@ const StorePage = () => {
                 </Col>
             </Row>
 
-                        {renderToolbar()}
+            {renderToolbar()}
             
-                        <Table
-                            columns={columns}
+            <Table
+                rowSelection={searchPerformed ? rowSelection : undefined}
+                columns={columns}
                 dataSource={filteredRecords}
                 loading={loading}
-                            rowKey="serialnumber"
-                            scroll={{ x: true }}
-                            pagination={{
+                rowKey="id"
+                scroll={{ x: true }}
+                pagination={{
                     total: filteredRecords.length,
                     pageSize: 10,
-                                showSizeChanger: true,
+                    showSizeChanger: true,
                     showQuickJumper: true,
-                                showTotal: (total) => `Total ${total} items`
-                            }}
-                        />
+                    showTotal: (total) => `Total ${total} items`
+                }}
+            />
 
             {renderOutboundModal()}
+            {renderSalesModal()}
+            {renderRmaModal()}
         </div>
     );
 };
