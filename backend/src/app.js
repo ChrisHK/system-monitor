@@ -3,12 +3,17 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const WebSocket = require('ws');
+const { errorHandler } = require('./middleware/errorHandler');
 const recordRoutes = require('./routes/recordRoutes');
 const outboundRoutes = require('./routes/outboundRoutes');
 const storeRoutes = require('./routes/storeRoutes');
 const userRoutes = require('./routes/userRoutes');
 const locationRoutes = require('./routes/locationRoutes');
 const groupRoutes = require('./routes/groupRoutes');
+const salesRoutes = require('./routes/salesRoutes');
+const rmaRoutes = require('./routes/rmaRoutes');
+const orderRoutes = require('./routes/orderRoutes');
+const inventoryRmaRoutes = require('./routes/inventoryRmaRoutes');
 
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +45,10 @@ app.use('/api/stores', storeRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/users/groups', groupRoutes);
 app.use('/api/locations', locationRoutes);
+app.use('/api/sales', salesRoutes);
+app.use('/api/rma', rmaRoutes);
+app.use('/api/inventory/rma', inventoryRmaRoutes);
+app.use('/api/orders', orderRoutes);
 
 // Create WebSocket server directly
 const wss = new WebSocket.Server({ 
@@ -88,22 +97,16 @@ app.get('/', (req, res) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Error:', err);
-    res.status(500).json({
-        success: false,
-        error: 'Internal Server Error',
-        details: err.message
-    });
-});
+app.use(errorHandler);
 
 // 404 handling
 app.use((req, res) => {
-    console.log('404 Not Found:', req.url);
     res.status(404).json({
         success: false,
-        error: 'Not Found',
-        path: req.url
+        error: {
+            code: 'NOT_FOUND',
+            message: `Path ${req.url} not found`
+        }
     });
 });
 

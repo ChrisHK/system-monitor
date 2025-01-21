@@ -6,6 +6,10 @@ import StorePage from './pages/StorePage';
 import OutboundPage from './pages/OutboundPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
+import StoreSalesPage from './pages/StoreSalesPage';
+import StoreRmaPage from './pages/StoreRmaPage';
+import StoreOrdersPage from './pages/StoreOrdersPage';
+import InventoryRmaPage from './pages/InventoryRmaPage';
 import { useAuth } from './contexts/AuthContext';
 import { AuthProvider } from './contexts/AuthContext';
 
@@ -42,10 +46,38 @@ const App = () => {
                             </Layout>
                         </PrivateRoute>
                     } />
+                    <Route path="/inventory/rma" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <InventoryRmaPage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
                     <Route path="/stores/:storeId" element={
                         <PrivateRoute>
                             <Layout>
                                 <StorePage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="/stores/:storeId/sales" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <StoreSalesPage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="/stores/:storeId/orders" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <StoreOrdersPage />
+                            </Layout>
+                        </PrivateRoute>
+                    } />
+                    <Route path="/stores/:storeId/rma" element={
+                        <PrivateRoute>
+                            <Layout>
+                                <StoreRmaPage />
                             </Layout>
                         </PrivateRoute>
                     } />

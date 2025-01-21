@@ -117,4 +117,267 @@ export const checkItemLocation = (serialNumber) => api.get(`/locations/${serialN
 export const checkItemLocations = (serialNumbers) => api.post('/locations/batch', { serialNumbers });
 export const updateLocation = (serialNumber, data) => api.post(`/locations/${serialNumber}`, data);
 
+export const salesApi = {
+    // Get store sales
+    getSales: async (storeId) => {
+        try {
+            const response = await api.get(`/sales/${storeId}`);
+            return response.data;
+        } catch (error) {
+            console.error('Error fetching sales:', error);
+            throw error;
+        }
+    },
+
+    // Add item to sales
+    addToSales: async (storeId, data) => {
+        try {
+            const response = await api.post(`/sales/${storeId}`, data);
+            return response.data;
+        } catch (error) {
+            console.error('Error adding to sales:', error);
+            throw error;
+        }
+    },
+
+    // Search sales by serial number
+    searchSales: async (storeId, serialNumber) => {
+        try {
+            const response = await api.get(`/sales/${storeId}/search/${serialNumber}`);
+            return response.data;
+        } catch (error) {
+            console.error('Error searching sales:', error);
+            throw error;
+        }
+    }
+};
+
+export const rmaApi = {
+    // Get store RMA items
+    getRmaItems: async (storeId) => {
+        try {
+            return await api.get(`/rma/${storeId}`);
+        } catch (error) {
+            console.error('Error fetching RMA items:', error);
+            throw error;
+        }
+    },
+
+    // Add item to RMA
+    addToRma: async (storeId, data) => {
+        try {
+            const response = await api.post(`/rma/${storeId}`, data);
+            return response;
+        } catch (error) {
+            console.error('Error adding to RMA:', error);
+            throw error;
+        }
+    },
+
+    // Search RMA by serial number
+    searchRma: async (storeId, serialNumber) => {
+        try {
+            const response = await api.get(`/rma/${storeId}/search/${serialNumber}`);
+            return response.data;
+        } catch (error) {
+            console.error('Error searching RMA:', error);
+            throw error;
+        }
+    },
+
+    // Send to Inventory
+    sendToInventory: async (storeId, rmaId) => {
+        try {
+            const response = await api.put(`/rma/${storeId}/${rmaId}/send-to-inventory`);
+            return response;
+        } catch (error) {
+            console.error('Error sending to inventory:', error);
+            throw error;
+        }
+    },
+
+    // Update RMA fields
+    updateRmaFields: async (storeId, rmaId, fields) => {
+        try {
+            const response = await api.put(`/rma/${storeId}/${rmaId}/fields`, fields);
+            return response;
+        } catch (error) {
+            console.error('Error updating RMA fields:', error);
+            throw error;
+        }
+    },
+
+    // Delete RMA
+    deleteRma: async (storeId, rmaId) => {
+        try {
+            const response = await api.delete(`/rma/${storeId}/${rmaId}`);
+            return response;
+        } catch (error) {
+            console.error('Error deleting RMA:', error);
+            throw error;
+        }
+    },
+
+    // Get inventory RMA items
+    getInventoryRmaItems: async () => {
+        try {
+            console.log('Calling getInventoryRmaItems API...');
+            const response = await api.get('/inventory/rma');
+            console.log('API response:', response);
+            return response;
+        } catch (error) {
+            console.error('Error fetching inventory RMA items:', error);
+            throw error;
+        }
+    },
+
+    // Process RMA item
+    processRma: async (rmaId) => {
+        try {
+            const response = await api.put(`/inventory/rma/${rmaId}/process`);
+            return response;
+        } catch (error) {
+            console.error('Error processing RMA:', error);
+            throw error;
+        }
+    },
+
+    // Complete RMA item
+    completeRma: async (rmaId) => {
+        try {
+            const response = await api.put(`/inventory/rma/${rmaId}/complete`);
+            return response;
+        } catch (error) {
+            console.error('Error completing RMA:', error);
+            throw error;
+        }
+    },
+
+    // Fail RMA item
+    failRma: async (rmaId) => {
+        try {
+            const response = await api.put(`/inventory/rma/${rmaId}/fail`);
+            return response;
+        } catch (error) {
+            console.error('Error failing RMA:', error);
+            throw error;
+        }
+    },
+
+    // Send RMA item to store inventory
+    sendToStore: async (storeId, rmaId) => {
+        try {
+            const response = await api.put(`/rma/${storeId}/${rmaId}/send-to-store`);
+            return response;
+        } catch (error) {
+            console.error('Error sending RMA to store:', error);
+            throw error;
+        }
+    },
+
+    // Delete RMA from inventory
+    deleteInventoryRma: async (rmaId) => {
+        try {
+            const response = await api.delete(`/inventory/rma/${rmaId}`);
+            return response;
+        } catch (error) {
+            console.error('Error deleting inventory RMA:', error);
+            throw error;
+        }
+    }
+};
+
+export const orderApi = {
+    // Get store orders
+    getOrders: async (storeId) => {
+        try {
+            const response = await api.get(`/orders/${storeId}`);
+            return response;
+        } catch (error) {
+            console.error('Error fetching orders:', error);
+            throw error;
+        }
+    },
+
+    // Add items to order
+    addToOrder: async (storeId, items) => {
+        try {
+            const response = await api.post(`/orders/${storeId}`, { items });
+            return response;
+        } catch (error) {
+            console.error('Error adding to order:', error);
+            throw error;
+        }
+    },
+
+    // Save order (change status to completed)
+    saveOrder: async (storeId, orderId) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/${orderId}/save`);
+            return response;
+        } catch (error) {
+            console.error('Error saving order:', error);
+            throw error;
+        }
+    },
+
+    // Delete order item
+    deleteOrderItem: async (storeId, itemId) => {
+        try {
+            const response = await api.delete(`/orders/${storeId}/items/${itemId}`);
+            return response;
+        } catch (error) {
+            console.error('Error deleting order item:', error);
+            throw error;
+        }
+    },
+
+    // Update order item notes
+    updateOrderItemNotes: async (storeId, itemId, notes) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/items/${itemId}/notes`, { notes });
+            return response;
+        } catch (error) {
+            console.error('Error updating notes:', error);
+            throw error;
+        }
+    },
+
+    // Update order item price
+    updateOrderItemPrice: async (storeId, itemId, price) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/items/${itemId}/price`, { price });
+            return response;
+        } catch (error) {
+            console.error('Error updating price:', error);
+            throw error;
+        }
+    },
+
+    // Export completed orders as CSV
+    exportOrders: async (storeId, startDate, endDate) => {
+        try {
+            const response = await api.get(`/orders/${storeId}/export`, {
+                params: { startDate, endDate },
+                responseType: 'blob'
+            });
+            
+            // Create a download link
+            const url = window.URL.createObjectURL(new Blob([response]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `orders_${startDate.split('T')[0]}_${endDate.split('T')[0]}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+            
+            return { success: true };
+        } catch (error) {
+            console.error('Error exporting orders:', error);
+            throw error;
+        }
+    }
+};
+
 export default api; 
