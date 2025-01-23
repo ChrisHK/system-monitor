@@ -2,8 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { Table, Card, message, Space, Tag, Button, Input, Collapse, Modal } from 'antd';
 import { rmaApi } from '../services/api';
-import AddRmaModal from '../components/AddRmaModal';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../contexts/NotificationContext';
 
 const { Search } = Input;
 const { Panel } = Collapse;
@@ -12,12 +12,17 @@ const { TextArea } = Input;
 const StoreRmaPage = () => {
     const { storeId } = useParams();
     const { user } = useAuth();
+    const { addNotification } = useNotification();
+    
+    // Add debug logs
+    console.log('Current user:', user);
+    console.log('Is admin?', user?.group_name === 'admin');
+    
     const [loading, setLoading] = useState(false);
     const [rmaItems, setRmaItems] = useState([]);
     const [searchText, setSearchText] = useState('');
     const [filteredItems, setFilteredItems] = useState([]);
     const [editingItem, setEditingItem] = useState(null);
-    const [showAddModal, setShowAddModal] = useState(false);
     const [operationLoading, setOperationLoading] = useState(false);
 
     const fetchRmaItems = useCallback(async () => {
@@ -84,13 +89,20 @@ const StoreRmaPage = () => {
         }
 
         try {
+            setOperationLoading(true);
             const response = await rmaApi.sendToInventory(storeId, record.rma_id);
             if (response.success) {
+                // Only add notification for inventory RMA
+                console.log('Adding notification for inventory RMA');
+                addNotification('inventory', 'rma');  // For inventory RMA only
+                
                 message.success('Item sent to inventory successfully');
                 await fetchRmaItems();
             }
         } catch (error) {
             message.error(error.message || 'Failed to send item to inventory');
+        } finally {
+            setOperationLoading(false);
         }
     };
 
@@ -133,12 +145,6 @@ const StoreRmaPage = () => {
         } finally {
             setEditingItem(null);
         }
-    };
-
-    const handleAddSuccess = async () => {
-        setShowAddModal(false);
-        await fetchRmaItems();
-        message.success('RMA item added successfully');
     };
 
     const columns = [
@@ -281,42 +287,47 @@ const StoreRmaPage = () => {
             title: 'Actions',
             key: 'actions',
             fixed: 'right',
-            width: 150,
+            width: 200,
             render: (_, record) => {
-                const actions = [];
-
-                if (record.store_status === 'pending') {
-                    actions.push(
-                        <Button
-                            key="send"
-                            type="primary"
-                            size="small"
-                            loading={operationLoading}
-                            onClick={() => handleSendToInventory(record)}
-                            disabled={!record.reason?.trim()}
-                            title="Send to Inventory"
-                        >
-                            Send
-                        </Button>
-                    );
-                }
-
-                // Add delete button for admin users
-                if (user?.group_name === 'admin' && record.store_status !== 'sent_to_inventory') {
-                    actions.push(
-                        <Button
-                            key="delete"
-                            type="link"
-                            danger
-                            size="small"
-                            onClick={() => handleDelete(record.rma_id)}
-                        >
-                            Delete
-                        </Button>
-                    );
-                }
-
-                return <Space>{actions}</Space>;
+                // More lenient admin check
+                const isAdmin = user && (user.group_name === 'admin' || user.is_admin || user.role === 'admin');
+                console.log('Auth Debug:', { 
+                    user,
+                    group_name: user?.group_name,
+                    is_admin: user?.is_admin,
+                    role: user?.role,
+                    isAdmin
+                });
+                
+                return (
+                    <Space>
+                        {(!record.store_status || record.store_status === 'pending') && (
+                            <Button
+                                key="send"
+                                type="primary"
+                                size="small"
+                                loading={operationLoading}
+                                onClick={() => handleSendToInventory(record)}
+                                disabled={!record.reason?.trim()}
+                                title="Send to Inventory"
+                            >
+                                Send
+                            </Button>
+                        )}
+                        
+                        {isAdmin && (
+                            <Button
+                                key="delete"
+                                type="link"
+                                danger
+                                size="small"
+                                onClick={() => handleDelete(record.rma_id)}
+                            >
+                                Delete
+                            </Button>
+                        )}
+                    </Space>
+                );
             }
         }
     ];
@@ -336,9 +347,6 @@ const StoreRmaPage = () => {
                         onSearch={handleSearch}
                         style={{ width: 300 }}
                     />
-                    <Button type="primary" onClick={() => setShowAddModal(true)}>
-                        Add RMA
-                    </Button>
                 </Space>
 
                 {/* Pending RMA */}
@@ -386,7 +394,7 @@ const StoreRmaPage = () => {
                                 title: 'Actions',
                                 key: 'actions',
                                 fixed: 'right',
-                                width: 150,
+                                width: 200,
                                 render: (_, record) => (
                                     <Space>
                                         {record.store_status === 'completed' && (
@@ -397,8 +405,9 @@ const StoreRmaPage = () => {
                                                 >
                                                     Send to Store
                                                 </Button>
-                                                {user?.group_name === 'admin' && (
+                                                {user && user.group_name === 'admin' && (
                                                     <Button
+                                                        type="link"
                                                         danger
                                                         size="small"
                                                         onClick={() => handleDelete(record.rma_id)}
@@ -423,14 +432,6 @@ const StoreRmaPage = () => {
                         }}
                     />
                 </Card>
-
-                {/* Add RMA Modal */}
-                <AddRmaModal
-                    visible={showAddModal}
-                    onCancel={() => setShowAddModal(false)}
-                    onSuccess={handleAddSuccess}
-                    storeId={storeId}
-                />
             </Space>
         </div>
     );

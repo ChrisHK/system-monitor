@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Input, Button, message, Row, Col, Select, Tag } from 'antd';
 import { SearchOutlined, ReloadOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons';
 import { searchRecords, addToOutbound, getOutboundItems, removeFromOutbound, sendToStore, storeApi, checkItemLocation } from '../services/api';
+import { useNotification } from '../contexts/NotificationContext';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -15,6 +16,7 @@ const OutboundPage = () => {
     const [stores, setStores] = useState([]);
     const [filteredRecords, setFilteredRecords] = useState([]);
     const [itemLocations, setItemLocations] = useState({});
+    const { addNotification } = useNotification();
 
     const columns = [
         {
@@ -510,6 +512,23 @@ const OutboundPage = () => {
     // Update the columns definition to include row highlighting
     const getRowClassName = (record) => {
         return '';
+    };
+
+    const handleSendToInventory = async (record) => {
+        try {
+            const response = await outboundApi.sendToInventory(storeId, record.id);
+            if (response.success) {
+                // Add notification for the target store
+                addNotification('inventory', record.target_store_id);
+                // Add notification for the current store
+                addNotification('store', storeId);
+                
+                message.success('Item sent to inventory successfully');
+                fetchOutboundItems();
+            }
+        } catch (error) {
+            message.error(error.message || 'Failed to send item to inventory');
+        }
     };
 
     return (

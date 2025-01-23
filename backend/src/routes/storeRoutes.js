@@ -149,15 +149,15 @@ router.get('/:storeId/items', auth, checkStorePermission('inventory'), async (re
 // Process outbound items to store
 router.post('/:storeId/outbound', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
-    const { itemIds, force = false } = req.body;
+    const { outboundIds, force = false } = req.body;
     const client = await pool.connect();
     
     try {
         console.log('=== POST /stores/:storeId/outbound - Processing outbound items ===');
-        console.log('Request params:', { storeId, itemIds, force });
+        console.log('Request params:', { storeId, outboundIds, force });
 
-        if (!storeId || !itemIds || !Array.isArray(itemIds) || itemIds.length === 0) {
-            console.log('Invalid request parameters:', { storeId, itemIds });
+        if (!storeId || !outboundIds || !Array.isArray(outboundIds) || outboundIds.length === 0) {
+            console.log('Invalid request parameters:', { storeId, outboundIds });
             return res.status(400).json({
                 success: false,
                 error: 'Invalid request parameters'
@@ -181,18 +181,18 @@ router.post('/:storeId/outbound', auth, checkStorePermission('inventory'), async
         }
         
         // Get outbound items with more details
-        console.log('Fetching outbound items:', itemIds);
+        console.log('Fetching outbound items:', outboundIds);
         const outboundQuery = `
             SELECT o.id, o.record_id, o.status, r.serialnumber
             FROM outbound_items o
             JOIN system_records r ON r.id = o.record_id
             WHERE o.id = ANY($1) AND o.status = $2
         `;
-        const outboundItems = await client.query(outboundQuery, [itemIds, 'pending']);
+        const outboundItems = await client.query(outboundQuery, [outboundIds, 'pending']);
         console.log('Found outbound items:', outboundItems.rows);
         
         if (outboundItems.rows.length === 0) {
-            console.log('No pending outbound items found for IDs:', itemIds);
+            console.log('No pending outbound items found for IDs:', outboundIds);
             await client.query('ROLLBACK');
             return res.status(404).json({
                 success: false,

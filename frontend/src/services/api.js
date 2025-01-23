@@ -63,6 +63,12 @@ api.interceptors.response.use(
             message: error.message,
             data: error.response?.data
         });
+
+        // If it's a 400 error with a specific error message, return it as a response
+        if (error.response?.status === 400 && error.response.data?.error) {
+            return error.response.data;
+        }
+
         return Promise.reject(error);
     }
 );
@@ -121,8 +127,8 @@ export const addRecord = (data) => api.post('/records', data);
 export const getOutboundItems = () => api.get('/outbound/items');
 export const addToOutbound = (recordId) => api.post('/outbound/items', { recordId });
 export const removeFromOutbound = (itemId) => api.delete(`/outbound/items/${itemId}`);
-export const sendToStore = (storeId, itemIds, force = false) => 
-    api.post(`/stores/${storeId}/outbound`, { itemIds, force });
+export const sendToStore = (storeId, outboundIds, force = false) => 
+    api.post(`/stores/${storeId}/outbound`, { outboundIds, force });
 
 // Location Management APIs
 export const checkItemLocation = (serialNumber) => api.get(`/locations/${serialNumber}`);
@@ -409,6 +415,17 @@ export const orderApi = {
             return response;
         } catch (error) {
             console.error('Error updating price:', error);
+            throw error;
+        }
+    },
+
+    // Update order item payment method
+    updateOrderItemPayMethod: async (storeId, itemId, payMethod) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/items/${itemId}/pay-method`, { pay_method: payMethod });
+            return response;
+        } catch (error) {
+            console.error('Error updating payment method:', error);
             throw error;
         }
     },

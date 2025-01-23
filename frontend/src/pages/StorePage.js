@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select, Form, InputNumber } from 'antd';
 import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../contexts/NotificationContext';
 import { storeApi, removeFromOutbound, searchRecords, addToOutbound, sendToStore, getOutboundItems, salesApi, rmaApi, orderApi } from '../services/api';
 import { formatSystemSku } from '../utils/formatters';
 
@@ -33,6 +34,7 @@ const StorePage = () => {
     const { storeId } = useParams();
     const navigate = useNavigate();
     const { user } = useAuth();
+    const { addNotification } = useNotification();
     const [store, setStore] = useState(null);
     const [stores, setStores] = useState([]);
     const [records, setRecords] = useState([]);
@@ -257,10 +259,21 @@ const StorePage = () => {
                 throw new Error('No valid outbound items found');
             }
 
+            console.log('Sending items to store:', { selectedOutboundStore, outboundIds });
             const response = await sendToStore(selectedOutboundStore, outboundIds);
+            console.log('Send to store response:', response);
+
             if (response?.success) {
-                message.success('Items sent to store successfully');
+                // First add the notification
+                console.log('Adding notification for store:', selectedOutboundStore);
+                addNotification('inventory', selectedOutboundStore);
+                
+                // Then refresh the data
+                console.log('Refreshing data...');
                 await fetchOutboundItems();
+                await fetchStoreData();
+                
+                message.success('Items sent to store successfully');
                 handleOutboundModalClose();
             } else if (response?.error && response.error.includes('already in stores:')) {
                 Modal.confirm({
@@ -270,10 +283,21 @@ const StorePage = () => {
                     cancelText: 'No, Keep Current',
                     onOk: async () => {
                         try {
+                            console.log('Retrying with force move:', { selectedOutboundStore, outboundIds });
                             const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
+                            console.log('Force move response:', retryResponse);
+
                             if (retryResponse?.success) {
-                                message.success('Items moved to new store successfully');
+                                // First add the notification
+                                console.log('Adding notification for store:', selectedOutboundStore);
+                                addNotification('inventory', selectedOutboundStore);
+                                
+                                // Then refresh the data
+                                console.log('Refreshing data...');
                                 await fetchOutboundItems();
+                                await fetchStoreData();
+                                
+                                message.success('Items moved to new store successfully');
                                 handleOutboundModalClose();
                             } else {
                                 throw new Error(retryResponse?.error || 'Failed to move items to new store');
@@ -288,32 +312,8 @@ const StorePage = () => {
                 throw new Error(response?.error || 'Failed to send items to store');
             }
         } catch (error) {
-            if (error.response?.data?.error?.includes('already in stores:')) {
-                Modal.confirm({
-                    title: 'Items Already in Store',
-                    content: `${error.response.data.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
-                    okText: 'Yes, Move Items',
-                    cancelText: 'No, Keep Current',
-                    onOk: async () => {
-                        try {
-                            const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
-                            if (retryResponse?.success) {
-                                message.success('Items moved to new store successfully');
-                                await fetchOutboundItems();
-                                handleOutboundModalClose();
-                            } else {
-                                throw new Error(retryResponse?.error || 'Failed to move items to new store');
-                            }
-                        } catch (error) {
-                            console.error('Error moving items:', error);
-                            message.error(error.message || 'Failed to move items to new store');
-                        }
-                    }
-                });
-            } else {
-                console.error('Error sending items to store:', error);
-                message.error(error.message || 'Failed to send items to store');
-            }
+            console.error('Error sending items to store:', error);
+            message.error(error.message || 'Failed to send items to store');
         } finally {
             setOutboundLoading(false);
         }
@@ -490,18 +490,27 @@ const StorePage = () => {
                 return;
             }
 
-            await rmaApi.addToRma(storeId, {
+            const response = await rmaApi.addToRma(storeId, {
                 recordId: selectedItem.id,
                 reason,
                 notes
             });
 
-            message.success('Item added to RMA successfully');
-            setRmaModalVisible(false);
-            navigate(`/stores/${storeId}/rma`);
+            if (response?.success) {
+                // Add notification for RMA
+                console.log('Adding RMA notification for store:', storeId);
+                addNotification('rma', storeId);
+                
+                message.success('Item added to RMA successfully');
+                setRmaModalVisible(false);
+                fetchStoreData();
+                navigate(`/stores/${storeId}/rma`);
+            } else {
+                throw new Error(response?.error || 'Failed to add item to RMA');
+            }
         } catch (error) {
-            message.error('Error adding item to RMA');
-            console.error(error);
+            console.error('RMA submit error:', error);
+            message.error(error.message || 'Failed to add item to RMA');
         }
     };
 
@@ -718,6 +727,10 @@ const StorePage = () => {
             const response = await orderApi.addToOrder(storeId, items);
 
             if (response && response.success) {
+                // Add notification for order
+                console.log('Adding order notification for store:', storeId);
+                addNotification('order', storeId);
+                
                 message.success('Items added to order successfully');
                 setSelectedItems([]);
                 setSearchPerformed(false);
