@@ -10,17 +10,25 @@ const AddRmaModal = ({ visible, onCancel, onSuccess, storeId }) => {
 
     const handleSubmit = async () => {
         try {
-            setLoading(true);
             const values = await form.validateFields();
-            
-            const response = await rmaApi.addToRma(storeId, values);
-            if (response?.success) {
+            setLoading(true);
+
+            const response = await rmaApi.addToRma(storeId, {
+                recordId: values.recordId,
+                reason: values.reason || '',
+                notes: values.notes || ''
+            });
+
+            if (response.success) {
                 form.resetFields();
                 onSuccess();
             }
         } catch (error) {
-            console.error('Error adding RMA:', error);
-            message.error('Failed to add RMA item');
+            if (error.errorFields) {
+                // Form validation error
+                return;
+            }
+            message.error(error.message || 'Failed to add RMA item');
         } finally {
             setLoading(false);
         }
@@ -37,28 +45,32 @@ const AddRmaModal = ({ visible, onCancel, onSuccess, storeId }) => {
             <Form
                 form={form}
                 layout="vertical"
+                initialValues={{
+                    reason: '',
+                    notes: ''
+                }}
             >
                 <Form.Item
-                    name="serialnumber"
+                    name="recordId"
                     label="Serial Number"
-                    rules={[{ required: true, message: 'Please input serial number' }]}
+                    rules={[{ required: true, message: 'Please enter serial number' }]}
                 >
-                    <Input />
+                    <Input placeholder="Enter serial number" />
                 </Form.Item>
 
                 <Form.Item
                     name="reason"
                     label="Reason"
-                    rules={[{ required: true, message: 'Please input reason' }]}
+                    rules={[{ required: true, message: 'Please enter reason' }]}
                 >
-                    <TextArea rows={4} />
+                    <Input.TextArea placeholder="Enter reason" rows={4} />
                 </Form.Item>
 
                 <Form.Item
                     name="notes"
                     label="Notes"
                 >
-                    <TextArea rows={4} />
+                    <Input.TextArea placeholder="Enter notes (optional)" rows={4} />
                 </Form.Item>
             </Form>
         </Modal>

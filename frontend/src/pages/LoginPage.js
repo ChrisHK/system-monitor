@@ -21,40 +21,16 @@ const LoginPage = () => {
     const onFinish = async (values) => {
         try {
             setLoading(true);
-            console.log('Login attempt with:', {
-                username: values.username,
-                hasPassword: !!values.password
-            });
-
-            // Call API login
-            const response = await apiLogin({
-                username: values.username,
-                password: values.password
-            });
-
-            console.log('Login API response:', {
-                success: response.success,
-                hasToken: !!response.token,
-                hasUser: !!response.user,
-                error: response.error
-            });
-
-            if (!response.success) {
-                throw new Error(response.error || 'Login failed');
-            }
-
-            if (!response.token || !response.user) {
-                throw new Error('Invalid response from server');
-            }
-
-            // Call context login
-            await login(response.token, response.user);
+            const result = await login(values.username, values.password);
             
-            message.success('Login successful');
-            // Navigate to the intended page or home
-            const from = location.state?.from || '/';
-            navigate(from, { replace: true });
-
+            if (result.success) {
+                message.success('Login successful');
+                // Navigate to the intended page or home
+                const from = location.state?.from || '/';
+                navigate(from, { replace: true });
+            } else {
+                throw new Error(result.error || 'Login failed');
+            }
         } catch (error) {
             console.error('Login failed:', error);
             message.error(error.message || 'Failed to login');

@@ -1,8 +1,9 @@
 require('dotenv').config();
-const pool = require('../../db');
+const db = require('../../db');
 
-async function updateRmaTables() {
-    const client = await pool.connect();
+const updateRmaTables = async (db) => {
+    const client = await db.connect();
+    
     try {
         await client.query('BEGIN');
 
@@ -83,6 +84,11 @@ async function updateRmaTables() {
             CREATE INDEX IF NOT EXISTS idx_store_rma_last_updated ON store_rma(last_updated);
             CREATE INDEX IF NOT EXISTS idx_store_rma_store_id ON store_rma(store_id);
             CREATE INDEX IF NOT EXISTS idx_store_rma_record_id ON store_rma(record_id);
+            
+            -- Add new composite indexes for better query performance
+            CREATE INDEX IF NOT EXISTS idx_store_rma_location_inventory ON store_rma(location_type, inventory_status, rma_date DESC);
+            CREATE INDEX IF NOT EXISTS idx_store_rma_store_location ON store_rma(store_id, location_type, store_status);
+            CREATE INDEX IF NOT EXISTS idx_store_rma_record_location ON store_rma(record_id, location_type);
         `);
 
         // 6. 更新現有數據
@@ -118,8 +124,24 @@ async function updateRmaTables() {
             END $$;
         `);
 
+        // 更新 RMA 表
+        await client.query(`
+            DO $$ 
+            BEGIN 
+                IF NOT EXISTS (
+                    SELECT 1 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'rma_items' 
+                    AND column_name = 'status'
+                ) THEN 
+                    ALTER TABLE rma_items 
+                    ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'pending';
+                END IF;
+            END $$;
+        `);
+
         await client.query('COMMIT');
-        console.log('Successfully updated RMA tables');
+        console.log('RMA tables updated successfully');
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error updating RMA tables:', error);
@@ -127,11 +149,11 @@ async function updateRmaTables() {
     } finally {
         client.release();
     }
-}
+};
 
 // 執行更新
 if (require.main === module) {
-    updateRmaTables()
+    updateRmaTables(db)
         .then(() => {
             console.log('RMA tables update completed successfully');
             process.exit(0);
@@ -142,4 +164,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { updateRmaTables }; 
+module.exports = updateRmaTables; 

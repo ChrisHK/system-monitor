@@ -8,13 +8,13 @@ import {
     LogoutOutlined,
     ImportOutlined,
     ExportOutlined,
-    DatabaseOutlined,
     PlusOutlined,
     BranchesOutlined,
     DesktopOutlined,
     UnorderedListOutlined,
     ShoppingCartOutlined,
-    RollbackOutlined
+    RollbackOutlined,
+    DatabaseOutlined
 } from '@ant-design/icons';
 import { storeApi, groupApi } from '../services/api';
 import api from '../services/api';
@@ -46,39 +46,45 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
             if (userResponse?.success) {
                 const userData = userResponse.user;
                 
-                if (userData.role === 'admin') {
-                    console.log('Admin user detected, fetching admin group');
-                    const groupsResponse = await groupApi.getGroups();
-                    console.log('Groups response:', groupsResponse);
-                    
-                    if (groupsResponse?.success) {
-                        const adminGroup = groupsResponse.groups.find(g => g.name.toLowerCase() === 'admin');
-                        if (adminGroup) {
-                            console.log('Found admin group:', adminGroup);
-                            setGroupPermissions({ success: true, permissions: adminGroup.permitted_stores });
-                        }
+                // 獲取群組資訊
+                const groupsResponse = await groupApi.getGroups();
+                if (!groupsResponse?.success) {
+                    throw new Error('Failed to fetch groups');
+                }
+
+                if (userData.role === 'admin' || userData.group_name === 'admin') {
+                    console.log('Admin user detected');
+                    const adminGroup = groupsResponse.groups.find(g => g.name === 'admin');
+                    if (adminGroup) {
+                        console.log('Found admin group:', adminGroup);
+                        setGroupPermissions({
+                            success: true,
+                            permissions: adminGroup.permitted_stores,
+                            store_permissions: adminGroup.store_permissions,
+                            main_permissions: {
+                                inventory: true,
+                                inventory_ram: true
+                            }
+                        });
                     }
                 } else if (userData.group_id) {
                     console.log('Regular user, fetching group permissions for group_id:', userData.group_id);
-                    const groupResponse = await groupApi.getGroups();
-                    if (groupResponse?.success) {
-                        const userGroup = groupResponse.groups.find(g => g.id === userData.group_id);
-                        if (userGroup) {
-                            console.log('Found user group:', userGroup);
-                            setGroupPermissions({ 
-                                success: true, 
-                                permissions: userGroup.permitted_stores,
-                                features: userGroup.features || [],
-                                access_rights: userGroup.access_rights || []
-                            });
-                        }
+                    const userGroup = groupsResponse.groups.find(g => g.id === userData.group_id);
+                    if (userGroup) {
+                        console.log('Found user group:', userGroup);
+                        setGroupPermissions({
+                            success: true,
+                            permissions: userGroup.permitted_stores,
+                            store_permissions: userGroup.store_permissions,
+                            main_permissions: userGroup.main_permissions || {}
+                        });
                     }
                 }
             }
         } catch (error) {
             console.error('Error fetching group permissions:', error);
         }
-    }, [user?.id]);
+    }, [user]);
 
     const fetchStores = useCallback(async () => {
         if (fetchingRef.current) {
@@ -178,44 +184,58 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
     const getMenuItems = useCallback(() => {
         console.log('getMenuItems - Current stores:', stores);
         console.log('getMenuItems - Group permissions:', groupPermissions);
-        console.log('getMenuItems - User role:', user?.role);
+        console.log('getMenuItems - User group:', user?.group_name);
+        console.log('getMenuItems - Main permissions:', groupPermissions?.main_permissions);
 
-        const items = [
-            {
-                key: '/',
-                icon: <DesktopOutlined />,
-                label: 'Inventory',
-                children: [
-                    {
-                        key: '/inventory',
-                        label: 'Inventory',
-                        icon: <DatabaseOutlined />,
-                        onClick: () => navigate('/inventory')
-                    },
-                    {
-                        key: '/inventory/rma',
-                        label: 'RMA List',
-                        icon: <RollbackOutlined />,
-                        onClick: () => navigate('/inventory/rma')
-                    }
-                ]
+        const menuItems = [];
+
+        // Check if user has any inventory-related permissions
+        const hasInventoryPermission = user?.group_name === 'admin' || 
+            groupPermissions?.main_permissions?.inventory === true;
+        const hasInventoryRamPermission = user?.group_name === 'admin' || 
+            groupPermissions?.main_permissions?.inventory_ram === true;
+
+        // Add Inventory menu item only if user has any inventory permissions
+        if (hasInventoryPermission || hasInventoryRamPermission) {
+            const inventoryChildren = [];
+
+            // Add Items submenu if user has inventory permission
+            if (hasInventoryPermission) {
+                inventoryChildren.push({
+                    key: '/inventory',
+                    icon: <UnorderedListOutlined />,
+                    label: 'Items',
+                    onClick: () => navigate('/inventory')
+                });
             }
-        ];
 
-        // Check user permissions and store list
-        const hasStorePermissions = user?.role === 'admin' || 
-            (groupPermissions?.permissions && groupPermissions.permissions.length > 0);
-        
-        // Check for additional feature permissions
-        const hasFeatureAccess = (feature) => {
-            return user?.role === 'admin' || 
-                (groupPermissions?.features && groupPermissions.features.includes(feature));
-        };
+            // Add RMA submenu if user has inventory_ram permission
+            if (hasInventoryRamPermission) {
+                inventoryChildren.push({
+                    key: '/inventory/rma',
+                    icon: <RollbackOutlined />,
+                    label: 'RMA',
+                    onClick: () => navigate('/inventory/rma')
+                });
+            }
 
-        console.log('hasStorePermissions:', hasStorePermissions);
-        console.log('Available stores:', stores);
-        console.log('Feature permissions:', groupPermissions?.features);
-        console.log('Access rights:', groupPermissions?.access_rights);
+            // Only add the Inventory menu if there are accessible children
+            if (inventoryChildren.length > 0) {
+                menuItems.push({
+                    key: 'inventory',
+                    icon: <DatabaseOutlined />,
+                    label: 'Inventory',
+                    children: inventoryChildren
+                });
+            }
+        }
+
+        // Check if user has store permissions
+        const hasStorePermissions = user?.group_name === 'admin' || 
+            (groupPermissions?.store_permissions && 
+             Object.values(groupPermissions.store_permissions).some(perm => 
+                perm.inventory || perm.orders || perm.rma
+             ));
 
         // Show Branches menu if user has permissions
         if (hasStorePermissions) {
@@ -226,8 +246,8 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
                 children: []
             };
 
-            // 如果是管理員，添加新增商店選項
-            if (user?.role === 'admin') {
+            // Add store only if user is admin
+            if (user?.group_name === 'admin') {
                 branchesItem.children.push({
                     key: 'add-store',
                     icon: <PlusOutlined />,
@@ -237,58 +257,77 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
                 });
             }
 
-            // 添加商店列表
-            const storeItems = stores.map(store => ({
-                key: `store-${store.id}`,
-                label: store.name,
-                icon: <ShopOutlined />,
-                children: [
-                    {
+            // Add store list
+            const storeItems = stores.map(store => {
+                const storePermissions = groupPermissions?.store_permissions?.[store.id] || {};
+                const menuItems = [];
+
+                // Add menu items based on permissions
+                if (user?.group_name === 'admin' || storePermissions.inventory) {
+                    menuItems.push({
                         key: `/stores/${store.id}`,
                         label: 'Inventory',
                         icon: <UnorderedListOutlined />,
                         onClick: () => navigate(`/stores/${store.id}`)
-                    },
-                    {
+                    });
+                }
+
+                if (user?.group_name === 'admin' || storePermissions.orders) {
+                    menuItems.push({
                         key: `/stores/${store.id}/orders`,
                         label: 'Orders',
                         icon: <ShoppingCartOutlined />,
                         onClick: () => navigate(`/stores/${store.id}/orders`)
-                    },
-                    {
+                    });
+                }
+
+                if (user?.group_name === 'admin' || storePermissions.rma) {
+                    menuItems.push({
                         key: `/stores/${store.id}/rma`,
                         label: 'RMA',
                         icon: <RollbackOutlined />,
                         onClick: () => navigate(`/stores/${store.id}/rma`)
-                    }
-                ]
-            }));
+                    });
+                }
 
-            branchesItem.children.push(...storeItems);
-            
-            // 只有當有商店時才添加 Branches 菜單
-            if (branchesItem.children.length > 0) {
-                items.push(branchesItem);
+                // Only return store menu item if user has any permissions for this store
+                if (menuItems.length > 0) {
+                    return {
+                        key: `store-${store.id}`,
+                        label: store.name,
+                        icon: <ShopOutlined />,
+                        children: menuItems
+                    };
+                }
+                return null;
+            }).filter(Boolean);
+
+            if (storeItems.length > 0) {
+                branchesItem.children.push(...storeItems);
+                menuItems.push(branchesItem);
             }
         }
 
-        items.push(
-            {
+        // Add settings only for admin group
+        if (user?.group_name === 'admin') {
+            menuItems.push({
                 key: '/settings',
                 icon: <SettingOutlined />,
                 label: 'Settings',
                 onClick: () => navigate('/settings')
-            },
-            {
-                key: 'logout',
-                icon: <LogoutOutlined />,
-                label: 'Logout',
-                onClick: handleLogout
-            }
-        );
+            });
+        }
 
-        return items;
-    }, [stores, groupPermissions, user?.role, navigate, handleLogout, setIsModalVisible]);
+        // Always add logout
+        menuItems.push({
+            key: 'logout',
+            icon: <LogoutOutlined />,
+            label: 'Logout',
+            onClick: handleLogout
+        });
+
+        return menuItems;
+    }, [stores, groupPermissions, user?.group_name, navigate, handleLogout, setIsModalVisible]);
 
     const handleMenuClick = (e) => {
         if (e.key === 'logout') {

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Table, Card, message, Space, Tag, Button, Input, Collapse } from 'antd';
+import { Table, Card, message, Space, Tag, Button, Input, Collapse, Modal } from 'antd';
 import { rmaApi } from '../services/api';
 import AddRmaModal from '../components/AddRmaModal';
+import { useAuth } from '../contexts/AuthContext';
 
 const { Search } = Input;
 const { Panel } = Collapse;
@@ -10,12 +11,14 @@ const { TextArea } = Input;
 
 const StoreRmaPage = () => {
     const { storeId } = useParams();
+    const { user } = useAuth();
     const [loading, setLoading] = useState(false);
     const [rmaItems, setRmaItems] = useState([]);
     const [searchText, setSearchText] = useState('');
     const [filteredItems, setFilteredItems] = useState([]);
     const [editingItem, setEditingItem] = useState(null);
     const [showAddModal, setShowAddModal] = useState(false);
+    const [operationLoading, setOperationLoading] = useState(false);
 
     const fetchRmaItems = useCallback(async () => {
         try {
@@ -54,27 +57,40 @@ const StoreRmaPage = () => {
 
     const handleDelete = async (rmaId) => {
         try {
-            const response = await rmaApi.deleteRma(storeId, rmaId);
-            if (response?.success) {
-                message.success('RMA item deleted successfully');
-                await fetchRmaItems();
-            }
+            Modal.confirm({
+                title: 'Delete RMA Item',
+                content: 'Are you sure you want to delete this RMA item?',
+                okText: 'Yes',
+                okType: 'danger',
+                cancelText: 'No',
+                onOk: async () => {
+                    const response = await rmaApi.deleteRma(storeId, rmaId);
+                    if (response?.success) {
+                        message.success('RMA item deleted successfully');
+                        fetchRmaItems();
+                    }
+                }
+            });
         } catch (error) {
-            console.error('Error deleting RMA:', error);
+            console.error('Error deleting RMA item:', error);
             message.error('Failed to delete RMA item');
         }
     };
 
-    const handleSendToInventory = async (rmaId) => {
+    const handleSendToInventory = async (record) => {
+        if (!record.reason?.trim()) {
+            message.error('Please enter a reason before sending to inventory');
+            return;
+        }
+
         try {
-            const response = await rmaApi.sendToInventory(storeId, rmaId);
-            if (response?.success) {
+            const response = await rmaApi.sendToInventory(storeId, record.rma_id);
+            if (response.success) {
                 message.success('Item sent to inventory successfully');
                 await fetchRmaItems();
             }
         } catch (error) {
-            console.error('Error sending to inventory:', error);
-            message.error('Failed to send item to inventory');
+            message.error(error.message || 'Failed to send item to inventory');
         }
     };
 
@@ -208,7 +224,8 @@ const StoreRmaPage = () => {
                 if (isPending) {
                     return (
                         <TextArea
-                            value={text}
+                            value={text || ''}
+                            placeholder="Enter reason (required)"
                             autoSize
                             onFocus={() => setEditingItem(record.rma_id)}
                             onBlur={(e) => handleFieldChange(record.rma_id, 'reason', e.target.value)}
@@ -221,7 +238,7 @@ const StoreRmaPage = () => {
                                 setRmaItems(newItems);
                                 setFilteredItems(newItems);
                             }}
-                            status={editingItem === record.rma_id && (!text || text.trim() === '') ? 'error' : ''}
+                            status={!text?.trim() ? 'error' : ''}
                         />
                     );
                 }
@@ -264,29 +281,43 @@ const StoreRmaPage = () => {
             title: 'Actions',
             key: 'actions',
             fixed: 'right',
-            width: 200,
-            render: (_, record) => (
-                <Space>
-                    {(!record.store_status || record.store_status === 'pending') && (
-                        <>
-                            <Button
-                                type="primary"
-                                size="small"
-                                onClick={() => handleSendToInventory(record.rma_id)}
-                            >
-                                Send to Inventory
-                            </Button>
-                            <Button
-                                danger
-                                size="small"
-                                onClick={() => handleDelete(record.rma_id)}
-                            >
-                                Delete
-                            </Button>
-                        </>
-                    )}
-                </Space>
-            )
+            width: 150,
+            render: (_, record) => {
+                const actions = [];
+
+                if (record.store_status === 'pending') {
+                    actions.push(
+                        <Button
+                            key="send"
+                            type="primary"
+                            size="small"
+                            loading={operationLoading}
+                            onClick={() => handleSendToInventory(record)}
+                            disabled={!record.reason?.trim()}
+                            title="Send to Inventory"
+                        >
+                            Send
+                        </Button>
+                    );
+                }
+
+                // Add delete button for admin users
+                if (user?.group_name === 'admin' && record.store_status !== 'sent_to_inventory') {
+                    actions.push(
+                        <Button
+                            key="delete"
+                            type="link"
+                            danger
+                            size="small"
+                            onClick={() => handleDelete(record.rma_id)}
+                        >
+                            Delete
+                        </Button>
+                    );
+                }
+
+                return <Space>{actions}</Space>;
+            }
         }
     ];
 
@@ -359,12 +390,23 @@ const StoreRmaPage = () => {
                                 render: (_, record) => (
                                     <Space>
                                         {record.store_status === 'completed' && (
-                                            <Button
-                                                type="primary"
-                                                onClick={() => handleSendToStore(record.rma_id)}
-                                            >
-                                                Send to Store
-                                            </Button>
+                                            <>
+                                                <Button
+                                                    type="primary"
+                                                    onClick={() => handleSendToStore(record.rma_id)}
+                                                >
+                                                    Send to Store
+                                                </Button>
+                                                {user?.group_name === 'admin' && (
+                                                    <Button
+                                                        danger
+                                                        size="small"
+                                                        onClick={() => handleDelete(record.rma_id)}
+                                                    >
+                                                        Delete
+                                                    </Button>
+                                                )}
+                                            </>
                                         )}
                                     </Space>
                                 )

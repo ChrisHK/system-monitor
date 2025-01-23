@@ -14,13 +14,17 @@ import { useAuth } from './contexts/AuthContext';
 import { AuthProvider } from './contexts/AuthContext';
 
 // Private Route Component
-const PrivateRoute = ({ children }) => {
+const PrivateRoute = ({ children, requireStore }) => {
     const { isAuthenticated } = useAuth();
     const location = useLocation();
 
     if (!isAuthenticated()) {
         // Save the attempted URL for redirecting after login
         return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+    }
+
+    if (requireStore && !isAuthenticated('store')) {
+        return <Navigate to="/" replace />;
     }
 
     return children;
@@ -54,28 +58,28 @@ const App = () => {
                         </PrivateRoute>
                     } />
                     <Route path="/stores/:storeId" element={
-                        <PrivateRoute>
+                        <PrivateRoute requireStore>
                             <Layout>
                                 <StorePage />
                             </Layout>
                         </PrivateRoute>
                     } />
                     <Route path="/stores/:storeId/sales" element={
-                        <PrivateRoute>
+                        <PrivateRoute requireStore>
                             <Layout>
                                 <StoreSalesPage />
                             </Layout>
                         </PrivateRoute>
                     } />
                     <Route path="/stores/:storeId/orders" element={
-                        <PrivateRoute>
+                        <PrivateRoute requireStore>
                             <Layout>
                                 <StoreOrdersPage />
                             </Layout>
                         </PrivateRoute>
                     } />
                     <Route path="/stores/:storeId/rma" element={
-                        <PrivateRoute>
+                        <PrivateRoute requireStore>
                             <Layout>
                                 <StoreRmaPage />
                             </Layout>

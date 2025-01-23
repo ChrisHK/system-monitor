@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { auth, checkRole } = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
+const { checkMainPermission } = require('../middleware/checkPermission');
 const { catchAsync } = require('../middleware/errorHandler');
 const { ValidationError, AuthorizationError, NotFoundError } = require('../middleware/errorTypes');
 const { QueryBuilder, queryTemplates, withTransaction } = require('../utils/queryBuilder');
@@ -16,7 +17,7 @@ router.get('/duplicates', auth, catchAsync(async (req, res) => {
 }));
 
 // Clean up duplicate records (admin only)
-router.post('/cleanup-duplicates', auth, checkRole(['admin']), catchAsync(async (req, res) => {
+router.post('/cleanup-duplicates', auth, checkMainPermission('inventory'), catchAsync(async (req, res) => {
     const client = await pool.connect();
     await withTransaction(client, async (client) => {
         const duplicates = await client.query(queryTemplates.duplicates + ' ORDER BY r.serialnumber, r.created_at DESC');
@@ -94,8 +95,8 @@ router.get('/search', auth, catchAsync(async (req, res) => {
     });
 }));
 
-// Get all records with store permission check
-router.get('/', auth, checkRole(['user', 'admin'], true), catchAsync(async (req, res) => {
+// Get all records with inventory permission check
+router.get('/', auth, checkMainPermission('inventory'), catchAsync(async (req, res) => {
     const { page = 1, limit = 20, search = '', store_id } = req.query;
     const offset = (page - 1) * limit;
     const client = await pool.connect();
@@ -146,7 +147,7 @@ router.get('/', auth, checkRole(['user', 'admin'], true), catchAsync(async (req,
 }));
 
 // Delete a record (admin only)
-router.delete('/:id', auth, checkRole(['admin']), catchAsync(async (req, res) => {
+router.delete('/:id', auth, checkMainPermission('inventory'), catchAsync(async (req, res) => {
     const { id } = req.params;
     const result = await pool.query(
         'UPDATE system_records SET is_current = false WHERE id = $1 RETURNING id',

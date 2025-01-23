@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Table, Button, message, Input, Collapse, Space, Modal } from 'antd';
+import { Card, Table, Button, message, Input, Collapse, Space, Modal, Tag } from 'antd';
 import { orderApi, rmaApi } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { ExclamationCircleOutlined } from '@ant-design/icons';
@@ -18,6 +18,10 @@ const StoreOrdersPage = () => {
     const [editingNotes, setEditingNotes] = useState({});
     const [editingPrice, setEditingPrice] = useState({});
     const [searchText, setSearchText] = useState('');
+    const [rmaReasons, setRmaReasons] = useState({});
+    const [showReasonModal, setShowReasonModal] = useState(false);
+    const [selectedItem, setSelectedItem] = useState(null);
+    const [reasonText, setReasonText] = useState('');
 
     const fetchOrders = useCallback(async () => {
         try {
@@ -148,6 +152,32 @@ const StoreOrdersPage = () => {
         setSearchText(value.toLowerCase());
     };
 
+    const handleRmaClick = (item) => {
+        if (rmaReasons[item.recordId]) {
+            // If reason exists, proceed with return
+            handleReturn(item);
+        } else {
+            // Show reason input modal
+            setSelectedItem(item);
+            setReasonText('');
+            setShowReasonModal(true);
+        }
+    };
+
+    const handleReasonSubmit = () => {
+        if (!reasonText.trim()) {
+            message.error('Please enter a reason');
+            return;
+        }
+
+        setRmaReasons(prev => ({
+            ...prev,
+            [selectedItem.recordId]: reasonText.trim()
+        }));
+        setShowReasonModal(false);
+        message.success('Reason saved successfully');
+    };
+
     const handleReturn = async (item) => {
         console.log('Return item:', item);
         if (!item.recordId) {
@@ -155,11 +185,16 @@ const StoreOrdersPage = () => {
             return;
         }
         
+        const reason = rmaReasons[item.recordId];
+        if (!reason) {
+            message.error('Please enter reason for return');
+            return;
+        }
+
         try {
-            // Create RMA record first
             const rmaData = {
                 recordId: item.recordId,
-                reason: 'Return from completed order',
+                reason: reason,
                 notes: item.notes || ''
             };
             console.log('RMA data to be sent:', rmaData);
@@ -169,6 +204,12 @@ const StoreOrdersPage = () => {
 
             if (response && response.success) {
                 message.success('Item added to RMA successfully');
+                // Clear the reason after successful RMA
+                setRmaReasons(prev => {
+                    const newReasons = { ...prev };
+                    delete newReasons[item.recordId];
+                    return newReasons;
+                });
                 // Navigate to RMA page
                 navigate(`/stores/${storeId}/rma`);
             } else {
@@ -385,25 +426,33 @@ const StoreOrdersPage = () => {
     completedColumns.push({
         title: 'Actions',
         key: 'actions',
-        render: (_, record) => (
-            <Space>
-                <Button 
-                    type="primary"
-                    onClick={() => handleReturn(record)}
-                >
-                    Return
-                </Button>
-                {isAdmin() && (
+        render: (_, record) => {
+            const hasReason = rmaReasons[record.recordId];
+            
+            return (
+                <Space>
+                    {hasReason && (
+                        <Tag color="success">Ready</Tag>
+                    )}
                     <Button 
-                        type="link" 
-                        danger
-                        onClick={() => showDeleteConfirm(storeId, record.order.id)}
+                        type={hasReason ? "primary" : "default"}
+                        onClick={() => handleRmaClick(record)}
+                        title={hasReason ? "Ready to RMA, click 'Return' again to send to RMA" : "Click to enter RMA reason"}
                     >
-                        Delete
+                        {hasReason ? 'Return' : 'RMA'}
                     </Button>
-                )}
-            </Space>
-        )
+                    {isAdmin() && (
+                        <Button 
+                            type="link" 
+                            danger
+                            onClick={() => showDeleteConfirm(storeId, record.order.id)}
+                        >
+                            Delete
+                        </Button>
+                    )}
+                </Space>
+            );
+        }
     });
 
     return (
@@ -457,6 +506,24 @@ const StoreOrdersPage = () => {
                     }))}
                 />
             </Card>
+
+            {/* Add Reason Modal */}
+            <Modal
+                title="Enter RMA Reason"
+                open={showReasonModal}
+                onOk={handleReasonSubmit}
+                onCancel={() => setShowReasonModal(false)}
+                okText="OK"
+                cancelText="Cancel"
+            >
+                <Input.TextArea
+                    placeholder="Please enter reason for return"
+                    value={reasonText}
+                    onChange={e => setReasonText(e.target.value)}
+                    rows={4}
+                    style={{ marginTop: '16px' }}
+                />
+            </Modal>
         </div>
     );
 };

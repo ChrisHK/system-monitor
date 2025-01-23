@@ -1,4 +1,4 @@
-const { AppError } = require('./errorTypes');
+const { AppError, ValidationError, AuthenticationError } = require('./errorTypes');
 
 // Development環境下的錯誤處理
 const sendErrorDev = (err, res) => {
@@ -72,9 +72,37 @@ const errorHandler = (err, req, res, next) => {
 };
 
 // 異步錯誤處理包裝器
-const catchAsync = fn => {
+const catchAsync = (fn) => {
     return (req, res, next) => {
-        fn(req, res, next).catch(next);
+        Promise.resolve(fn(req, res, next)).catch((error) => {
+            console.error('Error caught by catchAsync:', {
+                name: error.name,
+                message: error.message,
+                stack: error.stack
+            });
+
+            if (error instanceof ValidationError) {
+                return res.status(400).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+
+            if (error instanceof AuthenticationError) {
+                return res.status(401).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+
+            // 未知錯誤
+            console.error('Unhandled error:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Internal server error',
+                detail: error.message
+            });
+        });
     };
 };
 

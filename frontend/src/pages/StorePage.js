@@ -84,69 +84,62 @@ const StorePage = () => {
             setLoading(true);
             console.log('Fetching store data for storeId:', storeId);
             
-            // First get the store details from the stores list
-            const storesResponse = await storeApi.getStores();
-            console.log('Stores response:', storesResponse);
+            // 先獲取商店詳情
+            const storeResponse = await storeApi.getStore(storeId);
+            console.log('Store response:', storeResponse);
             
-            if (storesResponse?.success) {
-                const currentStore = storesResponse.stores.find(store => store.id.toString() === storeId.toString());
-                console.log('Current store:', currentStore);
+            if (storeResponse?.success) {
+                setStore(storeResponse.store);
                 
-                if (currentStore) {
-                    setStore(currentStore);
-                    
-                    // Then get the store items
-                    console.log('Fetching items for store:', currentStore.name);
-                    const itemsResponse = await storeApi.getStoreItems(storeId);
-                    console.log('Store items response:', itemsResponse);
-                    
-                    if (itemsResponse?.success && itemsResponse.items) {
-                        const items = itemsResponse.items.map(item => ({
-                            ...item,
-                            location: currentStore.name,
-                            store_name: currentStore.name
-                        }));
-                        setRecords(items);
-                        setFilteredRecords(items);
-                    } else {
-                        console.error('Failed to fetch store items:', itemsResponse);
-                        message.error('Failed to load store items');
-                    }
+                // 然後獲取商店物品
+                console.log('Fetching items for store:', storeResponse.store.name);
+                const itemsResponse = await storeApi.getStoreItems(storeId);
+                console.log('Store items response:', itemsResponse);
+                
+                if (itemsResponse?.success) {
+                    setRecords(itemsResponse.items);
+                    setFilteredRecords(itemsResponse.items);
                 } else {
-                    console.error('Store not found in the list:', storeId);
-                    message.error('Store not found');
-                    navigate('/inventory');
+                    console.error('Failed to fetch store items:', itemsResponse);
+                    message.error('Failed to load store items');
                 }
             } else {
-                console.error('Failed to fetch stores:', storesResponse);
-                message.error('Failed to load stores');
+                console.error('Failed to fetch store:', storeResponse);
+                message.error('Failed to load store information');
                 navigate('/inventory');
             }
         } catch (error) {
-            console.error('Error loading store data:', error);
-            if (error.response?.status === 404) {
-                message.error('Store not found');
+            console.error('Error fetching store data:', error);
+            if (error.response?.status === 403) {
+                message.error('You do not have permission to access this store');
+                navigate('/inventory');
             } else {
                 message.error('Failed to load store data');
             }
-            navigate('/inventory');
         } finally {
             setLoading(false);
         }
-    }, [storeId, user, navigate]);
+    }, [user, storeId, navigate]);
 
     useEffect(() => {
         if (!user) return;
         
-        const userStoreId = user.store_id?.toString();
-        const requestedStoreId = storeId?.toString();
+        console.log('Checking store access:', {
+            user,
+            storeId,
+            isAdmin: user.group_name === 'admin',
+            hasStorePermission: user.permitted_stores?.includes(Number(storeId))
+        });
 
-        // 如果是管理員或者是用戶自己的商店,則獲取數據
-        if (user.role === 'admin' || userStoreId === requestedStoreId) {
+        // 檢查用戶是否有權限訪問該商店
+        const hasPermission = user.group_name === 'admin' || user.permitted_stores?.includes(Number(storeId));
+        
+        if (hasPermission) {
             fetchStores();
             fetchStoreData();
         } else {
-            message.error('Access denied');
+            console.log('Access denied to store:', storeId);
+            message.error('You do not have permission to access this store');
             navigate('/inventory');
         }
     }, [user, storeId, navigate, fetchStoreData, fetchStores]);
@@ -680,7 +673,7 @@ const StorePage = () => {
             render: formatDate,
             sorter: (a, b) => new Date(a.received_at) - new Date(b.received_at)
         },
-        user?.role === 'admin' && {
+        user?.group_name === 'admin' && {
             title: 'Actions',
             key: 'actions',
             width: 100,

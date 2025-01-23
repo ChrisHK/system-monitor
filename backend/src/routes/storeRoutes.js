@@ -1,9 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { auth, checkRole } = require('../middleware/auth');
+const { checkStorePermission } = require('../middleware/checkPermission');
 
 // Get all stores
-router.get('/', async (req, res) => {
+router.get('/', auth, async (req, res) => {
     try {
         console.log('=== GET /api/stores - Fetching all stores ===');
         const result = await pool.query('SELECT * FROM stores ORDER BY name');
@@ -15,6 +17,32 @@ router.get('/', async (req, res) => {
             success: false, 
             error: error.message,
             details: error.stack
+        });
+    }
+});
+
+// Get store by ID
+router.get('/:storeId', auth, checkStorePermission('view'), async (req, res) => {
+    try {
+        const { storeId } = req.params;
+        const result = await pool.query('SELECT * FROM stores WHERE id = $1', [storeId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Store not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            store: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Error fetching store:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
         });
     }
 });
@@ -91,7 +119,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Get store items
-router.get('/:storeId/items', async (req, res) => {
+router.get('/:storeId/items', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     
     try {
@@ -119,7 +147,7 @@ router.get('/:storeId/items', async (req, res) => {
 });
 
 // Process outbound items to store
-router.post('/:storeId/outbound', async (req, res) => {
+router.post('/:storeId/outbound', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     const { itemIds, force = false } = req.body;
     const client = await pool.connect();
@@ -323,32 +351,49 @@ router.post('/:storeId/outbound', async (req, res) => {
 });
 
 // Delete a store item
-router.delete('/:storeId/items/:itemId', async (req, res) => {
+router.delete('/:storeId/items/:itemId', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId, itemId } = req.params;
     const client = await pool.connect();
     
     try {
         await client.query('BEGIN');
         
-        // Check if item exists in this store
-        const checkItem = await client.query(
-            'SELECT id FROM store_items WHERE store_id = $1 AND record_id = $2',
-            [storeId, itemId]
-        );
+        // Get item details including serialnumber
+        const itemDetails = await client.query(`
+            SELECT si.id, sr.serialnumber, s.name as store_name
+            FROM store_items si
+            JOIN system_records sr ON sr.id = si.record_id
+            JOIN stores s ON s.id = si.store_id
+            WHERE si.store_id = $1 AND si.record_id = $2
+        `, [storeId, itemId]);
         
-        if (checkItem.rows.length === 0) {
+        if (itemDetails.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({
                 success: false,
                 error: 'Item not found in this store'
             });
         }
+
+        const { serialnumber } = itemDetails.rows[0];
         
-        // Delete the item
+        // Delete the item from store_items
         await client.query(
             'DELETE FROM store_items WHERE store_id = $1 AND record_id = $2',
             [storeId, itemId]
         );
+
+        // Update item location to inventory
+        await client.query(`
+            INSERT INTO item_locations (serialnumber, location, store_id, store_name, updated_at)
+            VALUES ($1, 'inventory', NULL, NULL, NOW())
+            ON CONFLICT (serialnumber) 
+            DO UPDATE SET 
+                location = 'inventory',
+                store_id = NULL,
+                store_name = NULL,
+                updated_at = NOW()
+        `, [serialnumber]);
         
         await client.query('COMMIT');
         
@@ -369,7 +414,7 @@ router.delete('/:storeId/items/:itemId', async (req, res) => {
 });
 
 // Export store items as CSV
-router.get('/:storeId/export', async (req, res) => {
+router.get('/:storeId/export', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     
     try {
@@ -467,7 +512,7 @@ router.get('/:storeId/export', async (req, res) => {
 });
 
 // Check for existing items in any store
-router.post('/:storeId/check-items', async (req, res) => {
+router.post('/:storeId/check-items', auth, checkStorePermission('inventory'), async (req, res) => {
     const { items } = req.body;
     
     try {
@@ -501,7 +546,7 @@ router.post('/:storeId/check-items', async (req, res) => {
 });
 
 // Check for duplicate items in store
-router.post('/:storeId/check', async (req, res) => {
+router.post('/:storeId/check', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     const { serialNumbers } = req.body;
     const client = await pool.connect();
@@ -537,7 +582,7 @@ router.post('/:storeId/check', async (req, res) => {
 });
 
 // Get store items with locations
-router.get('/:storeId/items-with-locations', async (req, res) => {
+router.get('/:storeId/items-with-locations', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     
     try {
@@ -572,7 +617,7 @@ router.get('/:storeId/items-with-locations', async (req, res) => {
 });
 
 // Find which store an item is in
-router.get('/find-item/:serialNumber', async (req, res) => {
+router.get('/find-item/:serialNumber', auth, async (req, res) => {
     const { serialNumber } = req.params;
     
     try {
