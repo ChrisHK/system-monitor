@@ -1,4 +1,5 @@
 const pool = require('../db');
+const cacheService = require('../services/cacheService');
 
 // 檢查主要權限
 const checkMainPermission = (feature) => {
@@ -10,33 +11,43 @@ const checkMainPermission = (feature) => {
             console.log('User:', { id: user.id, group: user.group_name });
             console.log('Feature:', feature);
 
-            // 檢查用戶群組
-            const groupResult = await pool.query(`
-                SELECT g.name as group_name, gp.permission_value
-                FROM groups g
-                LEFT JOIN group_permissions gp ON g.id = gp.group_id AND gp.permission_type = $2
-                WHERE g.id = $1
-            `, [user.group_id, feature]);
-
-            if (groupResult.rows.length === 0) {
-                console.log('Error: User group not found');
-                return res.status(403).json({
-                    success: false,
-                    error: 'Access denied: User group not found'
-                });
-            }
-
-            const group = groupResult.rows[0];
-            console.log('User group:', group);
-
             // 如果是admin群組，直接允許訪問
-            if (group.group_name === 'admin') {
+            if (user.group_name === 'admin') {
                 console.log('Access granted: Admin group');
                 return next();
             }
 
+            // 從緩存獲取用戶權限
+            let permissions = cacheService.getUserPermissions(user.id);
+
+            if (!permissions) {
+                // 緩存未命中，從數據庫獲取
+                const groupResult = await pool.query(`
+                    SELECT g.name as group_name, gp.permission_value
+                    FROM groups g
+                    LEFT JOIN group_permissions gp ON g.id = gp.group_id AND gp.permission_type = $2
+                    WHERE g.id = $1
+                `, [user.group_id, feature]);
+
+                if (groupResult.rows.length === 0) {
+                    console.log('Error: User group not found');
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Access denied: User group not found'
+                    });
+                }
+
+                permissions = {
+                    group: groupResult.rows[0],
+                    features: {}
+                };
+
+                // 將權限存入緩存
+                cacheService.setUserPermissions(user.id, permissions);
+            }
+
             // 檢查特定功能的權限
-            if (group.permission_value === true) {
+            if (permissions.group.permission_value === true) {
                 console.log(`Access granted: Has ${feature} permission`);
                 return next();
             }
@@ -78,47 +89,48 @@ const checkStorePermission = (feature) => {
                 });
             }
 
-            // 檢查用戶群組
-            const groupResult = await pool.query(`
-                SELECT g.name as group_name
-                FROM groups g
-                WHERE g.id = $1
-            `, [user.group_id]);
-
-            if (groupResult.rows.length === 0) {
-                console.log('Error: User group not found');
-                return res.status(403).json({
-                    success: false,
-                    error: 'Access denied: User group not found'
-                });
-            }
-
-            const group = groupResult.rows[0];
-            console.log('User group:', group);
-
             // 如果是admin群組，直接允許訪問
-            if (group.group_name === 'admin') {
+            if (user.group_name === 'admin') {
                 console.log('Access granted: Admin group');
                 return next();
             }
 
-            // 檢查群組是否有權限訪問該商店
-            const storePermissionResult = await pool.query(`
-                SELECT store_id, features
-                FROM group_store_permissions
-                WHERE group_id = $1 AND store_id = $2
-            `, [user.group_id, storeId]);
-
-            if (storePermissionResult.rows.length === 0) {
-                console.log('Store not in permitted stores list');
+            // 檢查用戶是否有權限訪問該商店
+            if (!user.permitted_stores || !user.permitted_stores.includes(storeId)) {
+                console.log('Store not in permitted stores list:', {
+                    storeId,
+                    permittedStores: user.permitted_stores
+                });
                 return res.status(403).json({
                     success: false,
                     error: 'Access denied: Store not in permitted stores list'
                 });
             }
 
-            const storePermission = storePermissionResult.rows[0];
-            console.log('Store permission:', storePermission);
+            // 從緩存獲取商店權限
+            let storePermissions = cacheService.getStorePermissions(user.group_id, storeId);
+
+            if (!storePermissions) {
+                // 緩存未命中，從數據庫獲取
+                const storePermissionResult = await pool.query(`
+                    SELECT store_id, features
+                    FROM group_store_permissions
+                    WHERE group_id = $1 AND store_id = $2
+                `, [user.group_id, storeId]);
+
+                if (storePermissionResult.rows.length === 0) {
+                    console.log('Store permissions not found');
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Access denied: Store permissions not found'
+                    });
+                }
+
+                storePermissions = storePermissionResult.rows[0];
+                
+                // 將權限存入緩存
+                cacheService.setStorePermissions(user.group_id, storeId, storePermissions);
+            }
 
             // 如果是view或basic功能，允許所有有商店權限的用戶訪問
             if (feature === 'view' || !feature || feature === 'basic') {
@@ -127,7 +139,7 @@ const checkStorePermission = (feature) => {
             }
 
             // 檢查特定功能的權限
-            const features = storePermission.features || {
+            const features = storePermissions.features || {
                 view: true,
                 basic: true,
                 inventory: false,

@@ -34,20 +34,75 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
     const [form] = Form.useForm();
     const [groupPermissions, setGroupPermissions] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [notificationCounts, setNotificationCounts] = useState({});
+    const lastFetchRef = useRef(0);
+    const FETCH_COOLDOWN = 5000; // 5 seconds cooldown
 
-    // Helper function to get notification count based on permissions
-    const getPermittedNotificationCount = useCallback((type, storeId, hasPermission) => {
-        // For admin users or users with permission, show notifications
-        if (user?.group_name === 'admin' || hasPermission) {
-            return getNotificationCount(type, storeId) || 0;
+    // 緩存通知計數
+    const cacheNotificationCount = useCallback((type, id, count) => {
+        setNotificationCounts(prev => ({
+            ...prev,
+            [`${type}-${id}`]: count
+        }));
+    }, []);
+
+    // 獲取緩存的通知計數
+    const getCachedNotificationCount = useCallback((type, id) => {
+        return notificationCounts[`${type}-${id}`] || 0;
+    }, [notificationCounts]);
+
+    // 檢查是否可以進行新的請求
+    const canFetch = useCallback(() => {
+        const now = Date.now();
+        if (now - lastFetchRef.current >= FETCH_COOLDOWN) {
+            lastFetchRef.current = now;
+            return true;
         }
-        // For users without permission, show no notifications
+        return false;
+    }, []);
+
+    // 批量獲取通知計數
+    const fetchNotificationCounts = useCallback(() => {
+        if (!stores.length || !canFetch()) return;
+
+        const types = ['inventory', 'order', 'rma'];
+        const newCounts = {};
+
+        // 主庫存和RMA的通知
+        if (user?.group_name === 'admin' || groupPermissions?.main_permissions?.inventory) {
+            const mainCount = getNotificationCount('inventory', 'main') || 0;
+            const rmaCount = getNotificationCount('inventory', 'rma') || 0;
+            newCounts['inventory-main'] = mainCount;
+            newCounts['inventory-rma'] = rmaCount;
+        }
+
+        // 各商店的通知
+        stores.forEach(store => {
+            types.forEach(type => {
+                const hasPermission = user?.group_name === 'admin' || 
+                    groupPermissions?.store_permissions?.[store.id]?.[type];
+                
+                if (hasPermission) {
+                    const count = getNotificationCount(type, store.id) || 0;
+                    newCounts[`${type}-${store.id}`] = count;
+                }
+            });
+        });
+
+        setNotificationCounts(newCounts);
+    }, [stores, user?.group_name, groupPermissions, getNotificationCount, canFetch]);
+
+    // 獲取權限通知計數
+    const getPermittedNotificationCount = useCallback((type, storeId, hasPermission) => {
+        if (user?.group_name === 'admin' || hasPermission) {
+            return getCachedNotificationCount(type, storeId);
+        }
         return 0;
-    }, [user?.group_name, getNotificationCount]);
+    }, [user?.group_name, getCachedNotificationCount]);
 
     // 獲取用戶組權限和商店列表
     const fetchUserDataAndStores = useCallback(async () => {
-        if (!user?.id || isLoading) return;
+        if (!user?.id || isLoading || !canFetch()) return;
         
         setIsLoading(true);
         try {
@@ -107,20 +162,35 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             }
             setStores(filteredStores);
 
+            // 獲取完商店列表後，更新通知計數
+            fetchNotificationCounts();
         } catch (error) {
             console.error('Error fetching user data and stores:', error);
             message.error('Failed to load sidebar data');
         } finally {
             setIsLoading(false);
         }
-    }, [user?.id]);
+    }, [user?.id, isLoading, fetchNotificationCounts, canFetch]);
 
     // 只在用戶ID變化時獲取數據
     useEffect(() => {
         if (user?.id) {
             fetchUserDataAndStores();
         }
-    }, [user?.id, fetchUserDataAndStores]);
+    }, [user?.id]);
+
+    // 定期更新通知計數
+    useEffect(() => {
+        if (!user?.id) return;
+
+        // 初始加載
+        fetchNotificationCounts();
+
+        // 每30秒更新一次通知計數
+        const intervalId = setInterval(fetchNotificationCounts, 30000);
+
+        return () => clearInterval(intervalId);
+    }, [user?.id, fetchNotificationCounts]);
 
     const handleLogout = useCallback(() => {
         console.log('Logging out...');
@@ -163,34 +233,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
     };
 
     const getMenuItems = useCallback(() => {
-        console.log('getMenuItems - Current stores:', stores);
-        console.log('getMenuItems - Group permissions:', groupPermissions);
-        console.log('getMenuItems - User group:', user?.group_name);
-        console.log('getMenuItems - Main permissions:', groupPermissions?.main_permissions);
-
         const menuItems = [];
-
-        // Calculate notification count based on permissions
-        const getPermittedNotificationCount = (type, storeId, permission) => {
-            console.log('Checking notification permission:', { type, storeId, permission, isAdmin: user?.group_name === 'admin' });
-            
-            // For admin users, show all notifications
-            if (user?.group_name === 'admin') {
-                const count = getNotificationCount(type, storeId);
-                console.log('Admin notification count:', count);
-                return count;
-            }
-            
-            // For regular users, only show notifications if they have permission
-            if (permission) {
-                const count = getNotificationCount(type, storeId);
-                console.log('User with permission notification count:', count);
-                return count;
-            }
-            
-            console.log('No permission, returning 0');
-            return 0;
-        };
 
         // Check if user has any inventory-related permissions
         const hasInventoryPermission = user?.group_name === 'admin' || 
@@ -204,7 +247,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
 
             // Add Items submenu if user has inventory permission
             if (hasInventoryPermission) {
-                const notificationCount = getPermittedNotificationCount('inventory', 'main', hasInventoryPermission);
+                const notificationCount = getCachedNotificationCount('inventory', 'main');
                 inventoryChildren.push({
                     key: '/inventory',
                     icon: <UnorderedListOutlined />,
@@ -219,7 +262,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
 
             // Add RMA submenu if user has inventory_ram permission
             if (hasInventoryRamPermission) {
-                const notificationCount = getPermittedNotificationCount('inventory', 'rma', hasInventoryRamPermission);
+                const notificationCount = getCachedNotificationCount('inventory', 'rma');
                 inventoryChildren.push({
                     key: '/inventory/rma',
                     icon: <RollbackOutlined />,
@@ -273,7 +316,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
 
                 // Add menu items based on permissions
                 if (user?.group_name === 'admin' || storePermissions.inventory) {
-                    const notificationCount = getPermittedNotificationCount('inventory', store.id, storePermissions.inventory);
+                    const notificationCount = getCachedNotificationCount('inventory', store.id);
                     menuItems.push({
                         key: `/stores/${store.id}`,
                         label: (
@@ -287,7 +330,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                 }
 
                 if (user?.group_name === 'admin' || storePermissions.orders) {
-                    const notificationCount = getPermittedNotificationCount('order', store.id, storePermissions.orders);
+                    const notificationCount = getCachedNotificationCount('order', store.id);
                     menuItems.push({
                         key: `/stores/${store.id}/orders`,
                         label: (
@@ -301,7 +344,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                 }
 
                 if (user?.group_name === 'admin' || storePermissions.rma) {
-                    const notificationCount = getPermittedNotificationCount('rma', store.id, storePermissions.rma);
+                    const notificationCount = getCachedNotificationCount('rma', store.id);
                     menuItems.push({
                         key: `/stores/${store.id}/rma`,
                         label: (
@@ -321,37 +364,19 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                     
                     // Only count notifications for sections the user has permission to see
                     if (user?.group_name === 'admin' || storePermissions.inventory) {
-                        const inventoryCount = getNotificationCount('inventory', store.id);
-                        console.log(`Store ${store.name} inventory notifications:`, {
-                            count: inventoryCount,
-                            hasPermission: user?.group_name === 'admin' || storePermissions.inventory
-                        });
+                        const inventoryCount = getCachedNotificationCount('inventory', store.id);
                         totalNotifications += inventoryCount || 0;
                     }
                     
                     if (user?.group_name === 'admin' || storePermissions.orders) {
-                        const orderCount = getNotificationCount('order', store.id);
-                        console.log(`Store ${store.name} order notifications:`, {
-                            count: orderCount,
-                            hasPermission: user?.group_name === 'admin' || storePermissions.orders
-                        });
+                        const orderCount = getCachedNotificationCount('order', store.id);
                         totalNotifications += orderCount || 0;
                     }
                     
                     if (user?.group_name === 'admin' || storePermissions.rma) {
-                        const rmaCount = getNotificationCount('rma', store.id);
-                        console.log(`Store ${store.name} RMA notifications:`, {
-                            count: rmaCount,
-                            hasPermission: user?.group_name === 'admin' || storePermissions.rma
-                        });
+                        const rmaCount = getCachedNotificationCount('rma', store.id);
                         totalNotifications += rmaCount || 0;
                     }
-
-                    console.log(`Store ${store.name} total notifications:`, {
-                        total: totalNotifications,
-                        permissions: storePermissions,
-                        isAdmin: user?.group_name === 'admin'
-                    });
 
                     return {
                         key: `store-${store.id}`,
@@ -392,7 +417,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
         });
 
         return menuItems;
-    }, [stores, groupPermissions, user?.group_name, navigate, handleLogout, getNotificationCount, handleNavigateAndClearNotification]);
+    }, [stores, groupPermissions, user?.group_name, navigate, handleLogout, getCachedNotificationCount, handleNavigateAndClearNotification]);
 
     const handleMenuClick = (e) => {
         if (e.key === 'logout') {
@@ -407,7 +432,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
     };
 
     const getMenuItem = (label, key, icon, children) => {
-        const notificationCount = getNotificationCount(
+        const notificationCount = getCachedNotificationCount(
             key === 'inventory' ? 'inventory' : 'store',
             storeId
         );

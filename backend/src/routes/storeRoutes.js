@@ -1,16 +1,42 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { auth, checkRole } = require('../middleware/auth');
+const { auth, checkRole, checkGroup } = require('../middleware/auth');
 const { checkStorePermission } = require('../middleware/checkPermission');
+const cacheService = require('../services/cacheService');
 
 // Get all stores
 router.get('/', auth, async (req, res) => {
     try {
-        console.log('=== GET /api/stores - Fetching all stores ===');
-        const result = await pool.query('SELECT * FROM stores ORDER BY name');
-        console.log('Found stores:', JSON.stringify(result.rows, null, 2));
-        res.json({ success: true, stores: result.rows });
+        console.log('=== GET /api/stores - Fetching stores ===');
+        
+        // 根據用戶組獲取緩存鍵
+        const groupName = req.user?.group_name || 'all';
+        
+        // 嘗試從緩存獲取商店列表
+        let stores = cacheService.getStoreList(groupName);
+        
+        if (!stores) {
+            console.log('Cache miss - Fetching stores from database');
+            // 從數據庫獲取商店列表
+            const result = await pool.query('SELECT * FROM stores ORDER BY name');
+            stores = result.rows;
+
+            // 如果用戶不是管理員，根據權限過濾商店
+            if (groupName !== 'admin' && req.user?.permitted_stores) {
+                stores = stores.filter(store => 
+                    req.user.permitted_stores.includes(store.id)
+                );
+            }
+
+            // 存入緩存
+            cacheService.setStoreList(stores, groupName);
+            console.log('Stores cached for group:', groupName);
+        } else {
+            console.log('Cache hit - Using cached stores for group:', groupName);
+        }
+
+        res.json({ success: true, stores });
     } catch (error) {
         console.error('Error fetching stores:', error);
         res.status(500).json({ 
@@ -48,10 +74,9 @@ router.get('/:storeId', auth, checkStorePermission('view'), async (req, res) => 
 });
 
 // Create a new store
-router.post('/', async (req, res) => {
+router.post('/', auth, checkGroup(['admin']), async (req, res) => {
     const { name, address, phone, email, description } = req.body;
 
-    // Validate required fields
     if (!name || !address || !phone || !email) {
         return res.status(400).json({
             success: false,
@@ -64,6 +89,10 @@ router.post('/', async (req, res) => {
             'INSERT INTO stores (name, address, phone, email, description) VALUES ($1, $2, $3, $4, $5) RETURNING *',
             [name, address, phone, email, description || null]
         );
+
+        // 清除所有商店列表緩存
+        cacheService.clearStoreListCache();
+        console.log('Store list cache cleared after new store creation');
 
         res.json({
             success: true,
@@ -79,7 +108,7 @@ router.post('/', async (req, res) => {
 });
 
 // Update a store
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, checkGroup(['admin']), async (req, res) => {
     const { id } = req.params;
     const { name, address, phone, email, description } = req.body;
     
@@ -92,6 +121,10 @@ router.put('/:id', async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ success: false, error: 'Store not found' });
         }
+
+        // 清除所有商店列表緩存
+        cacheService.clearStoreListCache();
+        console.log('Store list cache cleared after store update');
         
         res.json({ success: true, store: result.rows[0] });
     } catch (error) {
@@ -101,7 +134,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete a store
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', auth, checkGroup(['admin']), async (req, res) => {
     const { id } = req.params;
     
     try {
@@ -110,6 +143,10 @@ router.delete('/:id', async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ success: false, error: 'Store not found' });
         }
+
+        // 清除所有商店列表緩存
+        cacheService.clearStoreListCache();
+        console.log('Store list cache cleared after store deletion');
         
         res.json({ success: true, message: 'Store deleted successfully' });
     } catch (error) {
