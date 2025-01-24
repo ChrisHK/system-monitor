@@ -1,26 +1,33 @@
 import axios from 'axios';
+import { createApiWrapper, validateRmaData, validateStatusTransition } from '../utils/errors';
 
 const api = axios.create({
     baseURL: 'http://192.168.0.10:4000/api',
-    timeout: 10000,
+    timeout: 30000,
     headers: {
         'Content-Type': 'application/json',
     }
 });
 
-// Add request interceptor to add auth token
+// Request interceptor
 api.interceptors.request.use(
     (config) => {
+        // Skip token for login and public endpoints
+        if (config.url === '/users/login') {
+            return config;
+        }
+
         const token = localStorage.getItem('token');
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
+        
         console.log('API Request:', {
             url: config.url,
             method: config.method,
-            params: config.params,
             headers: config.headers
         });
+        
         return config;
     },
     (error) => {
@@ -29,40 +36,51 @@ api.interceptors.request.use(
     }
 );
 
-// Add response interceptor for better error handling
+// Response interceptor
 api.interceptors.response.use(
     (response) => {
         console.log('API Response:', {
             url: response.config.url,
             status: response.status,
-            data: response.data
+            success: response.data?.success
         });
         return response.data;
     },
     (error) => {
+        // Handle authentication errors
+        if (error.response?.status === 401) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            // Don't redirect if already on login page
+            if (!window.location.pathname.includes('/login')) {
+                window.location.href = '/login';
+            }
+        }
+        
         console.error('API Error:', {
             url: error.config?.url,
             status: error.response?.status,
-            data: error.response?.data,
-            message: error.message
+            message: error.message,
+            data: error.response?.data
         });
-        if (error.response?.status === 401) {
-            // Handle unauthorized access
-            localStorage.removeItem('token');
-            window.location.href = '/login';
+
+        // If it's a 400 error with a specific error message, return it as a response
+        if (error.response?.status === 400 && error.response.data?.error) {
+            return error.response.data;
         }
+
         return Promise.reject(error);
     }
 );
 
 // Group Management APIs
 export const groupApi = {
-    getGroups: () => api.get('/users/groups'),
-    createGroup: (groupData) => api.post('/users/groups', groupData),
-    updateGroup: (id, groupData) => api.put(`/users/groups/${id}`, groupData),
-    deleteGroup: (id) => api.delete(`/users/groups/${id}`),
-    getGroupPermissions: (id) => api.get(`/users/groups/${id}/permissions`),
-    updateGroupPermissions: (id, permissions) => api.put(`/users/groups/${id}/permissions`, permissions)
+    getGroups: () => api.get('/groups'),
+    createGroup: (groupData) => api.post('/groups', groupData),
+    updateGroup: (groupId, groupData) => api.put(`/groups/${groupId}`, groupData),
+    deleteGroup: (groupId) => api.delete(`/groups/${groupId}`),
+    getGroupPermissions: (groupId) => api.get(`/groups/${groupId}/permissions`),
+    updateGroupPermissions: (groupId, permissions) => api.put(`/groups/${groupId}/permissions`, { permissions })
 };
 
 // Store Management APIs
@@ -109,8 +127,8 @@ export const addRecord = (data) => api.post('/records', data);
 export const getOutboundItems = () => api.get('/outbound/items');
 export const addToOutbound = (recordId) => api.post('/outbound/items', { recordId });
 export const removeFromOutbound = (itemId) => api.delete(`/outbound/items/${itemId}`);
-export const sendToStore = (storeId, itemIds, force = false) => 
-    api.post(`/stores/${storeId}/outbound`, { itemIds, force });
+export const sendToStore = (storeId, outboundIds, force = false) => 
+    api.post(`/stores/${storeId}/outbound`, { outboundIds, force });
 
 // Location Management APIs
 export const checkItemLocation = (serialNumber) => api.get(`/locations/${serialNumber}`);
@@ -152,137 +170,184 @@ export const salesApi = {
     }
 };
 
+// Add retry utility function
+const fetchWithRetry = async (fn, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (i === retries - 1) throw error;
+            await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+        }
+    }
+};
+
+// Add error handling utility
+const handleApiError = (error) => {
+    console.error('API Error:', {
+        url: error.config?.url,
+        status: error.response?.status,
+        data: error.response?.data,
+        message: error.message
+    });
+
+    // If it's a network error
+    if (!error.response) {
+        throw new Error('Network error occurred. Please check your connection.');
+    }
+
+    // If it's a server error
+    if (error.response.status >= 500) {
+        throw new Error('Server error occurred. Please try again later.');
+    }
+
+    // If it's a client error
+    if (error.response.data?.error) {
+        throw new Error(error.response.data.error);
+    }
+
+    throw error;
+};
+
 export const rmaApi = {
-    // Get store RMA items
-    getRmaItems: async (storeId) => {
+    // Store RMA Operations
+    getRmaItems: createApiWrapper(async (storeId) => {
+        return await api.get(`/rma/${storeId}`);
+    }),
+
+    addToRma: createApiWrapper(async (storeId, data) => {
+        validateRmaData(data);
+        return await api.post(`/rma/${storeId}`, data);
+    }),
+
+    searchRma: createApiWrapper(async (storeId, serialNumber) => {
+        return await api.get(`/rma/${storeId}/search/${serialNumber}`);
+    }),
+
+    sendToInventory: createApiWrapper(async (storeId, rmaId) => {
+        const currentItem = await api.get(`/rma/${storeId}/${rmaId}`);
+        if (!currentItem?.success || !currentItem.rma) {
+            throw new Error('Failed to get RMA item');
+        }
+        validateStatusTransition(currentItem.rma.store_status, 'sent_to_inventory');
+        return await api.put(`/rma/${storeId}/${rmaId}/send-to-inventory`);
+    }),
+
+    updateRmaFields: createApiWrapper(async (storeId, rmaId, fields) => {
+        return await api.put(`/rma/${storeId}/${rmaId}/fields`, fields);
+    }),
+
+    deleteRma: createApiWrapper(async (storeId, rmaId) => {
+        return await api.delete(`/rma/${storeId}/${rmaId}`);
+    }),
+
+    // Get RMA items with pagination
+    getInventoryRmaItems: async (page = 1, limit = 50) => {
         try {
-            return await api.get(`/rma/${storeId}`);
+            const response = await api.get('/inventory/rma', {
+                params: { page, limit }
+            });
+            console.log('Raw API response:', response);
+            return response;  // Return response directly since interceptor already returns response.data
         } catch (error) {
-            console.error('Error fetching RMA items:', error);
-            throw error;
+            throw error.response?.data || error;
         }
     },
 
-    // Add item to RMA
-    addToRma: async (storeId, data) => {
-        try {
-            const response = await api.post(`/rma/${storeId}`, data);
-            return response;
-        } catch (error) {
-            console.error('Error adding to RMA:', error);
-            throw error;
-        }
-    },
-
-    // Search RMA by serial number
-    searchRma: async (storeId, serialNumber) => {
-        try {
-            const response = await api.get(`/rma/${storeId}/search/${serialNumber}`);
-            return response.data;
-        } catch (error) {
-            console.error('Error searching RMA:', error);
-            throw error;
-        }
-    },
-
-    // Send to Inventory
-    sendToInventory: async (storeId, rmaId) => {
-        try {
-            const response = await api.put(`/rma/${storeId}/${rmaId}/send-to-inventory`);
-            return response;
-        } catch (error) {
-            console.error('Error sending to inventory:', error);
-            throw error;
-        }
-    },
-
-    // Update RMA fields
-    updateRmaFields: async (storeId, rmaId, fields) => {
-        try {
-            const response = await api.put(`/rma/${storeId}/${rmaId}/fields`, fields);
-            return response;
-        } catch (error) {
-            console.error('Error updating RMA fields:', error);
-            throw error;
-        }
-    },
-
-    // Delete RMA
-    deleteRma: async (storeId, rmaId) => {
-        try {
-            const response = await api.delete(`/rma/${storeId}/${rmaId}`);
-            return response;
-        } catch (error) {
-            console.error('Error deleting RMA:', error);
-            throw error;
-        }
-    },
-
-    // Get inventory RMA items
-    getInventoryRmaItems: async () => {
-        try {
-            console.log('Calling getInventoryRmaItems API...');
-            const response = await api.get('/inventory/rma');
-            console.log('API response:', response);
-            return response;
-        } catch (error) {
-            console.error('Error fetching inventory RMA items:', error);
-            throw error;
-        }
-    },
-
-    // Process RMA item
+    // Process an RMA item
     processRma: async (rmaId) => {
         try {
-            const response = await api.put(`/inventory/rma/${rmaId}/process`);
+            const response = await fetchWithRetry(() => 
+                api.put(`/inventory/rma/${rmaId}/process`)
+            );
             return response;
         } catch (error) {
-            console.error('Error processing RMA:', error);
-            throw error;
+            throw handleApiError(error);
         }
     },
 
-    // Complete RMA item
+    // Complete an RMA item
     completeRma: async (rmaId) => {
         try {
-            const response = await api.put(`/inventory/rma/${rmaId}/complete`);
+            const response = await fetchWithRetry(() => 
+                api.put(`/inventory/rma/${rmaId}/complete`)
+            );
             return response;
         } catch (error) {
-            console.error('Error completing RMA:', error);
-            throw error;
+            throw handleApiError(error);
         }
     },
 
-    // Fail RMA item
-    failRma: async (rmaId) => {
+    // Fail an RMA item
+    failRma: async (rmaId, reason) => {
         try {
-            const response = await api.put(`/inventory/rma/${rmaId}/fail`);
+            const response = await fetchWithRetry(() => 
+                api.put(`/inventory/rma/${rmaId}/fail`, { reason })
+            );
             return response;
         } catch (error) {
-            console.error('Error failing RMA:', error);
-            throw error;
+            throw handleApiError(error);
         }
     },
 
-    // Send RMA item to store inventory
-    sendToStore: async (storeId, rmaId) => {
-        try {
-            const response = await api.put(`/rma/${storeId}/${rmaId}/send-to-store`);
-            return response;
-        } catch (error) {
-            console.error('Error sending RMA to store:', error);
-            throw error;
-        }
-    },
-
-    // Delete RMA from inventory
+    // Delete an RMA item (admin only)
     deleteInventoryRma: async (rmaId) => {
         try {
-            const response = await api.delete(`/inventory/rma/${rmaId}`);
+            const response = await fetchWithRetry(() => 
+                api.delete(`/inventory/rma/${rmaId}`)
+            );
             return response;
         } catch (error) {
-            console.error('Error deleting inventory RMA:', error);
-            throw error;
+            throw handleApiError(error);
+        }
+    },
+
+    // Get RMA statistics
+    getRmaStats: async () => {
+        try {
+            const response = await fetchWithRetry(() => 
+                api.get('/inventory/rma/stats')
+            );
+            return response;
+        } catch (error) {
+            throw handleApiError(error);
+        }
+    },
+
+    // Export RMA data to Excel
+    exportToExcel: async (params) => {
+        try {
+            const response = await fetchWithRetry(() => 
+                api.get('/inventory/rma/export', {
+                    params,
+                    responseType: 'blob'
+                })
+            );
+            return response;
+        } catch (error) {
+            throw handleApiError(error);
+        }
+    },
+
+    // Batch Operations
+    batchProcess: createApiWrapper(async (rmaIds) => {
+        return await api.put('/inventory/rma/batch-process', { rmaIds });
+    }),
+
+    batchComplete: createApiWrapper(async (rmaIds) => {
+        return await api.put('/inventory/rma/batch-complete', { rmaIds });
+    }),
+
+    batchFail: createApiWrapper(async (rmaIds, reason) => {
+        return await api.put('/inventory/rma/batch-fail', { rmaIds, failed_reason: reason });
+    }),
+
+    updateInventoryRma: async (rmaId, data) => {
+        try {
+            const response = await api.put(`/inventory/rma/${rmaId}`, data);
+            return response;
+        } catch (error) {
+            throw error.response?.data || error;
         }
     }
 };
@@ -350,6 +415,17 @@ export const orderApi = {
             return response;
         } catch (error) {
             console.error('Error updating price:', error);
+            throw error;
+        }
+    },
+
+    // Update order item payment method
+    updateOrderItemPayMethod: async (storeId, itemId, payMethod) => {
+        try {
+            const response = await api.put(`/orders/${storeId}/items/${itemId}/pay-method`, { pay_method: payMethod });
+            return response;
+        } catch (error) {
+            console.error('Error updating payment method:', error);
             throw error;
         }
     },

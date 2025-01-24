@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Table, Card, message, Space, Tag, Button, Input, Collapse } from 'antd';
+import { Table, Card, message, Space, Tag, Button, Input, Collapse, Modal } from 'antd';
 import { rmaApi } from '../services/api';
-import AddRmaModal from '../components/AddRmaModal';
+import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../contexts/NotificationContext';
 
 const { Search } = Input;
 const { Panel } = Collapse;
@@ -10,12 +11,19 @@ const { TextArea } = Input;
 
 const StoreRmaPage = () => {
     const { storeId } = useParams();
+    const { user } = useAuth();
+    const { addNotification } = useNotification();
+    
+    // Add debug logs
+    console.log('Current user:', user);
+    console.log('Is admin?', user?.group_name === 'admin');
+    
     const [loading, setLoading] = useState(false);
     const [rmaItems, setRmaItems] = useState([]);
     const [searchText, setSearchText] = useState('');
     const [filteredItems, setFilteredItems] = useState([]);
     const [editingItem, setEditingItem] = useState(null);
-    const [showAddModal, setShowAddModal] = useState(false);
+    const [operationLoading, setOperationLoading] = useState(false);
 
     const fetchRmaItems = useCallback(async () => {
         try {
@@ -54,27 +62,47 @@ const StoreRmaPage = () => {
 
     const handleDelete = async (rmaId) => {
         try {
-            const response = await rmaApi.deleteRma(storeId, rmaId);
-            if (response?.success) {
-                message.success('RMA item deleted successfully');
-                await fetchRmaItems();
-            }
+            Modal.confirm({
+                title: 'Delete RMA Item',
+                content: 'Are you sure you want to delete this RMA item?',
+                okText: 'Yes',
+                okType: 'danger',
+                cancelText: 'No',
+                onOk: async () => {
+                    const response = await rmaApi.deleteRma(storeId, rmaId);
+                    if (response?.success) {
+                        message.success('RMA item deleted successfully');
+                        fetchRmaItems();
+                    }
+                }
+            });
         } catch (error) {
-            console.error('Error deleting RMA:', error);
+            console.error('Error deleting RMA item:', error);
             message.error('Failed to delete RMA item');
         }
     };
 
-    const handleSendToInventory = async (rmaId) => {
+    const handleSendToInventory = async (record) => {
+        if (!record.reason?.trim()) {
+            message.error('Please enter a reason before sending to inventory');
+            return;
+        }
+
         try {
-            const response = await rmaApi.sendToInventory(storeId, rmaId);
-            if (response?.success) {
+            setOperationLoading(true);
+            const response = await rmaApi.sendToInventory(storeId, record.rma_id);
+            if (response.success) {
+                // Only add notification for inventory RMA
+                console.log('Adding notification for inventory RMA');
+                addNotification('inventory', 'rma');  // For inventory RMA only
+                
                 message.success('Item sent to inventory successfully');
                 await fetchRmaItems();
             }
         } catch (error) {
-            console.error('Error sending to inventory:', error);
-            message.error('Failed to send item to inventory');
+            message.error(error.message || 'Failed to send item to inventory');
+        } finally {
+            setOperationLoading(false);
         }
     };
 
@@ -117,12 +145,6 @@ const StoreRmaPage = () => {
         } finally {
             setEditingItem(null);
         }
-    };
-
-    const handleAddSuccess = async () => {
-        setShowAddModal(false);
-        await fetchRmaItems();
-        message.success('RMA item added successfully');
     };
 
     const columns = [
@@ -208,7 +230,8 @@ const StoreRmaPage = () => {
                 if (isPending) {
                     return (
                         <TextArea
-                            value={text}
+                            value={text || ''}
+                            placeholder="Enter reason (required)"
                             autoSize
                             onFocus={() => setEditingItem(record.rma_id)}
                             onBlur={(e) => handleFieldChange(record.rma_id, 'reason', e.target.value)}
@@ -221,7 +244,7 @@ const StoreRmaPage = () => {
                                 setRmaItems(newItems);
                                 setFilteredItems(newItems);
                             }}
-                            status={editingItem === record.rma_id && (!text || text.trim() === '') ? 'error' : ''}
+                            status={!text?.trim() ? 'error' : ''}
                         />
                     );
                 }
@@ -265,28 +288,47 @@ const StoreRmaPage = () => {
             key: 'actions',
             fixed: 'right',
             width: 200,
-            render: (_, record) => (
-                <Space>
-                    {(!record.store_status || record.store_status === 'pending') && (
-                        <>
+            render: (_, record) => {
+                // More lenient admin check
+                const isAdmin = user && (user.group_name === 'admin' || user.is_admin || user.role === 'admin');
+                console.log('Auth Debug:', { 
+                    user,
+                    group_name: user?.group_name,
+                    is_admin: user?.is_admin,
+                    role: user?.role,
+                    isAdmin
+                });
+                
+                return (
+                    <Space>
+                        {(!record.store_status || record.store_status === 'pending') && (
                             <Button
+                                key="send"
                                 type="primary"
                                 size="small"
-                                onClick={() => handleSendToInventory(record.rma_id)}
+                                loading={operationLoading}
+                                onClick={() => handleSendToInventory(record)}
+                                disabled={!record.reason?.trim()}
+                                title="Send to Inventory"
                             >
-                                Send to Inventory
+                                Send
                             </Button>
+                        )}
+                        
+                        {isAdmin && (
                             <Button
+                                key="delete"
+                                type="link"
                                 danger
                                 size="small"
                                 onClick={() => handleDelete(record.rma_id)}
                             >
                                 Delete
                             </Button>
-                        </>
-                    )}
-                </Space>
-            )
+                        )}
+                    </Space>
+                );
+            }
         }
     ];
 
@@ -305,9 +347,6 @@ const StoreRmaPage = () => {
                         onSearch={handleSearch}
                         style={{ width: 300 }}
                     />
-                    <Button type="primary" onClick={() => setShowAddModal(true)}>
-                        Add RMA
-                    </Button>
                 </Space>
 
                 {/* Pending RMA */}
@@ -355,16 +394,28 @@ const StoreRmaPage = () => {
                                 title: 'Actions',
                                 key: 'actions',
                                 fixed: 'right',
-                                width: 150,
+                                width: 200,
                                 render: (_, record) => (
                                     <Space>
                                         {record.store_status === 'completed' && (
-                                            <Button
-                                                type="primary"
-                                                onClick={() => handleSendToStore(record.rma_id)}
-                                            >
-                                                Send to Store
-                                            </Button>
+                                            <>
+                                                <Button
+                                                    type="primary"
+                                                    onClick={() => handleSendToStore(record.rma_id)}
+                                                >
+                                                    Send to Store
+                                                </Button>
+                                                {user && user.group_name === 'admin' && (
+                                                    <Button
+                                                        type="link"
+                                                        danger
+                                                        size="small"
+                                                        onClick={() => handleDelete(record.rma_id)}
+                                                    >
+                                                        Delete
+                                                    </Button>
+                                                )}
+                                            </>
                                         )}
                                     </Space>
                                 )
@@ -381,14 +432,6 @@ const StoreRmaPage = () => {
                         }}
                     />
                 </Card>
-
-                {/* Add RMA Modal */}
-                <AddRmaModal
-                    visible={showAddModal}
-                    onCancel={() => setShowAddModal(false)}
-                    onSuccess={handleAddSuccess}
-                    storeId={storeId}
-                />
             </Space>
         </div>
     );

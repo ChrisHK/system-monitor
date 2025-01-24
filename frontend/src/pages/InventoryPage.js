@@ -16,6 +16,7 @@ import {
     storeApi,
     checkItemLocation
 } from '../services/api';
+import { useNotification } from '../contexts/NotificationContext';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -24,7 +25,7 @@ const InventoryPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const { "*": storeId } = useParams();
-    const { logout } = useAuth();
+    const { user, logout } = useAuth();
     const [loading, setLoading] = useState(false);
     const [records, setRecords] = useState([]);
     const [duplicateSerials, setDuplicateSerials] = useState(new Set());
@@ -45,6 +46,13 @@ const InventoryPage = () => {
     const [isInitialLoad, setIsInitialLoad] = useState(true);
     const [storesList, setStoresList] = useState([]);
     const isFirstMount = useRef(true);
+    const { addNotification } = useNotification();
+
+    // 檢查用戶是否有 outbound 權限
+    const hasOutboundPermission = useMemo(() => {
+        return user?.group_name === 'admin' || 
+            user?.group_permissions?.main_permissions?.outbound === true;
+    }, [user]);
 
     useEffect(() => {
         const path = location.pathname;
@@ -397,10 +405,12 @@ const InventoryPage = () => {
 
                 const response = await sendToStore(selectedStore, outboundIds);
                 if (response?.success) {
-                    message.success(`Items sent to ${selectedStoreData.label} successfully`);
+                    message.success(`Successfully sent items to ${selectedStoreData.label}`);
+                    // Add notification for target store's inventory
+                    addNotification('inventory', selectedStore);
                     await fetchOutboundItems();
-                    fetchRecords(); // 刷新主列表
-                    setOutboundModalVisible(false); // 關閉模態框
+                    fetchRecords();
+                    setOutboundModalVisible(false);
                 } else if (response?.error?.includes('already in stores:')) {
                     Modal.confirm({
                         title: 'Items Already in Store',
@@ -410,9 +420,11 @@ const InventoryPage = () => {
                                 const retryResponse = await sendToStore(selectedStore, outboundIds, true);
                                 if (retryResponse?.success) {
                                     message.success('Items moved to new store successfully');
+                                    // Add notification for target store's inventory when moving items
+                                    addNotification('inventory', selectedStore);
                                     await fetchOutboundItems();
-                                    fetchRecords(); // 刷新主列表
-                                    setOutboundModalVisible(false); // 關閉模態框
+                                    fetchRecords();
+                                    setOutboundModalVisible(false);
                                 } else {
                                     throw new Error(retryResponse?.error || 'Failed to move items to new store');
                                 }
@@ -792,12 +804,14 @@ const InventoryPage = () => {
                                         onSearch={handleSearch}
                                         style={{ width: 300 }}
                                     />
-                                    <Button
-                                        type="primary"
-                                        onClick={() => setOutboundModalVisible(true)}
-                                    >
-                                        Outbound
-                                    </Button>
+                                    {hasOutboundPermission && (
+                                        <Button
+                                            type="primary"
+                                            onClick={() => setOutboundModalVisible(true)}
+                                        >
+                                            Outbound
+                                        </Button>
+                                    )}
                                     <Button
                                         icon={<ReloadOutlined />}
                                         onClick={() => fetchRecords(pagination.current, pagination.pageSize)}

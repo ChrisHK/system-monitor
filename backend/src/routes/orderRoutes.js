@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
-const { auth, checkRole } = require('../middleware/auth');
+const { auth, checkGroup } = require('../middleware/auth');
+const { checkStorePermission } = require('../middleware/checkPermission');
 const { catchAsync } = require('../middleware/errorHandler');
 const { ValidationError, NotFoundError, AuthorizationError } = require('../middleware/errorTypes');
 
 // Get store orders
-router.get('/:storeId', auth, async (req, res) => {
+router.get('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
     const { storeId } = req.params;
     const client = await pool.connect();
     
@@ -68,10 +69,10 @@ router.get('/:storeId', auth, async (req, res) => {
     } finally {
         client.release();
     }
-});
+}));
 
 // Add items to order
-router.post('/:storeId', auth, async (req, res) => {
+router.post('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
     const { storeId } = req.params;
     const { items } = req.body;
     const client = await pool.connect();
@@ -147,10 +148,10 @@ router.post('/:storeId', auth, async (req, res) => {
     } finally {
         client.release();
     }
-});
+}));
 
 // Save order (change status from pending to completed)
-router.put('/:storeId/:orderId/save', auth, async (req, res) => {
+router.put('/:storeId/:orderId/save', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
     const { storeId, orderId } = req.params;
     const client = await pool.connect();
     
@@ -185,10 +186,10 @@ router.put('/:storeId/:orderId/save', auth, async (req, res) => {
     } finally {
         client.release();
     }
-});
+}));
 
 // Delete order item
-router.delete('/:storeId/items/:itemId', auth, async (req, res) => {
+router.delete('/:storeId/items/:itemId', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
     const { storeId, itemId } = req.params;
     const client = await pool.connect();
     
@@ -254,10 +255,10 @@ router.delete('/:storeId/items/:itemId', auth, async (req, res) => {
     } finally {
         client.release();
     }
-});
+}));
 
 // Update order item notes
-router.put('/:storeId/items/:itemId/notes', auth, async (req, res) => {
+router.put('/:storeId/items/:itemId/notes', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
     const { storeId, itemId } = req.params;
     const { notes } = req.body;
     const client = await pool.connect();
@@ -302,10 +303,10 @@ router.put('/:storeId/items/:itemId/notes', auth, async (req, res) => {
     } finally {
         client.release();
     }
-});
+}));
 
 // Update order item price
-router.put('/:storeId/items/:itemId/price', auth, async (req, res) => {
+router.put('/:storeId/items/:itemId/price', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
     const { storeId, itemId } = req.params;
     const { price } = req.body;
     const client = await pool.connect();
@@ -355,10 +356,10 @@ router.put('/:storeId/items/:itemId/price', auth, async (req, res) => {
     } finally {
         client.release();
     }
-});
+}));
 
-// Delete order (admin only)
-router.delete('/:storeId/:orderId', auth, checkRole(['admin']), catchAsync(async (req, res) => {
+// Delete order (admin group only)
+router.delete('/:storeId/:orderId', auth, checkGroup(['admin']), catchAsync(async (req, res) => {
     const { storeId, orderId } = req.params;
     const client = await pool.connect();
     

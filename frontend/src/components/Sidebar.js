@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Layout, Menu, Modal, Form, Input, message } from 'antd';
+import { Layout, Menu, Modal, Form, Input, message, Badge } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useNotification } from '../contexts/NotificationContext';
 import {
     ShopOutlined,
     SettingOutlined,
     LogoutOutlined,
     ImportOutlined,
     ExportOutlined,
-    DatabaseOutlined,
     PlusOutlined,
     BranchesOutlined,
     DesktopOutlined,
     UnorderedListOutlined,
     ShoppingCartOutlined,
-    RollbackOutlined
+    RollbackOutlined,
+    DatabaseOutlined
 } from '@ant-design/icons';
 import { storeApi, groupApi } from '../services/api';
 import api from '../services/api';
@@ -23,126 +24,173 @@ import { Link } from 'react-router-dom';
 
 const { Sider } = Layout;
 
-const Sidebar = ({ collapsed, setCollapsed }) => {
+const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
     const navigate = useNavigate();
     const location = useLocation();
     const { logout, user } = useAuth();
+    const { getNotificationCount, clearNotification } = useNotification();
     const [stores, setStores] = useState([]);
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [form] = Form.useForm();
-    const storesRef = useRef(null);
-    const fetchingRef = useRef(false);
     const [groupPermissions, setGroupPermissions] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
+    const [notificationCounts, setNotificationCounts] = useState({});
+    const lastFetchRef = useRef(0);
+    const FETCH_COOLDOWN = 5000; // 5 seconds cooldown
 
-    // 獲取用戶組權限
-    const fetchGroupPermissions = useCallback(async () => {
-        if (!user?.id) return;
-        
-        try {
-            console.log('Fetching user details for user_id:', user.id);
-            const userResponse = await api.get('/users/me');
-            console.log('User response:', userResponse);
+    // 緩存通知計數
+    const cacheNotificationCount = useCallback((type, id, count) => {
+        setNotificationCounts(prev => ({
+            ...prev,
+            [`${type}-${id}`]: count
+        }));
+    }, []);
 
-            if (userResponse?.success) {
-                const userData = userResponse.user;
+    // 獲取緩存的通知計數
+    const getCachedNotificationCount = useCallback((type, id) => {
+        return notificationCounts[`${type}-${id}`] || 0;
+    }, [notificationCounts]);
+
+    // 檢查是否可以進行新的請求
+    const canFetch = useCallback(() => {
+        const now = Date.now();
+        if (now - lastFetchRef.current >= FETCH_COOLDOWN) {
+            lastFetchRef.current = now;
+            return true;
+        }
+        return false;
+    }, []);
+
+    // 批量獲取通知計數
+    const fetchNotificationCounts = useCallback(() => {
+        if (!stores.length || !canFetch()) return;
+
+        const types = ['inventory', 'order', 'rma'];
+        const newCounts = {};
+
+        // 主庫存和RMA的通知
+        if (user?.group_name === 'admin' || groupPermissions?.main_permissions?.inventory) {
+            const mainCount = getNotificationCount('inventory', 'main') || 0;
+            const rmaCount = getNotificationCount('inventory', 'rma') || 0;
+            newCounts['inventory-main'] = mainCount;
+            newCounts['inventory-rma'] = rmaCount;
+        }
+
+        // 各商店的通知
+        stores.forEach(store => {
+            types.forEach(type => {
+                const hasPermission = user?.group_name === 'admin' || 
+                    groupPermissions?.store_permissions?.[store.id]?.[type];
                 
-                if (userData.role === 'admin') {
-                    console.log('Admin user detected, fetching admin group');
-                    const groupsResponse = await groupApi.getGroups();
-                    console.log('Groups response:', groupsResponse);
-                    
-                    if (groupsResponse?.success) {
-                        const adminGroup = groupsResponse.groups.find(g => g.name.toLowerCase() === 'admin');
-                        if (adminGroup) {
-                            console.log('Found admin group:', adminGroup);
-                            setGroupPermissions({ success: true, permissions: adminGroup.permitted_stores });
+                if (hasPermission) {
+                    const count = getNotificationCount(type, store.id) || 0;
+                    newCounts[`${type}-${store.id}`] = count;
+                }
+            });
+        });
+
+        setNotificationCounts(newCounts);
+    }, [stores, user?.group_name, groupPermissions, getNotificationCount, canFetch]);
+
+    // 獲取權限通知計數
+    const getPermittedNotificationCount = useCallback((type, storeId, hasPermission) => {
+        if (user?.group_name === 'admin' || hasPermission) {
+            return getCachedNotificationCount(type, storeId);
+        }
+        return 0;
+    }, [user?.group_name, getCachedNotificationCount]);
+
+    // 獲取用戶組權限和商店列表
+    const fetchUserDataAndStores = useCallback(async () => {
+        if (!user?.id || isLoading || !canFetch()) return;
+        
+        setIsLoading(true);
+        try {
+            // 1. 獲取用戶詳細信息
+            const userResponse = await api.get('/users/me');
+            if (!userResponse?.success) {
+                throw new Error('Failed to fetch user details');
+            }
+            const userData = userResponse.user;
+
+            // 2. 獲取群組信息
+            const groupsResponse = await groupApi.getGroups();
+            if (!groupsResponse?.success) {
+                throw new Error('Failed to fetch groups');
+            }
+
+            // 3. 設置權限
+            let userGroupPermissions = null;
+            if (userData.role === 'admin' || userData.group_name === 'admin') {
+                const adminGroup = groupsResponse.groups.find(g => g.name === 'admin');
+                if (adminGroup) {
+                    userGroupPermissions = {
+                        success: true,
+                        permissions: adminGroup.permitted_stores,
+                        store_permissions: adminGroup.store_permissions,
+                        main_permissions: {
+                            inventory: true,
+                            inventory_ram: true
                         }
-                    }
-                } else if (userData.group_id) {
-                    console.log('Regular user, fetching group permissions for group_id:', userData.group_id);
-                    const groupResponse = await groupApi.getGroups();
-                    if (groupResponse?.success) {
-                        const userGroup = groupResponse.groups.find(g => g.id === userData.group_id);
-                        if (userGroup) {
-                            console.log('Found user group:', userGroup);
-                            setGroupPermissions({ 
-                                success: true, 
-                                permissions: userGroup.permitted_stores,
-                                features: userGroup.features || [],
-                                access_rights: userGroup.access_rights || []
-                            });
-                        }
-                    }
+                    };
+                }
+            } else if (userData.group_id) {
+                const userGroup = groupsResponse.groups.find(g => g.id === userData.group_id);
+                if (userGroup) {
+                    userGroupPermissions = {
+                        success: true,
+                        permissions: userGroup.permitted_stores,
+                        store_permissions: userGroup.store_permissions,
+                        main_permissions: userGroup.main_permissions || {}
+                    };
                 }
             }
+            setGroupPermissions(userGroupPermissions);
+
+            // 4. 獲取商店列表
+            const storesResponse = await storeApi.getStores();
+            if (!storesResponse?.success) {
+                throw new Error('Failed to fetch stores');
+            }
+
+            // 5. 根據權限過濾商店
+            let filteredStores = storesResponse.stores;
+            if (userData.role !== 'admin' && userGroupPermissions?.permissions) {
+                filteredStores = storesResponse.stores.filter(store => 
+                    userGroupPermissions.permissions.includes(store.id)
+                );
+            }
+            setStores(filteredStores);
+
+            // 獲取完商店列表後，更新通知計數
+            fetchNotificationCounts();
         } catch (error) {
-            console.error('Error fetching group permissions:', error);
+            console.error('Error fetching user data and stores:', error);
+            message.error('Failed to load sidebar data');
+        } finally {
+            setIsLoading(false);
+        }
+    }, [user?.id, isLoading, fetchNotificationCounts, canFetch]);
+
+    // 只在用戶ID變化時獲取數據
+    useEffect(() => {
+        if (user?.id) {
+            fetchUserDataAndStores();
         }
     }, [user?.id]);
 
-    const fetchStores = useCallback(async () => {
-        if (fetchingRef.current) {
-            return;
-        }
-
-        try {
-            fetchingRef.current = true;
-            console.log('Fetching stores for sidebar...');
-            const response = await storeApi.getStores();
-            console.log('Sidebar stores response:', response);
-
-            if (response?.success) {
-                let filteredStores = response.stores;
-                
-                // 檢查權限數據結構
-                console.log('Current group permissions:', groupPermissions);
-                
-                // 如果是管理員或有商店權限
-                if (user?.role === 'admin' || groupPermissions?.permissions) {
-                    console.log('User has store permissions:', 
-                        user?.role === 'admin' ? 'admin' : groupPermissions.permissions);
-                    
-                    if (user?.role === 'admin') {
-                        // Admin can see all stores
-                        filteredStores = response.stores;
-                    } else {
-                        // Regular users filter stores based on permissions
-                        const permittedStores = groupPermissions.permissions;
-                        console.log('Permitted stores:', permittedStores);
-                        filteredStores = response.stores.filter(store => 
-                            permittedStores.includes(store.id)
-                        );
-                    }
-                    console.log('Filtered stores:', filteredStores);
-                } else {
-                    console.log('No store permissions found');
-                    filteredStores = [];
-                }
-                
-                setStores(filteredStores);
-                storesRef.current = filteredStores;
-            }
-        } catch (error) {
-            console.error('Error fetching stores:', error);
-            message.error('Failed to load stores');
-        } finally {
-            fetchingRef.current = false;
-        }
-    }, [groupPermissions, user?.role]);
-
-    // 當組權限更新時重新獲取商店列表
+    // 定期更新通知計數
     useEffect(() => {
-        if (groupPermissions) {
-            fetchStores();
-        }
-    }, [groupPermissions, fetchStores]);
+        if (!user?.id) return;
 
-    // 初始化時獲取組權限
-    useEffect(() => {
-        if (user) {
-            fetchGroupPermissions();
-        }
-    }, [user, fetchGroupPermissions]);
+        // 初始加載
+        fetchNotificationCounts();
+
+        // 每30秒更新一次通知計數
+        const intervalId = setInterval(fetchNotificationCounts, 30000);
+
+        return () => clearInterval(intervalId);
+    }, [user?.id, fetchNotificationCounts]);
 
     const handleLogout = useCallback(() => {
         console.log('Logging out...');
@@ -157,7 +205,7 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
                 message.success('Store added successfully');
                 form.resetFields();
                 setIsModalVisible(false);
-                fetchStores();
+                fetchUserDataAndStores();
             }
         } catch (error) {
             console.error('Error adding store:', error);
@@ -175,47 +223,75 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
         return path;
     };
 
+    // Add new function to handle notification clearing
+    const handleNavigateAndClearNotification = (path, type, id) => {
+        // Clear notification before navigation
+        if (type && id) {
+            clearNotification(type, id);
+        }
+        navigate(path);
+    };
+
     const getMenuItems = useCallback(() => {
-        console.log('getMenuItems - Current stores:', stores);
-        console.log('getMenuItems - Group permissions:', groupPermissions);
-        console.log('getMenuItems - User role:', user?.role);
+        const menuItems = [];
 
-        const items = [
-            {
-                key: '/',
-                icon: <DesktopOutlined />,
-                label: 'Inventory',
-                children: [
-                    {
-                        key: '/inventory',
-                        label: 'Inventory',
-                        icon: <DatabaseOutlined />,
-                        onClick: () => navigate('/inventory')
-                    },
-                    {
-                        key: '/inventory/rma',
-                        label: 'RMA List',
-                        icon: <RollbackOutlined />,
-                        onClick: () => navigate('/inventory/rma')
-                    }
-                ]
+        // Check if user has any inventory-related permissions
+        const hasInventoryPermission = user?.group_name === 'admin' || 
+            groupPermissions?.main_permissions?.inventory === true;
+        const hasInventoryRamPermission = user?.group_name === 'admin' || 
+            groupPermissions?.main_permissions?.inventory_ram === true;
+
+        // Add Inventory menu item only if user has any inventory permissions
+        if (hasInventoryPermission || hasInventoryRamPermission) {
+            const inventoryChildren = [];
+
+            // Add Items submenu if user has inventory permission
+            if (hasInventoryPermission) {
+                const notificationCount = getCachedNotificationCount('inventory', 'main');
+                inventoryChildren.push({
+                    key: '/inventory',
+                    icon: <UnorderedListOutlined />,
+                    label: (
+                        <Badge count={notificationCount} offset={[10, 0]}>
+                            <span>Items</span>
+                        </Badge>
+                    ),
+                    onClick: () => handleNavigateAndClearNotification('/inventory', 'inventory', 'main')
+                });
             }
-        ];
 
-        // Check user permissions and store list
-        const hasStorePermissions = user?.role === 'admin' || 
-            (groupPermissions?.permissions && groupPermissions.permissions.length > 0);
-        
-        // Check for additional feature permissions
-        const hasFeatureAccess = (feature) => {
-            return user?.role === 'admin' || 
-                (groupPermissions?.features && groupPermissions.features.includes(feature));
-        };
+            // Add RMA submenu if user has inventory_ram permission
+            if (hasInventoryRamPermission) {
+                const notificationCount = getCachedNotificationCount('inventory', 'rma');
+                inventoryChildren.push({
+                    key: '/inventory/rma',
+                    icon: <RollbackOutlined />,
+                    label: (
+                        <Badge count={notificationCount} offset={[10, 0]}>
+                            <span>RMA</span>
+                        </Badge>
+                    ),
+                    onClick: () => handleNavigateAndClearNotification('/inventory/rma', 'inventory', 'rma')
+                });
+            }
 
-        console.log('hasStorePermissions:', hasStorePermissions);
-        console.log('Available stores:', stores);
-        console.log('Feature permissions:', groupPermissions?.features);
-        console.log('Access rights:', groupPermissions?.access_rights);
+            // Only add the Inventory menu if there are accessible children
+            if (inventoryChildren.length > 0) {
+                menuItems.push({
+                    key: 'inventory',
+                    icon: <DatabaseOutlined />,
+                    label: 'Inventory',
+                    children: inventoryChildren
+                });
+            }
+        }
+
+        // Check if user has store permissions
+        const hasStorePermissions = user?.group_name === 'admin' || 
+            (groupPermissions?.store_permissions && 
+             Object.values(groupPermissions.store_permissions).some(perm => 
+                perm.inventory || perm.orders || perm.rma
+             ));
 
         // Show Branches menu if user has permissions
         if (hasStorePermissions) {
@@ -226,69 +302,122 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
                 children: []
             };
 
-            // 如果是管理員，添加新增商店選項
-            if (user?.role === 'admin') {
+            if (user?.group_name === 'admin') {
                 branchesItem.children.push({
                     key: 'add-store',
                     icon: <PlusOutlined />,
-                    label: 'Add Store',
-                    className: 'ant-menu-item-add-store',
-                    onClick: () => setIsModalVisible(true)
+                    label: 'Add Store'
                 });
             }
 
-            // 添加商店列表
-            const storeItems = stores.map(store => ({
-                key: `store-${store.id}`,
-                label: store.name,
-                icon: <ShopOutlined />,
-                children: [
-                    {
-                        key: `/stores/${store.id}`,
-                        label: 'Inventory',
-                        icon: <UnorderedListOutlined />,
-                        onClick: () => navigate(`/stores/${store.id}`)
-                    },
-                    {
-                        key: `/stores/${store.id}/orders`,
-                        label: 'Orders',
-                        icon: <ShoppingCartOutlined />,
-                        onClick: () => navigate(`/stores/${store.id}/orders`)
-                    },
-                    {
-                        key: `/stores/${store.id}/rma`,
-                        label: 'RMA',
-                        icon: <RollbackOutlined />,
-                        onClick: () => navigate(`/stores/${store.id}/rma`)
-                    }
-                ]
-            }));
+            const storeItems = stores.map(store => {
+                const storePermissions = groupPermissions?.store_permissions?.[store.id] || {};
+                const menuItems = [];
 
-            branchesItem.children.push(...storeItems);
-            
-            // 只有當有商店時才添加 Branches 菜單
-            if (branchesItem.children.length > 0) {
-                items.push(branchesItem);
+                // Add menu items based on permissions
+                if (user?.group_name === 'admin' || storePermissions.inventory) {
+                    const notificationCount = getCachedNotificationCount('inventory', store.id);
+                    menuItems.push({
+                        key: `/stores/${store.id}`,
+                        label: (
+                            <Badge count={notificationCount} offset={[10, 0]}>
+                                <span>Inventory</span>
+                            </Badge>
+                        ),
+                        icon: <UnorderedListOutlined />,
+                        onClick: () => handleNavigateAndClearNotification(`/stores/${store.id}`, 'inventory', store.id)
+                    });
+                }
+
+                if (user?.group_name === 'admin' || storePermissions.orders) {
+                    const notificationCount = getCachedNotificationCount('order', store.id);
+                    menuItems.push({
+                        key: `/stores/${store.id}/orders`,
+                        label: (
+                            <Badge count={notificationCount} offset={[10, 0]}>
+                                <span>Orders</span>
+                            </Badge>
+                        ),
+                        icon: <ShoppingCartOutlined />,
+                        onClick: () => handleNavigateAndClearNotification(`/stores/${store.id}/orders`, 'order', store.id)
+                    });
+                }
+
+                if (user?.group_name === 'admin' || storePermissions.rma) {
+                    const notificationCount = getCachedNotificationCount('rma', store.id);
+                    menuItems.push({
+                        key: `/stores/${store.id}/rma`,
+                        label: (
+                            <Badge count={notificationCount} offset={[10, 0]}>
+                                <span>RMA</span>
+                            </Badge>
+                        ),
+                        icon: <RollbackOutlined />,
+                        onClick: () => handleNavigateAndClearNotification(`/stores/${store.id}/rma`, 'rma', store.id)
+                    });
+                }
+
+                // Store submenu with total notifications from all types
+                if (menuItems.length > 0) {
+                    // Calculate total notifications based on permissions
+                    let totalNotifications = 0;
+                    
+                    // Only count notifications for sections the user has permission to see
+                    if (user?.group_name === 'admin' || storePermissions.inventory) {
+                        const inventoryCount = getCachedNotificationCount('inventory', store.id);
+                        totalNotifications += inventoryCount || 0;
+                    }
+                    
+                    if (user?.group_name === 'admin' || storePermissions.orders) {
+                        const orderCount = getCachedNotificationCount('order', store.id);
+                        totalNotifications += orderCount || 0;
+                    }
+                    
+                    if (user?.group_name === 'admin' || storePermissions.rma) {
+                        const rmaCount = getCachedNotificationCount('rma', store.id);
+                        totalNotifications += rmaCount || 0;
+                    }
+
+                    return {
+                        key: `store-${store.id}`,
+                        label: totalNotifications > 0 ? (
+                            <Badge count={totalNotifications} offset={[10, 0]}>
+                                <span>{store.name}</span>
+                            </Badge>
+                        ) : <span>{store.name}</span>,
+                        icon: <ShopOutlined />,
+                        children: menuItems
+                    };
+                }
+                return null;
+            }).filter(Boolean);
+
+            if (storeItems.length > 0) {
+                branchesItem.children.push(...storeItems);
+                menuItems.push(branchesItem);
             }
         }
 
-        items.push(
-            {
+        // Add settings only for admin group
+        if (user?.group_name === 'admin') {
+            menuItems.push({
                 key: '/settings',
                 icon: <SettingOutlined />,
                 label: 'Settings',
                 onClick: () => navigate('/settings')
-            },
-            {
-                key: 'logout',
-                icon: <LogoutOutlined />,
-                label: 'Logout',
-                onClick: handleLogout
-            }
-        );
+            });
+        }
 
-        return items;
-    }, [stores, groupPermissions, user?.role, navigate, handleLogout, setIsModalVisible]);
+        // Always add logout
+        menuItems.push({
+            key: 'logout',
+            icon: <LogoutOutlined />,
+            label: 'Logout',
+            onClick: handleLogout
+        });
+
+        return menuItems;
+    }, [stores, groupPermissions, user?.group_name, navigate, handleLogout, getCachedNotificationCount, handleNavigateAndClearNotification]);
 
     const handleMenuClick = (e) => {
         if (e.key === 'logout') {
@@ -301,6 +430,32 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
             navigate(e.key);
         }
     };
+
+    const getMenuItem = (label, key, icon, children) => {
+        const notificationCount = getCachedNotificationCount(
+            key === 'inventory' ? 'inventory' : 'store',
+            storeId
+        );
+
+        return {
+            key,
+            icon,
+            children,
+            label: (
+                <Badge count={notificationCount} offset={[10, 0]}>
+                    <span>{label}</span>
+                </Badge>
+            )
+        };
+    };
+
+    const items = [
+        getMenuItem('Dashboard', 'dashboard'),
+        getMenuItem('Orders', 'orders'),
+        getMenuItem('RMA', 'rma'),
+        getMenuItem('Inventory', 'inventory'),
+        getMenuItem('Outbound', 'outbound'),
+    ];
 
     return (
         <>

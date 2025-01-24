@@ -9,7 +9,9 @@ import {
     message, 
     Space, 
     Tag, 
-    Tooltip 
+    Tooltip,
+    Typography,
+    Checkbox
 } from 'antd';
 import { 
     EditOutlined, 
@@ -27,8 +29,11 @@ const DEFAULT_GROUPS = [
         name: 'admin',
         description: 'Administrator group with full access',
         permitted_stores: [], // All stores
-        features: ['import', 'export', 'settings'],
-        access_rights: ['read', 'write', 'delete'],
+        main_permissions: {
+            inventory: true,
+            inventory_ram: true,
+            outbound: true
+        },
         is_system: true
     },
     {
@@ -36,8 +41,11 @@ const DEFAULT_GROUPS = [
         name: 'user',
         description: 'Regular user group with limited access',
         permitted_stores: [], // Specific stores only
-        features: [],
-        access_rights: ['read'],
+        main_permissions: {
+            inventory: false,
+            inventory_ram: false,
+            outbound: false
+        },
         is_system: true
     }
 ];
@@ -63,21 +71,21 @@ const GroupManagement = () => {
                 const backendGroups = response.groups || [];
                 console.log('Backend groups:', backendGroups);
                 
-                // Update system groups with data from backend if they exist
-                const updatedDefaultGroups = DEFAULT_GROUPS.map(defaultGroup => {
-                    const backendGroup = backendGroups.find(bg => bg.name === defaultGroup.name);
-                    return backendGroup ? { ...backendGroup, is_system: true } : defaultGroup;
-                });
-                console.log('Updated default groups:', updatedDefaultGroups);
+                // Only keep admin from DEFAULT_GROUPS
+                const adminGroup = DEFAULT_GROUPS.find(g => g.name === 'admin');
+                const updatedDefaultGroups = [adminGroup];
+                
+                // Update admin group with data from backend if it exists
+                const backendAdmin = backendGroups.find(bg => bg.name === 'admin');
+                if (backendAdmin) {
+                    updatedDefaultGroups[0] = { ...backendAdmin, is_system: true };
+                }
 
-                // Get custom groups (non-system groups)
-                const customGroups = backendGroups.filter(
-                    group => !DEFAULT_GROUPS.some(dg => dg.name === group.name)
-                );
-                console.log('Custom groups:', customGroups);
-
+                // Get all other groups from backend
+                const otherGroups = backendGroups.filter(group => group.name !== 'admin');
+                
                 // Set all groups
-                const allGroups = [...updatedDefaultGroups, ...customGroups];
+                const allGroups = [...updatedDefaultGroups, ...otherGroups];
                 console.log('Setting all groups:', allGroups);
                 setGroups(allGroups);
                 return true;
@@ -87,8 +95,8 @@ const GroupManagement = () => {
         } catch (error) {
             console.error('Error fetching groups:', error);
             message.error('Failed to load groups');
-            // Fallback to default groups
-            setGroups(DEFAULT_GROUPS);
+            // Fallback to admin group only
+            setGroups([DEFAULT_GROUPS.find(g => g.name === 'admin')]);
             return false;
         }
     };
@@ -122,57 +130,93 @@ const GroupManagement = () => {
             return;
         }
         setEditingGroup(group);
-        form.setFieldsValue({
+        
+        // Set basic fields
+        const formValues = {
             name: group.name,
             description: group.description,
-            permitted_stores: group.permitted_stores || []
-        });
+            permitted_stores: group.permitted_stores || [],
+            store_permissions: {},
+            main_permissions: group.main_permissions || {
+                inventory: false,
+                inventory_ram: false,
+                outbound: false
+            }
+        };
+
+        // Set store permissions
+        if (group.permitted_stores && group.store_permissions) {
+            group.permitted_stores.forEach(storeId => {
+                const permissions = group.store_permissions[storeId] || {};
+                formValues.store_permissions[`store_${storeId}_inventory`] = permissions.inventory || false;
+                formValues.store_permissions[`store_${storeId}_orders`] = permissions.orders || false;
+                formValues.store_permissions[`store_${storeId}_rma`] = permissions.rma || false;
+            });
+        }
+
+        form.setFieldsValue(formValues);
         setIsModalVisible(true);
     };
 
     const handleSubmit = async (values) => {
-        if (isSubmitting) return;
-        
         try {
-            setIsSubmitting(true);
+            const { name, description, permitted_stores, store_permissions = {}, main_permissions = {} } = values;
+            
+            // 重構 store_permissions 以匹配後端期望的格式
+            const transformedStorePermissions = {};
+            permitted_stores.forEach(storeId => {
+                transformedStorePermissions[storeId] = {
+                    inventory: store_permissions[`store_${storeId}_inventory`] || false,
+                    orders: store_permissions[`store_${storeId}_orders`] || false,
+                    rma: store_permissions[`store_${storeId}_rma`] || false
+                };
+            });
+
+            const groupData = {
+                name,
+                description,
+                store_permissions: transformedStorePermissions
+            };
+
             let response;
             if (editingGroup) {
-                response = await groupApi.updateGroup(editingGroup.id, values);
+                response = await groupApi.updateGroup(editingGroup.id, groupData);
+                
+                // Update main permissions separately
+                if (response?.success) {
+                    const permissionsResponse = await groupApi.updateGroupPermissions(editingGroup.id, main_permissions);
+                    if (!permissionsResponse?.success) {
+                        throw new Error('Failed to update main permissions');
+                    }
+                }
             } else {
-                response = await groupApi.createGroup(values);
+                response = await groupApi.createGroup(groupData);
+                
+                // Set main permissions for new group
+                if (response?.success) {
+                    const newGroupId = response.group.id;
+                    const permissionsResponse = await groupApi.updateGroupPermissions(newGroupId, main_permissions);
+                    if (!permissionsResponse?.success) {
+                        throw new Error('Failed to set main permissions');
+                    }
+                }
             }
 
             if (response?.success) {
-                // First fetch the updated groups
-                await fetchGroups();
-                // Then close the modal and show success message
                 message.success(`Group ${editingGroup ? 'updated' : 'created'} successfully`);
-                form.resetFields();
                 setIsModalVisible(false);
+                form.resetFields();
+                fetchGroups();
             }
         } catch (error) {
             console.error('Error saving group:', error);
-            // Show the specific error message from the backend
-            const errorMessage = error.response?.data?.error || `Failed to ${editingGroup ? 'update' : 'create'} group`;
-            message.error(errorMessage);
-            
-            // If it's a name conflict, highlight the name field
-            if (errorMessage.includes('already exists')) {
-                form.setFields([
-                    {
-                        name: 'name',
-                        errors: ['This group name is already taken. Please choose a different name.']
-                    }
-                ]);
-            }
-        } finally {
-            setIsSubmitting(false);
+            message.error(error.response?.data?.error || `Failed to ${editingGroup ? 'update' : 'create'} group`);
         }
     };
 
     const handleDelete = async (group) => {
-        if (group.is_system) {
-            message.warning('System groups cannot be deleted');
+        if (group.name === 'admin') {
+            message.warning('Admin group cannot be deleted');
             return;
         }
         setGroupToDelete(group);
@@ -203,7 +247,7 @@ const GroupManagement = () => {
             render: (text, record) => (
                 <Space>
                     {text}
-                    {record.is_system && <Tag color="gold">System</Tag>}
+                    {record.name === 'admin' && <Tag color="gold">System</Tag>}
                 </Space>
             )
         },
@@ -217,17 +261,42 @@ const GroupManagement = () => {
             dataIndex: 'permitted_stores',
             key: 'permitted_stores',
             render: (permitted_stores, record) => (
-                <Space>
-                    {record.is_system && record.name === 'admin' ? (
+                <Space direction="vertical">
+                    {record.name === 'admin' ? (
                         <Tag color="blue">All Stores</Tag>
                     ) : (permitted_stores || []).map(storeId => {
                         const store = stores.find(s => s.id === storeId);
-                        return store ? (
-                            <Tag key={storeId} color="blue">
-                                {store.name}
-                            </Tag>
-                        ) : null;
+                        if (!store) return null;
+
+                        const permissions = record.store_permissions?.[storeId] || {};
+                        return (
+                            <div key={storeId}>
+                                <Tag color="blue">{store.name}</Tag>
+                                <div style={{ marginLeft: 8, display: 'inline-block' }}>
+                                    {permissions.inventory && <Tag color="green">Inventory</Tag>}
+                                    {permissions.orders && <Tag color="cyan">Orders</Tag>}
+                                    {permissions.rma && <Tag color="purple">RMA</Tag>}
+                                </div>
+                            </div>
+                        );
                     })}
+                </Space>
+            )
+        },
+        {
+            title: 'Main Permissions',
+            key: 'main_permissions',
+            render: (_, record) => (
+                <Space direction="vertical">
+                    {record.name === 'admin' ? (
+                        <Tag color="blue">All Permissions</Tag>
+                    ) : (
+                        <>
+                            {record.main_permissions?.inventory && <Tag color="green">Inventory</Tag>}
+                            {record.main_permissions?.inventory_ram && <Tag color="cyan">Inventory RAM</Tag>}
+                            {record.main_permissions?.outbound && <Tag color="orange">Outbound</Tag>}
+                        </>
+                    )}
                 </Space>
             )
         },
@@ -240,7 +309,7 @@ const GroupManagement = () => {
                         type="link" 
                         icon={<EditOutlined />}
                         onClick={() => handleEdit(record)}
-                        disabled={record.is_system}
+                        disabled={record.name === 'admin'}
                     >
                         Edit
                     </Button>
@@ -249,7 +318,7 @@ const GroupManagement = () => {
                         danger
                         icon={<DeleteOutlined />}
                         onClick={() => handleDelete(record)}
-                        disabled={record.is_system}
+                        disabled={record.name === 'admin'}
                     >
                         Delete
                     </Button>
@@ -257,6 +326,82 @@ const GroupManagement = () => {
             )
         }
     ];
+
+    const renderStorePermissions = () => {
+        const selectedStores = form.getFieldValue('permitted_stores') || [];
+        
+        if (selectedStores.length === 0) {
+            return null;
+        }
+
+        return (
+            <div style={{ marginTop: 16 }}>
+                <Typography.Title level={5}>Store Feature Permissions</Typography.Title>
+                {selectedStores.map(storeId => {
+                    const store = stores.find(s => s.id === storeId);
+                    if (!store) return null;
+
+                    return (
+                        <div key={storeId} style={{ marginBottom: 16 }}>
+                            <Typography.Text strong>{store.name}</Typography.Text>
+                            <div style={{ marginLeft: 24, marginTop: 8 }}>
+                                <Form.Item
+                                    name={['store_permissions', `store_${storeId}_inventory`]}
+                                    valuePropName="checked"
+                                    initialValue={false}
+                                >
+                                    <Checkbox>Inventory Management</Checkbox>
+                                </Form.Item>
+                                <Form.Item
+                                    name={['store_permissions', `store_${storeId}_orders`]}
+                                    valuePropName="checked"
+                                    initialValue={false}
+                                >
+                                    <Checkbox>Order Management</Checkbox>
+                                </Form.Item>
+                                <Form.Item
+                                    name={['store_permissions', `store_${storeId}_rma`]}
+                                    valuePropName="checked"
+                                    initialValue={false}
+                                >
+                                    <Checkbox>RMA Management</Checkbox>
+                                </Form.Item>
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
+
+    const renderMainPermissions = () => {
+        return (
+            <div style={{ marginTop: 16 }}>
+                <Typography.Title level={5}>Main Permissions</Typography.Title>
+                <Form.Item
+                    name={['main_permissions', 'inventory']}
+                    valuePropName="checked"
+                    initialValue={false}
+                >
+                    <Checkbox>Inventory Management</Checkbox>
+                </Form.Item>
+                <Form.Item
+                    name={['main_permissions', 'inventory_ram']}
+                    valuePropName="checked"
+                    initialValue={false}
+                >
+                    <Checkbox>Inventory RAM Management</Checkbox>
+                </Form.Item>
+                <Form.Item
+                    name={['main_permissions', 'outbound']}
+                    valuePropName="checked"
+                    initialValue={false}
+                >
+                    <Checkbox>Outbound Management</Checkbox>
+                </Form.Item>
+            </div>
+        );
+    };
 
     return (
         <div>
@@ -284,35 +429,34 @@ const GroupManagement = () => {
                     setIsModalVisible(false);
                     form.resetFields();
                 }}
-                confirmLoading={isSubmitting}
-                okButtonProps={{ disabled: isSubmitting }}
-                cancelButtonProps={{ disabled: isSubmitting }}
+                width={600}
             >
                 <Form
                     form={form}
                     layout="vertical"
                     onFinish={handleSubmit}
+                    onValuesChange={(changedValues) => {
+                        if (changedValues.permitted_stores) {
+                            // Reset store permissions when stores selection changes
+                            const currentValues = form.getFieldValue('store_permissions') || {};
+                            const newPermissions = {};
+                            changedValues.permitted_stores.forEach(storeId => {
+                                newPermissions[`store_${storeId}_inventory`] = currentValues[`store_${storeId}_inventory`] || false;
+                                newPermissions[`store_${storeId}_orders`] = currentValues[`store_${storeId}_orders`] || false;
+                                newPermissions[`store_${storeId}_rma`] = currentValues[`store_${storeId}_rma`] || false;
+                            });
+                            form.setFieldsValue({ store_permissions: newPermissions });
+                        }
+                    }}
                 >
                     <Form.Item
                         name="name"
-                        label={
-                            <span>
-                                Group Name&nbsp;
-                                <Tooltip title="Only letters, numbers, underscores and hyphens are allowed">
-                                    <QuestionCircleOutlined />
-                                </Tooltip>
-                            </span>
-                        }
+                        label="Group Name"
                         rules={[
                             { required: true, message: 'Please input group name!' },
-                            { min: 2, max: 50, message: 'Group name must be between 2 and 50 characters' },
-                            {
-                                pattern: /^[a-zA-Z0-9_-]+$/,
-                                message: 'Group name can only contain letters, numbers, underscores and hyphens'
-                            },
                             { 
                                 validator: (_, value) => {
-                                    if (DEFAULT_GROUPS.some(g => g.name === value)) {
+                                    if (value === 'admin' && !editingGroup) {
                                         return Promise.reject('This group name is reserved');
                                     }
                                     return Promise.resolve();
@@ -320,17 +464,14 @@ const GroupManagement = () => {
                             }
                         ]}
                     >
-                        <Input placeholder="e.g. sales-team_01" />
+                        <Input disabled={editingGroup?.name === 'admin'} />
                     </Form.Item>
 
                     <Form.Item
                         name="description"
                         label="Description"
-                        rules={[
-                            { max: 500, message: 'Description cannot exceed 500 characters' }
-                        ]}
                     >
-                        <Input.TextArea rows={4} placeholder="Enter group description" />
+                        <Input.TextArea />
                     </Form.Item>
 
                     <Form.Item
@@ -341,47 +482,18 @@ const GroupManagement = () => {
                         <Select
                             mode="multiple"
                             placeholder="Select stores"
-                            style={{ width: '100%' }}
+                            disabled={editingGroup?.name === 'admin'}
                         >
                             {stores.map(store => (
                                 <Option key={store.id} value={store.id}>
-                                    {store.name}
+                                    Store {store.id} - {store.name}
                                 </Option>
                             ))}
                         </Select>
                     </Form.Item>
 
-                    <Form.Item
-                        name="features"
-                        label="Features"
-                        rules={[{ required: false }]}
-                    >
-                        <Select
-                            mode="multiple"
-                            placeholder="Select additional features"
-                            style={{ width: '100%' }}
-                        >
-                            <Option value="import">Import</Option>
-                            <Option value="export">Export</Option>
-                            <Option value="settings">Settings</Option>
-                        </Select>
-                    </Form.Item>
-
-                    <Form.Item
-                        name="access_rights"
-                        label="Access Rights"
-                        rules={[{ required: true, message: 'Please select access rights!' }]}
-                    >
-                        <Select
-                            mode="multiple"
-                            placeholder="Select access rights"
-                            style={{ width: '100%' }}
-                        >
-                            <Option value="read">Read</Option>
-                            <Option value="write">Write</Option>
-                            <Option value="delete">Delete</Option>
-                        </Select>
-                    </Form.Item>
+                    {renderMainPermissions()}
+                    {renderStorePermissions()}
                 </Form>
             </Modal>
 

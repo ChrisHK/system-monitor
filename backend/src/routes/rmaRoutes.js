@@ -131,10 +131,89 @@ try {
         }
     });
 
+    // Get single RMA item
+    router.get('/:storeId/:rmaId', auth, async (req, res) => {
+        const { storeId, rmaId } = req.params;
+        const client = await pool.connect();
+        
+        try {
+            console.log('=== Starting Single RMA fetch ===');
+            console.log('Params:', { storeId, rmaId });
+
+            const query = `
+                SELECT 
+                    sr.id,
+                    sr.serialnumber,
+                    sr.computername,
+                    sr.model,
+                    sr.ram_gb,
+                    sr.operatingsystem as operating_system,
+                    sr.cpu,
+                    sr.disks,
+                    sr.systemsku as system_sku,
+                    r.id as rma_id,
+                    r.store_id,
+                    r.record_id,
+                    r.reason,
+                    r.notes,
+                    r.rma_date,
+                    r.store_status,
+                    r.inventory_status,
+                    r.location_type,
+                    r.received_at,
+                    r.processed_at,
+                    r.completed_at,
+                    r.failed_at,
+                    r.failed_reason,
+                    s.name as store_name
+                FROM store_rma r
+                LEFT JOIN system_records sr ON r.record_id = sr.id
+                LEFT JOIN stores s ON r.store_id = s.id
+                WHERE r.store_id = $1 AND r.id = $2
+            `;
+            
+            console.log('Executing RMA query with params:', [storeId, rmaId]);
+            
+            const result = await client.query(query, [storeId, rmaId]);
+            
+            if (result.rows.length === 0) {
+                throw new Error('RMA item not found');
+            }
+            
+            res.json({
+                success: true,
+                rma: result.rows[0]
+            });
+            
+            console.log('=== Single RMA fetch completed successfully ===');
+        } catch (error) {
+            console.error('=== Error in Single RMA fetch ===');
+            console.error('Error details:', {
+                message: error.message,
+                stack: error.stack,
+                code: error.code,
+                detail: error.detail,
+                storeId: storeId,
+                rmaId: rmaId,
+                query: error.query
+            });
+
+            const statusCode = error.message.includes('not found') ? 404 : 500;
+            
+            res.status(statusCode).json({
+                success: false,
+                error: error.message,
+                detail: error.detail || 'No additional details available'
+            });
+        } finally {
+            client.release();
+        }
+    });
+
     // Add item to RMA
     router.post('/:storeId', auth, async (req, res) => {
         const { storeId } = req.params;
-        const { recordId, reason, notes } = req.body;
+        const { recordId, reason = '', notes = '' } = req.body;
         const client = await pool.connect();
         
         try {
@@ -336,6 +415,11 @@ try {
                 throw new Error('RMA item not found');
             }
 
+            const currentStatus = checkResult.rows[0].store_status;
+            if (currentStatus !== 'pending') {
+                throw new Error(`Invalid status transition from ${currentStatus} to sent_to_inventory`);
+            }
+
             // 更新RMA狀態
             const result = await client.query(`
                 UPDATE store_rma
@@ -361,7 +445,7 @@ try {
         } catch (error) {
             await client.query('ROLLBACK');
             console.error('Error sending to inventory:', error);
-            res.status(500).json({
+            res.status(400).json({
                 success: false,
                 error: error.message
             });

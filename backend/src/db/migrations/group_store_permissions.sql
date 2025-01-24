@@ -1,10 +1,15 @@
 -- 群組商店權限表
 CREATE TABLE IF NOT EXISTS group_store_permissions (
     id SERIAL PRIMARY KEY,
-    group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
-    store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    store_id INTEGER NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+    features JSONB DEFAULT '{
+        "inventory": false,
+        "orders": false,
+        "rma": false
+    }'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(group_id, store_id)
 );
 

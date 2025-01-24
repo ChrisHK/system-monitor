@@ -1,14 +1,42 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { auth, checkRole, checkGroup } = require('../middleware/auth');
+const { checkStorePermission } = require('../middleware/checkPermission');
+const cacheService = require('../services/cacheService');
 
 // Get all stores
-router.get('/', async (req, res) => {
+router.get('/', auth, async (req, res) => {
     try {
-        console.log('=== GET /api/stores - Fetching all stores ===');
-        const result = await pool.query('SELECT * FROM stores ORDER BY name');
-        console.log('Found stores:', JSON.stringify(result.rows, null, 2));
-        res.json({ success: true, stores: result.rows });
+        console.log('=== GET /api/stores - Fetching stores ===');
+        
+        // 根據用戶組獲取緩存鍵
+        const groupName = req.user?.group_name || 'all';
+        
+        // 嘗試從緩存獲取商店列表
+        let stores = cacheService.getStoreList(groupName);
+        
+        if (!stores) {
+            console.log('Cache miss - Fetching stores from database');
+            // 從數據庫獲取商店列表
+            const result = await pool.query('SELECT * FROM stores ORDER BY name');
+            stores = result.rows;
+
+            // 如果用戶不是管理員，根據權限過濾商店
+            if (groupName !== 'admin' && req.user?.permitted_stores) {
+                stores = stores.filter(store => 
+                    req.user.permitted_stores.includes(store.id)
+                );
+            }
+
+            // 存入緩存
+            cacheService.setStoreList(stores, groupName);
+            console.log('Stores cached for group:', groupName);
+        } else {
+            console.log('Cache hit - Using cached stores for group:', groupName);
+        }
+
+        res.json({ success: true, stores });
     } catch (error) {
         console.error('Error fetching stores:', error);
         res.status(500).json({ 
@@ -19,11 +47,36 @@ router.get('/', async (req, res) => {
     }
 });
 
+// Get store by ID
+router.get('/:storeId', auth, checkStorePermission('view'), async (req, res) => {
+    try {
+        const { storeId } = req.params;
+        const result = await pool.query('SELECT * FROM stores WHERE id = $1', [storeId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Store not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            store: result.rows[0]
+        });
+    } catch (error) {
+        console.error('Error fetching store:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 // Create a new store
-router.post('/', async (req, res) => {
+router.post('/', auth, checkGroup(['admin']), async (req, res) => {
     const { name, address, phone, email, description } = req.body;
 
-    // Validate required fields
     if (!name || !address || !phone || !email) {
         return res.status(400).json({
             success: false,
@@ -36,6 +89,10 @@ router.post('/', async (req, res) => {
             'INSERT INTO stores (name, address, phone, email, description) VALUES ($1, $2, $3, $4, $5) RETURNING *',
             [name, address, phone, email, description || null]
         );
+
+        // 清除所有商店列表緩存
+        cacheService.clearStoreListCache();
+        console.log('Store list cache cleared after new store creation');
 
         res.json({
             success: true,
@@ -51,7 +108,7 @@ router.post('/', async (req, res) => {
 });
 
 // Update a store
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, checkGroup(['admin']), async (req, res) => {
     const { id } = req.params;
     const { name, address, phone, email, description } = req.body;
     
@@ -64,6 +121,10 @@ router.put('/:id', async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ success: false, error: 'Store not found' });
         }
+
+        // 清除所有商店列表緩存
+        cacheService.clearStoreListCache();
+        console.log('Store list cache cleared after store update');
         
         res.json({ success: true, store: result.rows[0] });
     } catch (error) {
@@ -73,7 +134,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // Delete a store
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', auth, checkGroup(['admin']), async (req, res) => {
     const { id } = req.params;
     
     try {
@@ -82,6 +143,10 @@ router.delete('/:id', async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ success: false, error: 'Store not found' });
         }
+
+        // 清除所有商店列表緩存
+        cacheService.clearStoreListCache();
+        console.log('Store list cache cleared after store deletion');
         
         res.json({ success: true, message: 'Store deleted successfully' });
     } catch (error) {
@@ -91,7 +156,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 // Get store items
-router.get('/:storeId/items', async (req, res) => {
+router.get('/:storeId/items', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     
     try {
@@ -119,17 +184,17 @@ router.get('/:storeId/items', async (req, res) => {
 });
 
 // Process outbound items to store
-router.post('/:storeId/outbound', async (req, res) => {
+router.post('/:storeId/outbound', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
-    const { itemIds, force = false } = req.body;
+    const { outboundIds, force = false } = req.body;
     const client = await pool.connect();
     
     try {
         console.log('=== POST /stores/:storeId/outbound - Processing outbound items ===');
-        console.log('Request params:', { storeId, itemIds, force });
+        console.log('Request params:', { storeId, outboundIds, force });
 
-        if (!storeId || !itemIds || !Array.isArray(itemIds) || itemIds.length === 0) {
-            console.log('Invalid request parameters:', { storeId, itemIds });
+        if (!storeId || !outboundIds || !Array.isArray(outboundIds) || outboundIds.length === 0) {
+            console.log('Invalid request parameters:', { storeId, outboundIds });
             return res.status(400).json({
                 success: false,
                 error: 'Invalid request parameters'
@@ -153,18 +218,18 @@ router.post('/:storeId/outbound', async (req, res) => {
         }
         
         // Get outbound items with more details
-        console.log('Fetching outbound items:', itemIds);
+        console.log('Fetching outbound items:', outboundIds);
         const outboundQuery = `
             SELECT o.id, o.record_id, o.status, r.serialnumber
             FROM outbound_items o
             JOIN system_records r ON r.id = o.record_id
             WHERE o.id = ANY($1) AND o.status = $2
         `;
-        const outboundItems = await client.query(outboundQuery, [itemIds, 'pending']);
+        const outboundItems = await client.query(outboundQuery, [outboundIds, 'pending']);
         console.log('Found outbound items:', outboundItems.rows);
         
         if (outboundItems.rows.length === 0) {
-            console.log('No pending outbound items found for IDs:', itemIds);
+            console.log('No pending outbound items found for IDs:', outboundIds);
             await client.query('ROLLBACK');
             return res.status(404).json({
                 success: false,
@@ -323,32 +388,49 @@ router.post('/:storeId/outbound', async (req, res) => {
 });
 
 // Delete a store item
-router.delete('/:storeId/items/:itemId', async (req, res) => {
+router.delete('/:storeId/items/:itemId', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId, itemId } = req.params;
     const client = await pool.connect();
     
     try {
         await client.query('BEGIN');
         
-        // Check if item exists in this store
-        const checkItem = await client.query(
-            'SELECT id FROM store_items WHERE store_id = $1 AND record_id = $2',
-            [storeId, itemId]
-        );
+        // Get item details including serialnumber
+        const itemDetails = await client.query(`
+            SELECT si.id, sr.serialnumber, s.name as store_name
+            FROM store_items si
+            JOIN system_records sr ON sr.id = si.record_id
+            JOIN stores s ON s.id = si.store_id
+            WHERE si.store_id = $1 AND si.record_id = $2
+        `, [storeId, itemId]);
         
-        if (checkItem.rows.length === 0) {
+        if (itemDetails.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({
                 success: false,
                 error: 'Item not found in this store'
             });
         }
+
+        const { serialnumber } = itemDetails.rows[0];
         
-        // Delete the item
+        // Delete the item from store_items
         await client.query(
             'DELETE FROM store_items WHERE store_id = $1 AND record_id = $2',
             [storeId, itemId]
         );
+
+        // Update item location to inventory
+        await client.query(`
+            INSERT INTO item_locations (serialnumber, location, store_id, store_name, updated_at)
+            VALUES ($1, 'inventory', NULL, NULL, NOW())
+            ON CONFLICT (serialnumber) 
+            DO UPDATE SET 
+                location = 'inventory',
+                store_id = NULL,
+                store_name = NULL,
+                updated_at = NOW()
+        `, [serialnumber]);
         
         await client.query('COMMIT');
         
@@ -369,7 +451,7 @@ router.delete('/:storeId/items/:itemId', async (req, res) => {
 });
 
 // Export store items as CSV
-router.get('/:storeId/export', async (req, res) => {
+router.get('/:storeId/export', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     
     try {
@@ -467,7 +549,7 @@ router.get('/:storeId/export', async (req, res) => {
 });
 
 // Check for existing items in any store
-router.post('/:storeId/check-items', async (req, res) => {
+router.post('/:storeId/check-items', auth, checkStorePermission('inventory'), async (req, res) => {
     const { items } = req.body;
     
     try {
@@ -501,7 +583,7 @@ router.post('/:storeId/check-items', async (req, res) => {
 });
 
 // Check for duplicate items in store
-router.post('/:storeId/check', async (req, res) => {
+router.post('/:storeId/check', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     const { serialNumbers } = req.body;
     const client = await pool.connect();
@@ -537,7 +619,7 @@ router.post('/:storeId/check', async (req, res) => {
 });
 
 // Get store items with locations
-router.get('/:storeId/items-with-locations', async (req, res) => {
+router.get('/:storeId/items-with-locations', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
     
     try {
@@ -572,7 +654,7 @@ router.get('/:storeId/items-with-locations', async (req, res) => {
 });
 
 // Find which store an item is in
-router.get('/find-item/:serialNumber', async (req, res) => {
+router.get('/find-item/:serialNumber', auth, async (req, res) => {
     const { serialNumber } = req.params;
     
     try {

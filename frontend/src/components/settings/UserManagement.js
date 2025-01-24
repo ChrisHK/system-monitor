@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Input, Select, message, Space, Tag } from 'antd';
 import { EditOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { userApi, groupApi } from '../../services/api';
+import { userApi, groupApi, storeApi } from '../../services/api';
 
 const { Option } = Select;
 
@@ -10,21 +10,17 @@ const DEFAULT_USERS = [
         id: 1,
         username: 'admin',
         role: 'admin',
-        group_id: 1,
-        is_system: true
-    },
-    {
-        id: 2,
-        username: 'user',
-        role: 'user',
-        group_id: 2,
-        is_system: true
+        group_id: 1,  // admin group id
+        group_name: 'admin',  // admin group name
+        is_system: true,
+        permitted_stores: []  // will be updated from backend
     }
 ];
 
 const UserManagement = () => {
-    const [users, setUsers] = useState(DEFAULT_USERS);
+    const [users, setUsers] = useState([]);
     const [groups, setGroups] = useState([]);
+    const [stores, setStores] = useState([]);
     const [editingUser, setEditingUser] = useState(null);
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [form] = Form.useForm();
@@ -43,27 +39,79 @@ const UserManagement = () => {
         }
     };
 
+    const fetchStores = async () => {
+        try {
+            const response = await storeApi.getStores();
+            if (response?.success) {
+                setStores(response.stores);
+            }
+        } catch (error) {
+            console.error('Error fetching stores:', error);
+            message.error('Failed to load stores');
+        }
+    };
+
     const fetchUsers = async () => {
         try {
             const response = await userApi.getUsers();
             if (response?.success) {
-                // Merge default users with custom users
-                const customUsers = response.users.filter(
-                    user => !DEFAULT_USERS.find(du => du.username === user.username)
-                );
-                setUsers([...DEFAULT_USERS, ...customUsers]);
+                // Find admin user from backend
+                const backendAdmin = response.users.find(user => user.username === 'admin');
+                
+                if (backendAdmin) {
+                    // Update admin user with backend data while preserving is_system flag
+                    const adminUser = {
+                        ...backendAdmin,
+                        is_system: true,
+                        role: 'admin',  // Ensure admin role
+                        group_name: backendAdmin.group_name || 'admin'  // Use backend group name or fallback
+                    };
+                    
+                    // Get all other users from backend
+                    const otherUsers = response.users.filter(user => user.username !== 'admin');
+                    
+                    // Set all users with admin first
+                    setUsers([adminUser, ...otherUsers]);
+                } else {
+                    // If no admin in backend, use default admin user
+                    const adminGroup = groups.find(g => g.name === 'admin');
+                    const defaultAdmin = {
+                        ...DEFAULT_USERS[0],
+                        group_id: adminGroup?.id || 1,
+                        group_name: 'admin',
+                        permitted_stores: adminGroup?.permitted_stores || []
+                    };
+                    
+                    // Get all other users from backend
+                    const otherUsers = response.users;
+                    
+                    // Set all users with default admin first
+                    setUsers([defaultAdmin, ...otherUsers]);
+                }
             }
         } catch (error) {
             console.error('Error fetching users:', error);
             message.error('Failed to load users');
-            // Fallback to default users
-            setUsers(DEFAULT_USERS);
+            // Fallback to admin user only with current groups data
+            const adminGroup = groups.find(g => g.name === 'admin');
+            const defaultAdmin = {
+                ...DEFAULT_USERS[0],
+                group_id: adminGroup?.id || 1,
+                group_name: 'admin',
+                permitted_stores: adminGroup?.permitted_stores || []
+            };
+            setUsers([defaultAdmin]);
         }
     };
 
+    // Fetch groups, stores, and users
     useEffect(() => {
-        fetchUsers();
-        fetchGroups();
+        const initData = async () => {
+            await fetchGroups();   // Get groups first
+            await fetchStores();   // Then get stores
+            await fetchUsers();    // Finally get users
+        };
+        initData();
     }, []);
 
     const handleAdd = () => {
@@ -120,8 +168,8 @@ const UserManagement = () => {
     };
 
     const handleDelete = async (user) => {
-        if (user.is_system) {
-            message.warning('System users cannot be deleted');
+        if (user.username === 'admin') {
+            message.warning('Admin user cannot be deleted');
             return;
         }
         setUserToDelete(user);
@@ -146,6 +194,13 @@ const UserManagement = () => {
 
     // Get group name for display
     const getGroupName = (group_id) => {
+        // If it's admin user, always return 'admin' as group name
+        const user = users.find(u => u.group_id === group_id);
+        if (user?.username === 'admin') {
+            return 'admin';
+        }
+        
+        // For other users, find group name from groups
         const group = groups.find(g => g.id === group_id);
         return group ? group.name : 'Unknown';
     };
@@ -158,46 +213,50 @@ const UserManagement = () => {
             render: (text, record) => (
                 <Space>
                     {text}
-                    {record.is_system && <Tag color="gold">System</Tag>}
+                    {record.username === 'admin' && (
+                        <Tag color="blue">System User</Tag>
+                    )}
                 </Space>
             )
         },
         {
-            title: 'Role',
-            dataIndex: 'role',
-            key: 'role',
-            render: role => (
-                <Tag color={role === 'admin' ? 'red' : 'blue'}>
-                    {role}
-                </Tag>
-            )
-        },
-        {
             title: 'Group',
-            dataIndex: 'group_id',
-            key: 'group_id',
-            render: group_id => {
-                const groupName = getGroupName(group_id);
-                return (
-                    <Tag color={groupName === 'admin' ? 'red' : 'blue'}>
-                        {groupName}
-                    </Tag>
-                );
-            }
+            dataIndex: 'group_name',
+            key: 'group_name'
         },
         {
-            title: 'Permitted Stores',
-            key: 'permitted_stores',
+            title: 'Store Permissions',
+            key: 'store_permissions',
             render: (_, record) => {
+                // 如果是 admin 用戶，顯示完整訪問權限
+                if (record.username === 'admin' || record.group_name === 'admin') {
+                    return <Tag color="blue">All Stores - Full Access</Tag>;
+                }
+
+                // 獲取用戶群組的商店權限
                 const group = groups.find(g => g.id === record.group_id);
+                if (!group) return null;
+
+                const permissions = group.store_permissions || {};
                 return (
-                    <Space>
-                        {group?.permitted_stores?.map(storeId => (
-                            <Tag key={storeId} color="blue">
-                                Store {storeId}
-                            </Tag>
-                        ))}
-                    </Space>
+                    <div style={{ maxWidth: 400 }}>
+                        {Object.entries(permissions).map(([storeId, features]) => {
+                            const store = stores.find(s => s.id === parseInt(storeId));
+                            if (!store) return null;
+                            
+                            return (
+                                <div key={storeId} style={{ marginBottom: 8 }}>
+                                    <strong>{store.name}:</strong>
+                                    <br />
+                                    <Space>
+                                        {features.inventory && <Tag color="blue">Inventory</Tag>}
+                                        {features.orders && <Tag color="green">Orders</Tag>}
+                                        {features.rma && <Tag color="orange">RMA</Tag>}
+                                    </Space>
+                                </div>
+                            );
+                        })}
+                    </div>
                 );
             }
         },
@@ -206,20 +265,18 @@ const UserManagement = () => {
             key: 'actions',
             render: (_, record) => (
                 <Space>
-                    <Button 
-                        type="link" 
+                    <Button
                         icon={<EditOutlined />}
                         onClick={() => handleEdit(record)}
-                        disabled={record.is_system}
+                        disabled={record.username === 'admin'}
                     >
                         Edit
                     </Button>
-                    <Button 
-                        type="link" 
+                    <Button
                         danger
                         icon={<DeleteOutlined />}
                         onClick={() => handleDelete(record)}
-                        disabled={record.is_system}
+                        disabled={record.username === 'admin'}
                     >
                         Delete
                     </Button>
@@ -264,43 +321,35 @@ const UserManagement = () => {
                         name="username"
                         label="Username"
                         rules={[
-                            { required: true, message: 'Please input username!' },
-                            { 
-                                validator: (_, value) => {
-                                    if (DEFAULT_USERS.some(u => u.username === value)) {
-                                        return Promise.reject('This username is reserved');
-                                    }
-                                    return Promise.resolve();
-                                }
-                            }
+                            { required: true, message: 'Please input username' },
+                            { min: 3, message: 'Username must be at least 3 characters' }
                         ]}
                     >
                         <Input />
                     </Form.Item>
 
-                    <Form.Item
-                        name="password"
-                        label="Password"
-                        rules={[
-                            { 
-                                required: !editingUser, 
-                                message: 'Please input password!' 
-                            }
-                        ]}
-                    >
-                        <Input.Password />
-                    </Form.Item>
+                    {!editingUser && (
+                        <Form.Item
+                            name="password"
+                            label="Password"
+                            rules={[
+                                { required: true, message: 'Please input password' },
+                                { min: 6, message: 'Password must be at least 6 characters' }
+                            ]}
+                        >
+                            <Input.Password />
+                        </Form.Item>
+                    )}
 
                     <Form.Item
                         name="group_id"
                         label="Group"
-                        rules={[{ required: true, message: 'Please select group!' }]}
-                        help="User role will be automatically set based on the selected group"
+                        rules={[{ required: true, message: 'Please select a group' }]}
                     >
                         <Select>
                             {groups.map(group => (
                                 <Option key={group.id} value={group.id}>
-                                    {group.name} ({group.description})
+                                    {group.name}
                                 </Option>
                             ))}
                         </Select>
