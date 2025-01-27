@@ -171,7 +171,8 @@ const GroupManagement = () => {
                 transformedStorePermissions[storeId] = {
                     inventory: store_permissions[`store_${storeId}_inventory`] || false,
                     orders: store_permissions[`store_${storeId}_orders`] || false,
-                    rma: store_permissions[`store_${storeId}_rma`] || false
+                    rma: store_permissions[`store_${storeId}_rma`] || false,
+                    outbound: store_permissions[`store_${storeId}_outbound`] || false
                 };
             });
 
@@ -279,6 +280,7 @@ const GroupManagement = () => {
                                     {permissions.inventory && <Tag color="green">Inventory</Tag>}
                                     {permissions.orders && <Tag color="cyan">Orders</Tag>}
                                     {permissions.rma && <Tag color="purple">RMA</Tag>}
+                                    {permissions.outbound && <Tag color="orange">Outbound</Tag>}
                                 </div>
                             </div>
                         );
@@ -369,6 +371,13 @@ const GroupManagement = () => {
                                     initialValue={false}
                                 >
                                     <Checkbox>RMA Management</Checkbox>
+                                </Form.Item>
+                                <Form.Item
+                                    name={['store_permissions', `store_${storeId}_outbound`]}
+                                    valuePropName="checked"
+                                    initialValue={false}
+                                >
+                                    <Checkbox>Outbound Management</Checkbox>
                                 </Form.Item>
                             </div>
                         </div>

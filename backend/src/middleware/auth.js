@@ -2,6 +2,9 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db');
 const cacheService = require('../services/cacheService');
 
+const authCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 const auth = async (req, res, next) => {
     console.log('=== Starting Authentication ===');
     
@@ -10,6 +13,13 @@ const auth = async (req, res, next) => {
         
         if (!token) {
             throw new Error('No token provided');
+        }
+
+        // 檢查緩存
+        const cachedAuth = authCache.get(token);
+        if (cachedAuth && cachedAuth.expiry > Date.now()) {
+            req.user = cachedAuth.user;
+            return next();
         }
 
         try {
@@ -42,20 +52,20 @@ const auth = async (req, res, next) => {
                             g.id as group_id,
                             r.name as role_name,
                             ARRAY_AGG(DISTINCT gsp.store_id) FILTER (WHERE gsp.store_id IS NOT NULL) as permitted_stores,
-                            ARRAY_AGG(DISTINCT gsp.features) FILTER (WHERE gsp.features IS NOT NULL) as store_features
+                            ARRAY_AGG(DISTINCT gsp.features) FILTER (WHERE gsp.features IS NOT NULL) as store_features,
+                            jsonb_build_object(
+                                'inventory', BOOL_OR(CASE WHEN gp.permission_type = 'inventory' THEN gp.permission_value::boolean ELSE false END),
+                                'inventory_ram', BOOL_OR(CASE WHEN gp.permission_type = 'inventory_ram' THEN gp.permission_value::boolean ELSE false END),
+                                'inbound', BOOL_OR(CASE WHEN gp.permission_type = 'inbound' THEN gp.permission_value::boolean ELSE false END),
+                                'outbound', BOOL_OR(CASE WHEN gp.permission_type = 'outbound' THEN gp.permission_value::boolean ELSE false END)
+                            ) as main_permissions
                         FROM users u
                         LEFT JOIN groups g ON u.group_id = g.id
                         LEFT JOIN roles r ON u.role_id = r.id
                         LEFT JOIN group_store_permissions gsp ON g.id = gsp.group_id
+                        LEFT JOIN group_permissions gp ON g.id = gp.group_id
                         WHERE u.id = $1 AND u.is_active = true
                         GROUP BY u.id, u.username, u.group_id, u.role_id, u.is_active, g.id, g.name, r.name
-                    ),
-                    permissions_data AS (
-                        SELECT 
-                            gp.permission_type,
-                            gp.permission_value
-                        FROM user_data ud
-                        LEFT JOIN group_permissions gp ON ud.group_id = gp.group_id
                     )
                     SELECT 
                         ud.id,
@@ -67,11 +77,8 @@ const auth = async (req, res, next) => {
                         ud.role_name,
                         ud.permitted_stores,
                         ud.store_features,
-                        json_agg(pd.*) FILTER (WHERE pd.permission_type IS NOT NULL) as permissions
+                        ud.main_permissions
                     FROM user_data ud
-                    LEFT JOIN permissions_data pd ON true
-                    GROUP BY ud.id, ud.username, ud.user_group_id, ud.role_id, ud.is_active,
-                            ud.group_name, ud.role_name, ud.permitted_stores, ud.store_features
                 `, [userId]);
 
                 if (result.rows.length === 0) {
@@ -79,12 +86,11 @@ const auth = async (req, res, next) => {
                 }
 
                 userData = result.rows[0];
-                console.log('Database query result:', {
+                console.log('User data loaded:', {
                     userId: userData.id,
                     username: userData.username,
                     group: userData.group_name,
-                    role: userData.role_name,
-                    hasPermissions: !!userData.permissions,
+                    mainPermissions: userData.main_permissions,
                     permittedStores: userData.permitted_stores
                 });
                 
@@ -92,11 +98,11 @@ const auth = async (req, res, next) => {
                 cacheService.set(cacheKey, userData);
 
                 // 將權限數據存入緩存
-                if (userData.permissions) {
+                if (userData.main_permissions) {
                     const permissionsData = {
                         group: {
                             group_name: userData.group_name,
-                            permissions: userData.permissions.filter(p => p !== null)
+                            permissions: userData.main_permissions
                         },
                         features: userData.store_features
                     };
@@ -127,13 +133,19 @@ const auth = async (req, res, next) => {
                 }
             }
 
+            // 設置緩存
+            authCache.set(token, {
+                user: userData,
+                expiry: Date.now() + CACHE_TTL
+            });
+
             req.user = userData;
             console.log('Authentication successful for user:', {
                 id: req.user.id,
                 group: req.user.group_name,
                 role: req.user.role_name,
                 fromCache: !!userData,
-                permissions: req.user.permissions,
+                mainPermissions: req.user.main_permissions,
                 storeFeatures: req.user.store_features
             });
             
