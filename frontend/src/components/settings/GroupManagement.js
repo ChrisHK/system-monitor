@@ -32,7 +32,8 @@ const DEFAULT_GROUPS = [
         main_permissions: {
             inventory: true,
             inventory_ram: true,
-            outbound: true
+            outbound: true,
+            inbound: true
         },
         is_system: true
     },
@@ -44,7 +45,8 @@ const DEFAULT_GROUPS = [
         main_permissions: {
             inventory: false,
             inventory_ram: false,
-            outbound: false
+            outbound: false,
+            inbound: false
         },
         is_system: true
     }
@@ -140,7 +142,8 @@ const GroupManagement = () => {
             main_permissions: group.main_permissions || {
                 inventory: false,
                 inventory_ram: false,
-                outbound: false
+                outbound: false,
+                inbound: false
             }
         };
 
@@ -295,6 +298,7 @@ const GroupManagement = () => {
                             {record.main_permissions?.inventory && <Tag color="green">Inventory</Tag>}
                             {record.main_permissions?.inventory_ram && <Tag color="cyan">Inventory RAM</Tag>}
                             {record.main_permissions?.outbound && <Tag color="orange">Outbound</Tag>}
+                            {record.main_permissions?.inbound && <Tag color="purple">Inbound</Tag>}
                         </>
                     )}
                 </Space>
@@ -378,6 +382,13 @@ const GroupManagement = () => {
         return (
             <div style={{ marginTop: 16 }}>
                 <Typography.Title level={5}>Main Permissions</Typography.Title>
+                <Form.Item
+                    name={['main_permissions', 'inbound']}
+                    valuePropName="checked"
+                    initialValue={false}
+                >
+                    <Checkbox>Inbound Management</Checkbox>
+                </Form.Item>
                 <Form.Item
                     name={['main_permissions', 'inventory']}
                     valuePropName="checked"

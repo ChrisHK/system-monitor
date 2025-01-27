@@ -240,10 +240,17 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             groupPermissions?.main_permissions?.inventory === true;
         const hasInventoryRamPermission = user?.group_name === 'admin' || 
             groupPermissions?.main_permissions?.inventory_ram === true;
+        const hasInboundPermission = user?.group_name === 'admin' || 
+            groupPermissions?.main_permissions?.inbound === true;
 
         // Add Inventory menu item only if user has any inventory permissions
         if (hasInventoryPermission || hasInventoryRamPermission) {
             const inventoryChildren = [];
+
+            // Add Inbound submenu if user has inbound permission
+            if (hasInboundPermission) {
+                menuItems.push(getMenuItem('Inbound', '/inbound', <ImportOutlined />));
+            }
 
             // Add Items submenu if user has inventory permission
             if (hasInventoryPermission) {

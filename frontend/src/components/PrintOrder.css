@@ -1,0 +1,174 @@
+/* Print styles */
+.print-container {
+    padding: 20px;
+    max-width: 100%;
+    margin: 0 auto;
+    font-size: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.print-header {
+    text-align: center;
+    margin-bottom: 30px;
+    padding-bottom: 20px;
+    border-bottom: 2px solid #f0f0f0;
+}
+
+.print-header h2 {
+    margin-bottom: 15px !important;
+    color: #1890ff;
+}
+
+.order-info {
+    display: flex;
+    justify-content: space-between;
+    margin: 20px 0;
+    color: #666;
+}
+
+.print-content {
+    margin: 20px 0;
+}
+
+.print-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 12px;
+}
+
+.print-table th,
+.print-table td {
+    border: 1px solid #f0f0f0;
+    padding: 12px 8px;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 150px;
+}
+
+.print-table th {
+    background-color: #fafafa;
+    font-weight: 600;
+    color: #333;
+}
+
+.print-table tbody tr:hover {
+    background-color: #fafafa;
+}
+
+.print-table tfoot {
+    font-weight: 600;
+}
+
+.print-table tfoot td {
+    background-color: #fafafa;
+    border-top: 2px solid #f0f0f0;
+}
+
+.print-footer {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 2px solid #f0f0f0;
+    text-align: center;
+    color: #666;
+    font-size: 12px;
+}
+
+.print-footer p {
+    margin: 5px 0;
+}
+
+/* Column widths */
+.print-table th:nth-child(1), /* Serial Number */
+.print-table td:nth-child(1) {
+    width: 15%;
+}
+
+.print-table th:nth-child(2), /* Model */
+.print-table td:nth-child(2) {
+    width: 15%;
+}
+
+.print-table th:nth-child(3), /* System SKU */
+.print-table td:nth-child(3) {
+    width: 12%;
+}
+
+.print-table th:nth-child(4), /* CPU */
+.print-table td:nth-child(4) {
+    width: 18%;
+}
+
+.print-table th:nth-child(5), /* RAM */
+.print-table td:nth-child(5) {
+    width: 8%;
+}
+
+.print-table th:nth-child(6), /* Disks */
+.print-table td:nth-child(6) {
+    width: 12%;
+}
+
+.print-table th:nth-child(7), /* Pay Method */
+.print-table td:nth-child(7) {
+    width: 10%;
+}
+
+.print-table th:nth-child(8), /* Price */
+.print-table td:nth-child(8) {
+    width: 7%;
+}
+
+.print-table th:nth-child(9), /* Quantity */
+.print-table td:nth-child(9) {
+    width: 3%;
+}
+
+/* Print media query */
+@media print {
+    body * {
+        visibility: hidden;
+    }
+    
+    .print-container,
+    .print-container * {
+        visibility: visible;
+    }
+    
+    .print-container {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        padding: 20px;
+    }
+
+    /* Ensure table fits on the page */
+    .print-table {
+        font-size: 10px;
+        page-break-inside: avoid;
+    }
+
+    .print-table th,
+    .print-table td {
+        padding: 8px 4px;
+    }
+
+    /* Hide non-essential elements when printing */
+    .ant-btn,
+    .ant-modal-close,
+    .ant-modal-footer {
+        display: none !important;
+    }
+
+    /* Ensure footer stays at bottom */
+    .print-footer {
+        position: fixed;
+        bottom: 20px;
+        left: 0;
+        width: 100%;
+        background-color: white;
+    }
+} 
