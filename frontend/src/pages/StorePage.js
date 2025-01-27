@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select, Form, InputNumber } from 'antd';
 import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -55,134 +55,42 @@ const StorePage = () => {
     const [selectedItems, setSelectedItems] = useState([]);
     const [searchPerformed, setSearchPerformed] = useState(false);
 
-    // Modify stores fetching to use storeApi
-    const fetchStores = useCallback(async () => {
-        try {
-            console.log('Fetching stores list...');
-            const response = await storeApi.getStores();
-            console.log('Stores response:', response);
-            
-            if (response?.success) {
-                const storesList = response.stores.map(store => ({
-                    value: store.id.toString(),
-                    label: store.name
-                }));
-                console.log('Processed stores list:', storesList);
-                setStores(storesList);
-            } else {
-                console.error('Failed to fetch stores:', response);
-                message.error('Failed to load stores');
-            }
-        } catch (error) {
-            console.error('Error fetching stores:', error);
-            message.error('Failed to load stores');
-        }
+    // 優化權限檢查，使用 useMemo 緩存所有權限相關的結果
+    const permissions = useMemo(() => {
+        if (!user || !storeId) return {
+            isAdmin: false,
+            storePermissions: {},
+            hasAccess: false,
+            hasOutbound: false
+        };
+        
+        const isAdmin = user.group_name === 'admin';
+        const storePermissions = user.store_permissions?.[storeId] || {};
+        
+        return {
+            isAdmin,
+            storePermissions,
+            hasAccess: isAdmin || user.permitted_stores?.includes(Number(storeId)),
+            hasOutbound: isAdmin || storePermissions.outbound === true
+        };
+    }, [user, storeId]);
+
+    // 1. 首先定義 handleError，因為它被其他函數使用
+    const handleError = useCallback((error, operation) => {
+        console.error(`${operation} error:`, error);
+        const errorMessage = error.response?.data?.error || error.message || `Failed to ${operation}`;
+        message.error(errorMessage);
     }, []);
 
-    const fetchStoreData = useCallback(async () => {
-        if (!user || !storeId) return;
-
-        try {
-            setLoading(true);
-            console.log('Fetching store data for storeId:', storeId);
-            
-            // 先獲取商店詳情
-            const storeResponse = await storeApi.getStore(storeId);
-            console.log('Store response:', storeResponse);
-            
-            if (storeResponse?.success) {
-                setStore(storeResponse.store);
-                
-                // 然後獲取商店物品
-                console.log('Fetching items for store:', storeResponse.store.name);
-                const itemsResponse = await storeApi.getStoreItems(storeId);
-                console.log('Store items response:', itemsResponse);
-                
-                if (itemsResponse?.success) {
-                    setRecords(itemsResponse.items);
-                    setFilteredRecords(itemsResponse.items);
-                } else {
-                    console.error('Failed to fetch store items:', itemsResponse);
-                    message.error('Failed to load store items');
-                }
-            } else {
-                console.error('Failed to fetch store:', storeResponse);
-                message.error('Failed to load store information');
-                navigate('/inventory');
-            }
-        } catch (error) {
-            console.error('Error fetching store data:', error);
-            if (error.response?.status === 403) {
-                message.error('You do not have permission to access this store');
-                navigate('/inventory');
-            } else {
-                message.error('Failed to load store data');
-            }
-        } finally {
-            setLoading(false);
-        }
-    }, [user, storeId, navigate]);
-
-    useEffect(() => {
-        if (!user) return;
-        
-        console.log('Checking store access:', {
-            user,
-            storeId,
-            isAdmin: user.group_name === 'admin',
-            hasStorePermission: user.permitted_stores?.includes(Number(storeId))
-        });
-
-        // 檢查用戶是否有權限訪問該商店
-        const hasPermission = user.group_name === 'admin' || user.permitted_stores?.includes(Number(storeId));
-        
-        if (hasPermission) {
-            fetchStores();
-            fetchStoreData();
-        } else {
-            console.log('Access denied to store:', storeId);
-            message.error('You do not have permission to access this store');
-            navigate('/inventory');
-        }
-    }, [user, storeId, navigate, fetchStoreData, fetchStores]);
-
-    const handleSearch = (value) => {
-        if (!value) {
-            setFilteredRecords(records);
-            setSearchPerformed(false);
-            return;
-        }
-        
-        const filtered = records.filter(record => 
-            record.serialnumber.toLowerCase().includes(value.toLowerCase()) ||
-            record.computername?.toLowerCase().includes(value.toLowerCase()) ||
-            record.model?.toLowerCase().includes(value.toLowerCase())
-        );
-        setFilteredRecords(filtered);
-        setSearchPerformed(true);
-    };
-
-    const handleRefresh = () => {
-        fetchStoreData();
-    };
-
-    const handleOutboundModalOpen = async () => {
-        setOutboundModalVisible(true);
-        await fetchOutboundItems();
-    };
-
-    const handleOutboundModalClose = () => {
-        setOutboundModalVisible(false);
-        setSelectedOutboundStore(null);
-        setOutboundRecords([]);
-    };
-
-    const fetchOutboundItems = async () => {
+    // 2. 然後定義 fetchOutboundItems
+    const fetchOutboundItems = useCallback(async () => {
         try {
             setOutboundLoading(true);
             const response = await getOutboundItems();
             if (response?.items) {
                 setOutboundRecords(response.items);
+            } else {
+                throw new Error('Failed to fetch outbound items');
             }
         } catch (error) {
             console.error('Error fetching outbound items:', error);
@@ -190,7 +98,129 @@ const StorePage = () => {
         } finally {
             setOutboundLoading(false);
         }
-    };
+    }, []);
+
+    // 3. 再定義 handleOutbound
+    const handleOutbound = useCallback(async () => {
+        if (!permissions.hasOutbound) {
+            message.error('You do not have permission to perform outbound operations');
+            return;
+        }
+
+        try {
+            await fetchOutboundItems();
+            setOutboundModalVisible(true);
+        } catch (error) {
+            handleError(error, 'fetch outbound items');
+        }
+    }, [permissions.hasOutbound, fetchOutboundItems, handleError]);
+
+    // 優化數據獲取邏輯
+    const fetchData = useCallback(async () => {
+        if (!user || !storeId || !permissions.hasAccess) return;
+
+        try {
+            setLoading(true);
+            
+            // 並行請求數據
+            const [storeResponse, itemsResponse] = await Promise.all([
+                storeApi.getStore(storeId),
+                storeApi.getStoreItems(storeId)
+            ]);
+
+            if (storeResponse?.success) {
+                setStore(storeResponse.store);
+            } else {
+                throw new Error('Failed to fetch store information');
+            }
+
+            if (itemsResponse?.success) {
+                setRecords(itemsResponse.items);
+                setFilteredRecords(itemsResponse.items);
+            } else {
+                throw new Error('Failed to fetch store items');
+            }
+        } catch (error) {
+            console.error('Error fetching data:', error);
+            if (error.response?.status === 403) {
+                message.error('You do not have permission to access this store');
+                navigate('/inventory');
+            } else {
+                message.error(error.message || 'Failed to load data');
+            }
+        } finally {
+            setLoading(false);
+        }
+    }, [user, storeId, permissions.hasAccess, navigate]);
+
+    // 優化 useEffect
+    useEffect(() => {
+        if (!permissions.hasAccess) {
+            message.error('You do not have permission to access this store');
+            navigate('/inventory');
+            return;
+        }
+
+        fetchData();
+    }, [permissions.hasAccess, fetchData, navigate]);
+
+    // 優化搜索邏輯
+    const handleSearch = useCallback((value) => {
+        if (!value) {
+            setFilteredRecords(records);
+            setSearchPerformed(false);
+            return;
+        }
+        
+        const searchValue = value.toLowerCase();
+        const filtered = records.filter(record => 
+            record.serialnumber.toLowerCase().includes(searchValue) ||
+            record.computername?.toLowerCase().includes(searchValue) ||
+            record.model?.toLowerCase().includes(searchValue)
+        );
+        setFilteredRecords(filtered);
+        setSearchPerformed(true);
+    }, [records]);
+
+    const handleModalClose = useCallback((type) => {
+        switch(type) {
+            case 'outbound':
+                setOutboundModalVisible(false);
+                setSelectedOutboundStore(null);
+                setOutboundRecords([]);
+                break;
+            case 'sales':
+                setSalesModalVisible(false);
+                setSelectedItem(null);
+                setPrice(0);
+                setNotes('');
+                break;
+            case 'rma':
+                setRmaModalVisible(false);
+                setSelectedItem(null);
+                setReason('');
+                setNotes('');
+                break;
+        }
+    }, []);
+
+    const refreshData = useCallback(async (type) => {
+        try {
+            setLoading(true);
+            await fetchData();
+            
+            if (type === 'outbound') {
+                await fetchOutboundItems();
+            }
+            
+            message.success(`${type} operation completed successfully`);
+        } catch (error) {
+            console.error(`Error refreshing ${type} data:`, error);
+            message.error(`Failed to refresh ${type} data`);
+        } finally {
+            setLoading(false);
+        }
+    }, [fetchData, fetchOutboundItems]);
 
     const handleAddToOutbound = async (serialNumber) => {
         try {
@@ -271,10 +301,10 @@ const StorePage = () => {
                 // Then refresh the data
                 console.log('Refreshing data...');
                 await fetchOutboundItems();
-                await fetchStoreData();
+                await fetchData();
                 
                 message.success('Items sent to store successfully');
-                handleOutboundModalClose();
+                handleModalClose('outbound');
             } else if (response?.error && response.error.includes('already in stores:')) {
                 Modal.confirm({
                     title: 'Items Already in Store',
@@ -295,10 +325,10 @@ const StorePage = () => {
                                 // Then refresh the data
                                 console.log('Refreshing data...');
                                 await fetchOutboundItems();
-                                await fetchStoreData();
+                                await fetchData();
                                 
                                 message.success('Items moved to new store successfully');
-                                handleOutboundModalClose();
+                                handleModalClose('outbound');
                             } else {
                                 throw new Error(retryResponse?.error || 'Failed to move items to new store');
                             }
@@ -475,7 +505,7 @@ const StorePage = () => {
 
             message.success('Item added to sales successfully');
             setSalesModalVisible(false);
-            fetchStoreData(); // Refresh the items list
+            fetchData(); // Refresh the items list
             navigate(`/stores/${storeId}/sales`);
         } catch (error) {
             message.error('Error adding item to sales');
@@ -503,7 +533,7 @@ const StorePage = () => {
                 
                 message.success('Item added to RMA successfully');
                 setRmaModalVisible(false);
-                fetchStoreData();
+                fetchData();
                 navigate(`/stores/${storeId}/rma`);
             } else {
                 throw new Error(response?.error || 'Failed to add item to RMA');
@@ -734,7 +764,7 @@ const StorePage = () => {
                 message.success('Items added to order successfully');
                 setSelectedItems([]);
                 setSearchPerformed(false);
-                fetchStoreData();
+                fetchData();
             } else {
                 const errorMsg = response?.error || 'Failed to add items to order';
                 message.error(errorMsg);
@@ -764,25 +794,22 @@ const StorePage = () => {
                     {searchPerformed && (
                         <Button
                             type="primary"
-                            onClick={() => {
-                                if (selectedItems.length === 0) {
-                                    message.warning('Please select items to add to order');
-                                    return;
-                                }
-                                handleAddToOrder(selectedItems);
-                            }}
+                            onClick={() => handleAddToOrder(selectedItems)}
                             disabled={!selectedItems.length}
                         >
                             Add to Order ({selectedItems.length})
                         </Button>
                     )}
-                    <Button
-                        type="primary"
-                        icon={<ExportOutlined />}
-                        onClick={handleOutboundModalOpen}
-                    >
-                        Outbound
-                    </Button>
+                    {permissions.hasOutbound && (
+                        <Button
+                            type="primary"
+                            icon={<ExportOutlined />}
+                            onClick={handleOutbound}
+                            loading={outboundLoading}
+                        >
+                            Outbound
+                        </Button>
+                    )}
                     <Button
                         icon={<DownloadOutlined />}
                         onClick={handleExportCSV}
@@ -791,7 +818,7 @@ const StorePage = () => {
                     </Button>
                     <Button
                         icon={<ReloadOutlined />}
-                        onClick={handleRefresh}
+                        onClick={fetchData}
                         loading={loading}
                     >
                         Refresh
@@ -806,7 +833,7 @@ const StorePage = () => {
         <Modal
             title="Outbound Management"
             visible={outboundModalVisible}
-            onCancel={handleOutboundModalClose}
+            onCancel={() => handleModalClose('outbound')}
             width={1000}
             footer={null}
         >
@@ -894,7 +921,7 @@ const StorePage = () => {
             title="Add to Sales"
             open={salesModalVisible}
             onOk={handleSalesSubmit}
-            onCancel={() => setSalesModalVisible(false)}
+            onCancel={() => handleModalClose('sales')}
         >
             <Form form={form} layout="vertical">
                 <Form.Item label="Serial Number">
@@ -942,7 +969,7 @@ const StorePage = () => {
             title="Add to RMA"
             open={rmaModalVisible}
             onOk={handleRmaSubmit}
-            onCancel={() => setRmaModalVisible(false)}
+            onCancel={() => handleModalClose('rma')}
         >
             <Form form={form} layout="vertical">
                 <Form.Item label="Serial Number">

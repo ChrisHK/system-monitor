@@ -126,34 +126,81 @@ router.put('/:rmaId/process', auth, async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        console.log('Processing RMA:', { rmaId });
+
         // Check current status
-        const statusResult = await client.query(
-            'SELECT inventory_status FROM store_rma WHERE id = $1',
-            [rmaId]
-        );
-
-        if (!statusResult.rows.length) {
-            throw new Error('RMA item not found');
-        }
-
-        const currentStatus = statusResult.rows[0].inventory_status;
-        if (currentStatus !== 'receive') {
-            throw new Error('Invalid status transition');
-        }
-
-        // Update status
-        await client.query(`
-            UPDATE store_rma 
-            SET inventory_status = 'process', processed_at = NOW() 
+        const statusResult = await client.query(`
+            SELECT inventory_status, store_status 
+            FROM store_rma 
             WHERE id = $1
         `, [rmaId]);
 
+        if (!statusResult.rows.length) {
+            console.log('RMA not found:', { rmaId });
+            throw new Error('RMA item not found');
+        }
+
+        const { inventory_status: currentStatus } = statusResult.rows[0];
+        
+        // Log current status for debugging
+        console.log('Current RMA status:', {
+            rmaId,
+            inventory_status: currentStatus,
+            store_status: statusResult.rows[0].store_status
+        });
+
+        if (currentStatus !== 'receive') {
+            console.log('Invalid status transition:', {
+                rmaId,
+                currentStatus,
+                targetStatus: 'process'
+            });
+            throw new Error(`Invalid status transition from ${currentStatus} to process`);
+        }
+
+        // Update status
+        const updateQuery = `
+            UPDATE store_rma 
+            SET 
+                inventory_status = $1::rma_inventory_status,
+                store_status = $2::rma_store_status,
+                processed_at = NOW() 
+            WHERE id = $3
+            RETURNING *
+        `;
+
+        console.log('Executing update query:', {
+            rmaId,
+            newInventoryStatus: 'process',
+            newStoreStatus: 'sent_to_inventory'
+        });
+
+        const updateResult = await client.query(updateQuery, ['process', 'sent_to_inventory', rmaId]);
+
+        if (updateResult.rows.length === 0) {
+            console.log('Update failed - no rows updated');
+            throw new Error('Failed to update RMA status');
+        }
+
+        console.log('Update successful:', updateResult.rows[0]);
+
         await client.query('COMMIT');
-        res.json({ success: true });
+        res.json({ 
+            success: true,
+            rma: updateResult.rows[0]
+        });
     } catch (error) {
         await client.query('ROLLBACK');
-        logger.error('Error processing RMA:', error);
-        res.status(400).json({ error: error.message });
+        console.error('Error processing RMA:', {
+            error: error.message,
+            stack: error.stack,
+            rmaId
+        });
+        res.status(400).json({ 
+            success: false,
+            error: error.message,
+            details: error.stack
+        });
     } finally {
         client.release();
     }
@@ -182,10 +229,12 @@ router.put('/:rmaId/complete', auth, async (req, res) => {
             throw new Error('Invalid status transition');
         }
 
-        // Update status
+        // Update status - now updating both inventory_status and store_status
         await client.query(`
             UPDATE store_rma 
-            SET inventory_status = 'complete', completed_at = NOW() 
+            SET inventory_status = 'complete',
+                store_status = 'completed',
+                completed_at = NOW() 
             WHERE id = $1
         `, [rmaId]);
 
@@ -210,18 +259,27 @@ router.put('/:rmaId/fail', auth, async (req, res) => {
         await client.query('BEGIN');
 
         // Check current status
-        const statusResult = await client.query(
-            'SELECT inventory_status FROM store_rma WHERE id = $1',
-            [rmaId]
-        );
+        const statusResult = await client.query(`
+            SELECT inventory_status, store_status 
+            FROM store_rma 
+            WHERE id = $1
+        `, [rmaId]);
 
         if (!statusResult.rows.length) {
             throw new Error('RMA item not found');
         }
 
-        const currentStatus = statusResult.rows[0].inventory_status;
+        const { inventory_status: currentStatus } = statusResult.rows[0];
+        
+        // Log current status for debugging
+        console.log('Current RMA status before fail:', {
+            rmaId,
+            inventory_status: currentStatus,
+            store_status: statusResult.rows[0].store_status
+        });
+
         if (!['receive', 'process'].includes(currentStatus)) {
-            throw new Error('Invalid status transition');
+            throw new Error(`Invalid status transition from ${currentStatus} to failed`);
         }
 
         if (!reason) {
@@ -231,7 +289,9 @@ router.put('/:rmaId/fail', auth, async (req, res) => {
         // Update status
         await client.query(`
             UPDATE store_rma 
-            SET inventory_status = 'failed', 
+            SET 
+                inventory_status = 'failed'::rma_inventory_status,
+                store_status = 'failed'::rma_store_status,
                 failed_at = NOW(),
                 failed_reason = $2
             WHERE id = $1

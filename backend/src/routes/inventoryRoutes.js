@@ -10,13 +10,8 @@ router.get('/', auth, checkMainPermission('inventory'), async (req, res) => {
     const offset = (page - 1) * limit;
 
     try {
-        let query = `
-            SELECT 
-                r.*,
-                COALESCE(l.location, 'inventory') as location,
-                l.store_id,
-                l.store_name,
-                l.updated_at as location_updated
+        // 基礎查詢
+        let baseQuery = `
             FROM system_records r
             LEFT JOIN item_locations l ON r.serialnumber = l.serialnumber
             WHERE (l.location = 'inventory' OR l.location IS NULL)
@@ -24,27 +19,54 @@ router.get('/', auth, checkMainPermission('inventory'), async (req, res) => {
 
         const params = [];
         
+        // 添加搜索條件
         if (searchText) {
             params.push(`%${searchText}%`);
-            query += ` AND (
+            baseQuery += ` AND (
                 r.serialnumber ILIKE $${params.length} OR 
                 r.computername ILIKE $${params.length} OR 
                 r.model ILIKE $${params.length}
             )`;
         }
 
-        // Get total count
-        const countResult = await pool.query(
-            `SELECT COUNT(*) FROM (${query}) as subquery`,
-            params
-        );
+        // 獲取總數的查詢
+        const countQuery = `
+            SELECT COUNT(*) 
+            ${baseQuery}
+        `;
+
+        // 獲取數據的查詢
+        const dataQuery = `
+            SELECT 
+                r.*,
+                COALESCE(l.location, 'inventory') as location,
+                l.store_id,
+                l.store_name,
+                l.updated_at as location_updated
+            ${baseQuery}
+            ORDER BY r.created_at DESC
+            LIMIT $${params.length + 1} 
+            OFFSET $${params.length + 2}
+        `;
+
+        // 執行總數查詢
+        const countResult = await pool.query(countQuery, params);
         const total = parseInt(countResult.rows[0].count);
 
-        // Add pagination
-        query += ` ORDER BY r.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+        // 添加分頁參數
         params.push(limit, offset);
 
-        const result = await pool.query(query, params);
+        // 執行數據查詢
+        const result = await pool.query(dataQuery, params);
+
+        console.log('Inventory query results:', {
+            total,
+            page,
+            limit,
+            offset,
+            resultCount: result.rows.length,
+            params
+        });
 
         res.json({
             success: true,
@@ -60,7 +82,8 @@ router.get('/', auth, checkMainPermission('inventory'), async (req, res) => {
         console.error('Error fetching inventory items:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to fetch inventory items'
+            error: 'Failed to fetch inventory items',
+            details: error.message
         });
     }
 });
@@ -93,6 +116,38 @@ router.get('/ram', auth, checkMainPermission('inventory_ram'), async (req, res) 
         res.status(500).json({
             success: false,
             error: 'Failed to fetch RAM inventory'
+        });
+    }
+});
+
+router.get('/records', auth, async (req, res) => {
+    const { page = 1, pageSize = 50 } = req.query;
+    const offset = (page - 1) * pageSize;
+
+    try {
+        // 首先獲取總記錄數
+        const countResult = await pool.query('SELECT COUNT(*) FROM system_records');
+        const total = parseInt(countResult.rows[0].count);
+
+        // 獲取分頁數據
+        const result = await pool.query(`
+            SELECT * FROM system_records
+            ORDER BY created_at DESC
+            LIMIT $1 OFFSET $2
+        `, [pageSize, offset]);
+
+        res.json({
+            success: true,
+            records: result.rows,
+            total: total,
+            page: parseInt(page),
+            pageSize: parseInt(pageSize)
+        });
+    } catch (error) {
+        console.error('Error fetching records:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch records'
         });
     }
 });

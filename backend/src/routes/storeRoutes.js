@@ -5,9 +5,21 @@ const { auth, checkRole, checkGroup } = require('../middleware/auth');
 const { checkStorePermission } = require('../middleware/checkPermission');
 const cacheService = require('../services/cacheService');
 
+const storeCache = new Map();
+const STORE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Get all stores
 router.get('/', auth, async (req, res) => {
     try {
+        const userId = req.user.id;
+        const cacheKey = `stores-${userId}`;
+
+        // 檢查緩存
+        const cachedStores = storeCache.get(cacheKey);
+        if (cachedStores && cachedStores.expiry > Date.now()) {
+            return res.json({ success: true, stores: cachedStores.data });
+        }
+
         console.log('=== GET /api/stores - Fetching stores ===');
         
         // 根據用戶組獲取緩存鍵
@@ -35,6 +47,12 @@ router.get('/', auth, async (req, res) => {
         } else {
             console.log('Cache hit - Using cached stores for group:', groupName);
         }
+
+        // 設置緩存
+        storeCache.set(cacheKey, {
+            data: stores,
+            expiry: Date.now() + STORE_CACHE_TTL
+        });
 
         res.json({ success: true, stores });
     } catch (error) {

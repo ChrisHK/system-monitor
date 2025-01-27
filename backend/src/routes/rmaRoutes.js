@@ -454,118 +454,91 @@ try {
         }
     });
 
-    // Send RMA item back to store inventory
+    // Send RMA item back to store
     router.put('/:storeId/:rmaId/send-to-store', auth, async (req, res) => {
         const { storeId, rmaId } = req.params;
         const client = await pool.connect();
 
         try {
-            console.log('=== Starting Send to Store ===');
-            console.log('Params:', { storeId, rmaId });
-
             await client.query('BEGIN');
 
-            // Get RMA item details
-            const rmaQuery = `
-                SELECT r.*, sr.serialnumber, sr.model
+            // Check if RMA item exists and is completed
+            const rmaResult = await client.query(`
+                SELECT r.*, sr.serialnumber
                 FROM store_rma r
                 JOIN system_records sr ON r.record_id = sr.id
-                WHERE r.store_id = $1 AND r.id = $2
-            `;
-            console.log('Executing RMA query:', rmaQuery);
-            console.log('Query params:', [storeId, rmaId]);
-            
-            const rmaResult = await client.query(rmaQuery, [storeId, rmaId]);
-            console.log('RMA query result:', rmaResult.rows);
+                WHERE r.id = $1 AND r.store_id = $2
+            `, [rmaId, storeId]);
 
             if (rmaResult.rows.length === 0) {
                 throw new Error('RMA item not found');
             }
 
             const rmaItem = rmaResult.rows[0];
-            console.log('RMA item found:', rmaItem);
-
-            // Check if the item is in completed status
-            console.log('Current store_status:', rmaItem.store_status);
             if (rmaItem.store_status !== 'completed') {
-                throw new Error('Only completed RMA items can be sent back to store inventory');
+                throw new Error('RMA item must be completed before sending to store');
             }
 
-            // Check if item already exists in store_items
-            console.log('Checking if item exists in store_items...');
-            const existingItem = await client.query(
-                'SELECT id FROM store_items WHERE store_id = $1 AND record_id = $2',
-                [storeId, rmaItem.record_id]
+            // Check if item already exists in store inventory
+            const existingItemResult = await client.query(
+                'SELECT * FROM store_items WHERE record_id = $1',
+                [rmaItem.record_id]
             );
-            console.log('Existing item check result:', existingItem.rows);
 
-            if (existingItem.rows.length > 0) {
+            if (existingItemResult.rows.length > 0) {
                 throw new Error('Item already exists in store inventory');
             }
 
-            // Insert into store_items
-            console.log('Inserting into store_items...');
-            const insertResult = await client.query(
-                'INSERT INTO store_items (store_id, record_id, received_at) VALUES ($1, $2, NOW()) RETURNING *',
+            // Insert item into store inventory
+            await client.query(
+                'INSERT INTO store_items (store_id, record_id, received_at) VALUES ($1, $2, NOW())',
                 [storeId, rmaItem.record_id]
             );
-            console.log('Insert result:', insertResult.rows[0]);
 
-            // Update RMA status
-            console.log('Updating RMA status...');
-            const updateResult = await client.query(`
-                UPDATE store_rma 
-                SET 
-                    store_status = 'sent_to_store'::rma_store_status,
-                    location_type = 'store',
-                    last_updated = CURRENT_TIMESTAMP
-                WHERE id = $1 
-                RETURNING *
-            `, [rmaId]);
-            console.log('Update result:', updateResult.rows[0]);
+            // Update RMA item status
+            await client.query(
+                'UPDATE store_rma SET store_status = $1 WHERE id = $2',
+                ['sent_to_store', rmaId]
+            );
 
             // Update item location
-            console.log('Updating item location...');
-            const locationResult = await client.query(`
-                UPDATE item_locations 
-                SET location = 'store', 
-                    store_id = $1,
+            await client.query(`
+                INSERT INTO item_locations (serialnumber, location, store_id, store_name, updated_at)
+                VALUES ($1, 'store', $2, (SELECT name FROM stores WHERE id = $2), NOW())
+                ON CONFLICT (serialnumber) 
+                DO UPDATE SET 
+                    location = 'store',
+                    store_id = EXCLUDED.store_id,
+                    store_name = EXCLUDED.store_name,
                     updated_at = NOW()
-                WHERE serialnumber = $2
-                RETURNING *
-            `, [storeId, rmaItem.serialnumber]);
-            console.log('Location update result:', locationResult.rows[0]);
+            `, [rmaItem.serialnumber, storeId]);
+
+            // Get updated store inventory
+            const storeInventory = await client.query(`
+                SELECT 
+                    r.*,
+                    s.received_at,
+                    s.store_id,
+                    st.name as store_name,
+                    COALESCE(l.location, 'Store') as location
+                FROM store_items s
+                JOIN system_records r ON s.record_id = r.id
+                JOIN stores st ON s.store_id = st.id
+                LEFT JOIN item_locations l ON r.serialnumber = l.serialnumber
+                WHERE s.store_id = $1
+                ORDER BY s.received_at DESC
+            `, [storeId]);
 
             await client.query('COMMIT');
-            console.log('=== Send to Store completed successfully ===');
-
             res.json({
                 success: true,
-                message: 'RMA item sent back to store inventory successfully'
+                message: 'RMA item successfully sent to store',
+                items: storeInventory.rows
             });
         } catch (error) {
             await client.query('ROLLBACK');
-            console.error('Error sending RMA to store:', error);
-            console.error('Error details:', {
-                name: error.name,
-                message: error.message,
-                code: error.code,
-                detail: error.detail,
-                hint: error.hint,
-                position: error.position,
-                internalPosition: error.internalPosition,
-                internalQuery: error.internalQuery,
-                where: error.where,
-                schema: error.schema,
-                table: error.table,
-                column: error.column,
-                dataType: error.dataType,
-                constraint: error.constraint
-            });
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
+            console.error('Error sending RMA item to store:', error);
+            res.status(400).json({ error: error.message });
         } finally {
             client.release();
         }

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Table, Card, Space, Button, message, Collapse, Input, Row, Col } from 'antd';
-import { DownloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { Table, Card, Space, Button, message, Collapse, Input, Row, Col, Modal } from 'antd';
+import { DownloadOutlined, SearchOutlined, PrinterOutlined } from '@ant-design/icons';
 import { orderApi } from '../services/api';
+import PrintOrder from '../components/PrintOrder';
 
 const { Panel } = Collapse;
 const { Search } = Input;
@@ -13,6 +14,8 @@ const OrdersPage = () => {
     const [orders, setOrders] = useState([]);
     const [exportLoading, setExportLoading] = useState(false);
     const [searchText, setSearchText] = useState('');
+    const [isPrintModalVisible, setIsPrintModalVisible] = useState(false);
+    const [selectedOrders, setSelectedOrders] = useState([]);
 
     useEffect(() => {
         if (storeId) {
@@ -38,6 +41,10 @@ const OrdersPage = () => {
 
     const handleSearch = (value) => {
         setSearchText(value);
+    };
+
+    const calculateTotal = (orders) => {
+        return orders.reduce((total, order) => total + (parseFloat(order.price) || 0), 0);
     };
 
     const handleExport = async () => {
@@ -77,6 +84,15 @@ const OrdersPage = () => {
         } finally {
             setExportLoading(false);
         }
+    };
+
+    const handlePrint = (orders) => {
+        setSelectedOrders(orders);
+        setIsPrintModalVisible(true);
+    };
+
+    const handlePrintConfirm = () => {
+        window.print();
     };
 
     const columns = [
@@ -171,24 +187,57 @@ const OrdersPage = () => {
 
                 {/* Completed Orders */}
                 <Card title="Completed Orders">
-                    <Collapse>
-                        <Panel header="View Completed Orders" key="1">
-                            <Table
-                                columns={columns}
-                                dataSource={completedOrders}
-                                rowKey="order_id"
-                                loading={loading}
-                                scroll={{ x: 1500 }}
-                                pagination={{
-                                    showSizeChanger: true,
-                                    showQuickJumper: true,
-                                    pageSizeOptions: ['10', '20', '50']
-                                }}
-                            />
-                        </Panel>
-                    </Collapse>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        <Table
+                            columns={columns}
+                            dataSource={completedOrders}
+                            rowKey="order_id"
+                            loading={loading}
+                            scroll={{ x: 1500 }}
+                            pagination={{
+                                showSizeChanger: true,
+                                showQuickJumper: true,
+                                pageSizeOptions: ['10', '20', '50']
+                            }}
+                            summary={() => (
+                                <Table.Summary fixed>
+                                    <Table.Summary.Row>
+                                        <Table.Summary.Cell index={0} colSpan={3} align="right">
+                                            <strong>Total:</strong>
+                                        </Table.Summary.Cell>
+                                        <Table.Summary.Cell index={1}>
+                                            <strong>${calculateTotal(completedOrders).toFixed(2)}</strong>
+                                        </Table.Summary.Cell>
+                                        <Table.Summary.Cell index={2} colSpan={2} />
+                                    </Table.Summary.Row>
+                                </Table.Summary>
+                            )}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+                            <Button
+                                type="primary"
+                                icon={<PrinterOutlined />}
+                                onClick={() => handlePrint(completedOrders)}
+                                disabled={completedOrders.length === 0}
+                            >
+                                Print Orders
+                            </Button>
+                        </div>
+                    </div>
                 </Card>
             </Space>
+
+            <Modal
+                title="Print Preview"
+                open={isPrintModalVisible}
+                onOk={handlePrintConfirm}
+                onCancel={() => setIsPrintModalVisible(false)}
+                width={800}
+                okText="Print"
+                cancelText="Cancel"
+            >
+                <PrintOrder orders={selectedOrders} />
+            </Modal>
         </div>
     );
 };

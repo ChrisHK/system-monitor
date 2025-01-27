@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Table, Button, message, Input, Collapse, Space, Modal, Tag, Select } from 'antd';
+import { Card, Table, Button, message, Input, Collapse, Space, Modal, Tag, Select, DatePicker } from 'antd';
 import { orderApi, rmaApi } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
-import { ExclamationCircleOutlined } from '@ant-design/icons';
+import { ExclamationCircleOutlined, PrinterOutlined } from '@ant-design/icons';
+import PrintOrder from '../components/PrintOrder';
 
 const { TextArea, Search } = Input;
 const { Panel } = Collapse;
 const { Option } = Select;
+const { RangePicker } = DatePicker;
 
 const StoreOrdersPage = () => {
     const { storeId } = useParams();
@@ -21,10 +23,13 @@ const StoreOrdersPage = () => {
     const [editingNotes, setEditingNotes] = useState({});
     const [editingPrice, setEditingPrice] = useState({});
     const [searchText, setSearchText] = useState('');
+    const [dateRange, setDateRange] = useState(null);
     const [rmaReasons, setRmaReasons] = useState({});
     const [showReasonModal, setShowReasonModal] = useState(false);
     const [selectedItem, setSelectedItem] = useState(null);
     const [reasonText, setReasonText] = useState('');
+    const [isPrintModalVisible, setIsPrintModalVisible] = useState(false);
+    const [selectedOrderForPrint, setSelectedOrderForPrint] = useState(null);
 
     const fetchOrders = useCallback(async () => {
         try {
@@ -36,22 +41,16 @@ const StoreOrdersPage = () => {
                 firstOrder: response.orders?.[0],
             });
             
-            // Group orders by order_id
-            const groupedOrders = response.orders.reduce((acc, item) => {
-                // Skip items with null record_id
-                if (!item.record_id) {
-                    return acc;
-                }
+            if (!response.orders) {
+                return;
+            }
 
-                if (!acc[item.order_id]) {
-                    acc[item.order_id] = {
-                        id: item.order_id,
-                        status: item.status,
-                        created_at: item.created_at,
-                        items: []
-                    };
-                }
-                const processedItem = {
+            // Process orders directly since they're already grouped
+            const ordersList = response.orders.map(order => ({
+                id: order.order_id,
+                status: order.status,
+                created_at: order.created_at,
+                items: order.items.map(item => ({
                     id: item.id,
                     recordId: item.record_id,
                     serialNumber: item.serialnumber,
@@ -61,17 +60,16 @@ const StoreOrdersPage = () => {
                     system_sku: item.system_sku,
                     operating_system: item.operating_system,
                     cpu: item.cpu,
-                    ram_gb: item.ram,
+                    ram_gb: item.ram_gb,
                     disks: item.disks,
                     price: item.price,
-                    pay_method: item.pay_method
-                };
-                acc[item.order_id].items.push(processedItem);
-                return acc;
-            }, {});
+                    pay_method: item.pay_method,
+                    is_deleted: item.is_deleted,
+                    order: item.order
+                }))
+            }));
 
-            console.log('Grouped orders:', groupedOrders);
-            const ordersList = Object.values(groupedOrders);
+            console.log('Processed orders:', ordersList);
             const pending = ordersList.find(order => order.status === 'pending');
             setPendingOrder(pending || null);
             setOrders(ordersList.filter(order => order.status === 'completed'));
@@ -256,22 +254,10 @@ const StoreOrdersPage = () => {
 
     const handleDeleteOrder = async (storeId, orderId) => {
         try {
-            const response = await fetch(`${process.env.REACT_APP_API_URL}/orders/${storeId}/${orderId}`, {
-                method: 'DELETE',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
-                },
-            });
-
-            const data = await response.json();
-            
-            if (response.ok) {
+            const response = await orderApi.deleteOrder(storeId, orderId);
+            if (response.success) {
                 message.success('Order deleted successfully');
-                // Refresh the orders list
                 fetchOrders();
-            } else {
-                message.error(data.message || 'Failed to delete order');
             }
         } catch (error) {
             console.error('Error deleting order:', error);
@@ -279,9 +265,9 @@ const StoreOrdersPage = () => {
         }
     };
 
-    const showDeleteConfirm = (storeId, orderId) => {
+    const showDeleteConfirm = (storeId, orderId, itemId = null) => {
         Modal.confirm({
-            title: 'Are you sure you want to delete this order?',
+            title: itemId ? 'Are you sure you want to delete this item?' : 'Are you sure you want to delete this order?',
             icon: <ExclamationCircleOutlined />,
             content: 'This action cannot be undone.',
             okText: 'Yes',
@@ -293,28 +279,37 @@ const StoreOrdersPage = () => {
         });
     };
 
-    const filterOrders = (orders) => {
-        if (!searchText) return orders;
+    const filterOrders = useCallback((order) => {
+        // First check date range if it exists
+        if (dateRange && dateRange[0] && dateRange[1]) {
+            const orderDate = new Date(order.created_at);
+            const startDate = dateRange[0].startOf('day').toDate();
+            const endDate = dateRange[1].endOf('day').toDate();
+            
+            if (orderDate < startDate || orderDate > endDate) {
+                return false;
+            }
+        }
 
-        return orders.map(order => ({
-            ...order,
-            items: order.items.filter(item => 
-                item.serialNumber?.toLowerCase().includes(searchText) ||
-                item.notes?.toLowerCase().includes(searchText)
-            )
-        })).filter(order => order.items.length > 0);
-    };
+        // Then check search text if it exists
+        if (!searchText) return true;
+
+        // Search in all items, including deleted ones
+        return order.items.some(item => 
+            item.serialNumber?.toLowerCase().includes(searchText.toLowerCase()) ||
+            item.model?.toLowerCase().includes(searchText.toLowerCase()) ||
+            item.system_sku?.toLowerCase().includes(searchText.toLowerCase()) ||
+            item.cpu?.toLowerCase().includes(searchText.toLowerCase()) ||
+            item.disks?.toLowerCase().includes(searchText.toLowerCase()) ||
+            item.pay_method?.toLowerCase().includes(searchText.toLowerCase())
+        );
+    }, [searchText, dateRange]);
 
     const columns = [
         {
             title: 'Serial Number',
             dataIndex: 'serialNumber',
             key: 'serialNumber'
-        },
-        {
-            title: 'Computer Name',
-            dataIndex: 'computerName',
-            key: 'computerName'
         },
         {
             title: 'Model',
@@ -327,11 +322,6 @@ const StoreOrdersPage = () => {
             key: 'system_sku'
         },
         {
-            title: 'Operating System',
-            dataIndex: 'operating_system',
-            key: 'operating_system'
-        },
-        {
             title: 'CPU',
             dataIndex: 'cpu',
             key: 'cpu'
@@ -339,8 +329,7 @@ const StoreOrdersPage = () => {
         {
             title: 'RAM (GB)',
             dataIndex: 'ram_gb',
-            key: 'ram_gb',
-            render: (text) => text || '-'
+            key: 'ram_gb'
         },
         {
             title: 'Disks',
@@ -351,19 +340,7 @@ const StoreOrdersPage = () => {
             title: 'Pay Method',
             dataIndex: 'pay_method',
             key: 'pay_method',
-            render: (text, record) => (
-                <Select
-                    defaultValue={text || 'Credit Card'}
-                    style={{ width: 120 }}
-                    onChange={(value) => handleSavePayMethod(record.id, value)}
-                    disabled={record.order?.status === 'completed'}
-                >
-                    <Option value="Credit Card">Credit Card</Option>
-                    <Option value="Bank Transfer">Bank Transfer</Option>
-                    <Option value="Cash">Cash</Option>
-                    <Option value="Other">Other</Option>
-                </Select>
-            )
+            render: (text) => text || 'Credit Card'
         },
         {
             title: 'Price',
@@ -375,27 +352,12 @@ const StoreOrdersPage = () => {
                     <div style={{ display: 'flex', gap: '8px' }}>
                         <Input
                             type="number"
-                            min="0"
-                            step="0.01"
-                            required
                             defaultValue={text}
-                            placeholder="Enter price"
-                            onBlur={e => {
-                                const value = e.target.value;
-                                if (!value || isNaN(value) || value <= 0) {
-                                    message.error('Price is required');
-                                    return;
-                                }
-                                handleSavePrice(record.id, value);
-                            }}
+                            autoFocus
+                            onBlur={e => handleSavePrice(record.id, e.target.value)}
                             onPressEnter={e => {
                                 e.preventDefault();
-                                const value = e.target.value;
-                                if (!value || isNaN(value) || value <= 0) {
-                                    message.error('Price is required');
-                                    return;
-                                }
-                                handleSavePrice(record.id, value);
+                                e.target.blur();
                             }}
                         />
                     </div>
@@ -468,19 +430,46 @@ const StoreOrdersPage = () => {
         if (col.key === 'notes' || col.key === 'price') {
             return {
                 ...col,
-                render: (text) => col.key === 'price' ? (text ? `$${text}` : '-') : (text || '-')
+                render: (text, record) => {
+                    const content = col.key === 'price' ? (text ? `$${text}` : '-') : (text || '-');
+                    return record.is_deleted ? (
+                        <span style={{ color: '#999' }}>{content}</span>
+                    ) : content;
+                }
             };
         }
         if (col.key === 'ram_gb') {
-            return col;
+            return {
+                ...col,
+                render: (text, record) => record.is_deleted ? (
+                    <span style={{ color: '#999' }}>{text || '-'}</span>
+                ) : (text || '-')
+            };
         }
         if (col.key === 'pay_method') {
             return {
                 ...col,
-                render: (text) => text || 'Credit Card'
+                render: (text, record) => record.is_deleted ? (
+                    <span style={{ color: '#999' }}>{text || 'Credit Card'}</span>
+                ) : (text || 'Credit Card')
             };
         }
-        return col;
+        // For all other columns
+        return {
+            ...col,
+            render: (text, record) => record.is_deleted ? (
+                <span style={{ color: '#999' }}>{text || '-'}</span>
+            ) : (text || '-')
+        };
+    });
+
+    // Add Status column before Actions
+    completedColumns.splice(completedColumns.length - 1, 0, {
+        title: 'Status',
+        key: 'status',
+        render: (_, record) => record.is_deleted ? (
+            <Tag color="default">Deleted</Tag>
+        ) : null
     });
 
     // Add Return and Delete actions to completed columns
@@ -488,8 +477,9 @@ const StoreOrdersPage = () => {
         title: 'Actions',
         key: 'actions',
         render: (_, record) => {
-            const hasReason = rmaReasons[record.recordId];
+            if (record.is_deleted) return null;
             
+            const hasReason = rmaReasons[record.recordId];
             return (
                 <Space>
                     {hasReason && (
@@ -503,101 +493,201 @@ const StoreOrdersPage = () => {
                         {hasReason ? 'Return' : 'RMA'}
                     </Button>
                     {isAdmin() && (
-                        <Button 
-                            type="link" 
-                            danger
-                            onClick={() => showDeleteConfirm(storeId, record.order.id)}
-                        >
-                            Delete
-                        </Button>
+                        <>
+                            <Button 
+                                type="link" 
+                                danger
+                                onClick={() => showDeleteConfirm(storeId, record.order?.id, record.id)}
+                            >
+                                Delete Item
+                            </Button>
+                            {record.order?.items?.length === 1 && (
+                                <Button 
+                                    type="link" 
+                                    danger
+                                    onClick={() => showDeleteConfirm(storeId, record.order.id)}
+                                >
+                                    Delete Order
+                                </Button>
+                            )}
+                        </>
                     )}
                 </Space>
             );
         }
     });
 
+    const handlePrint = (order) => {
+        setSelectedOrderForPrint(order);
+        setIsPrintModalVisible(true);
+    };
+
+    const handlePrintConfirm = () => {
+        window.print();
+    };
+
+    const handleDateRangeChange = (dates) => {
+        setDateRange(dates);
+    };
+
+    const resetFilters = () => {
+        setSearchText('');
+        setDateRange(null);
+    };
+
     return (
-        <div style={{ padding: '24px' }}>
-            {pendingOrder && pendingOrder.items.length > 0 && (
+        <div className="store-orders-page">
+            {/* Pending Order Section */}
+            {pendingOrder && (
                 <Card 
                     title="Pending Order" 
+                    style={{ marginBottom: 16 }}
                     extra={
                         <Button 
                             type="primary" 
-                            onClick={handleSaveOrder}
-                            disabled={!pendingOrder.items.length}
+                            onClick={() => {
+                                // Check if all items have prices
+                                const hasEmptyPrices = pendingOrder.items.some(item => !item.price);
+                                if (hasEmptyPrices) {
+                                    message.error('Please enter prices for all items before saving the order');
+                                    return;
+                                }
+
+                                // Show confirmation modal
+                                Modal.confirm({
+                                    title: 'Save Order',
+                                    content: 'Are you sure you want to save this order?',
+                                    okText: 'Yes',
+                                    cancelText: 'No',
+                                    onOk: async () => {
+                                        try {
+                                            await orderApi.saveOrder(storeId, pendingOrder.id);
+                                            message.success('Order saved successfully');
+                                            fetchOrders();
+                                        } catch (error) {
+                                            message.error('Failed to save order');
+                                            console.error(error);
+                                        }
+                                    }
+                                });
+                            }}
                         >
                             Save Order
                         </Button>
                     }
-                    style={{ marginBottom: '24px' }}
                 >
                     <Table
                         dataSource={pendingOrder.items}
                         columns={columns}
                         rowKey={record => `pending-${record.recordId || record.id || Date.now()}`}
                         pagination={false}
+                        summary={() => (
+                            <Table.Summary fixed>
+                                <Table.Summary.Row>
+                                    <Table.Summary.Cell index={0} colSpan={columns.length - 1} align="right">
+                                        <strong>Total:</strong>
+                                    </Table.Summary.Cell>
+                                    <Table.Summary.Cell index={1}>
+                                        <strong>
+                                            ${pendingOrder.items.reduce((sum, item) => sum + (parseFloat(item.price) || 0), 0).toFixed(2)}
+                                        </strong>
+                                    </Table.Summary.Cell>
+                                </Table.Summary.Row>
+                            </Table.Summary>
+                        )}
                     />
                 </Card>
             )}
 
+            {/* Completed Orders Section */}
             <Card title="Completed Orders">
                 <div style={{ marginBottom: 16 }}>
-                    <Search
-                        placeholder="Search by Serial Number or Notes"
-                        allowClear
-                        onSearch={handleSearch}
-                        onChange={e => handleSearch(e.target.value)}
-                        style={{ width: 300 }}
-                    />
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                        <Search
+                            placeholder="Search orders..."
+                            allowClear
+                            onSearch={handleSearch}
+                            style={{ width: 300 }}
+                        />
+                    </Space>
                 </div>
-                <Collapse
-                    items={filterOrders(orders).map(order => ({
-                        key: order.id,
-                        label: `Order #${order.id} - ${new Date(order.created_at).toLocaleString()}`,
-                        children: (
-                            <Table
-                                dataSource={order.items.map(item => ({ ...item, order }))}
-                                columns={completedColumns}
-                                rowKey={record => `completed-${order.id}-${record.recordId || record.id || Date.now()}`}
-                                pagination={false}
-                                locale={{ emptyText: 'No items in this order' }}
-                                summary={pageData => {
-                                    const total = pageData.reduce((sum, item) => sum + (Number(item.price) || 0), 0);
-                                    return (
-                                        <Table.Summary fixed="bottom">
-                                            <Table.Summary.Row>
-                                                <Table.Summary.Cell index={0} colSpan={completedColumns.length - 1}></Table.Summary.Cell>
-                                                <Table.Summary.Cell index={1}>
-                                                    <div style={{ textAlign: 'right', fontWeight: 'bold' }}>
-                                                        Total: ${total.toFixed(2)}
-                                                    </div>
-                                                </Table.Summary.Cell>
-                                            </Table.Summary.Row>
-                                        </Table.Summary>
-                                    );
-                                }}
-                            />
-                        )
-                    }))}
-                />
+
+                <Collapse>
+                    {orders
+                        .filter(order => order.status === 'completed')
+                        .filter(filterOrders)
+                        .map(order => (
+                            <Panel 
+                                key={order.id} 
+                                header={`Order #${order.id} - ${new Date(order.created_at).toLocaleString()}`}
+                                extra={
+                                    <Space onClick={e => e.stopPropagation()}>
+                                        {isAdmin() && (
+                                            <Button
+                                                type="primary"
+                                                danger
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    showDeleteConfirm(storeId, order.id);
+                                                }}
+                                            >
+                                                Delete Order
+                                            </Button>
+                                        )}
+                                        <Button
+                                            type="primary"
+                                            icon={<PrinterOutlined />}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handlePrint(order);
+                                            }}
+                                        >
+                                            Print Order
+                                        </Button>
+                                    </Space>
+                                }
+                            >
+                                <Table
+                                    dataSource={order.items}
+                                    columns={completedColumns}
+                                    rowKey="id"
+                                    pagination={false}
+                                />
+                            </Panel>
+                        ))}
+                </Collapse>
             </Card>
 
-            {/* Add Reason Modal */}
+            {/* Print Modal */}
+            <Modal
+                title="Print Order"
+                visible={isPrintModalVisible}
+                onOk={handlePrintConfirm}
+                onCancel={() => setIsPrintModalVisible(false)}
+                width={1000}
+                bodyStyle={{ 
+                    maxHeight: '85vh',
+                    overflow: 'auto',
+                    padding: '24px'
+                }}
+            >
+                {selectedOrderForPrint && (
+                    <PrintOrder order={selectedOrderForPrint} />
+                )}
+            </Modal>
+
+            {/* RMA Reason Modal */}
             <Modal
                 title="Enter RMA Reason"
-                open={showReasonModal}
+                visible={showReasonModal}
                 onOk={handleReasonSubmit}
                 onCancel={() => setShowReasonModal(false)}
-                okText="OK"
-                cancelText="Cancel"
             >
                 <Input.TextArea
-                    placeholder="Please enter reason for return"
                     value={reasonText}
                     onChange={e => setReasonText(e.target.value)}
+                    placeholder="Enter reason for RMA"
                     rows={4}
-                    style={{ marginTop: '16px' }}
                 />
             </Modal>
         </div>

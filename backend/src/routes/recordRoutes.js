@@ -95,8 +95,37 @@ router.get('/search', auth, catchAsync(async (req, res) => {
     });
 }));
 
+// 檢查權限中間件
+const checkInventoryPermission = (req, res, next) => {
+    console.log('Checking inventory permission:', {
+        user: {
+            id: req.user?.id,
+            group_name: req.user?.group_name,
+            main_permissions: req.user?.main_permissions
+        }
+    });
+
+    // 檢查用戶是否是管理員
+    if (req.user.group_name === 'admin') {
+        console.log('User is admin, granting access');
+        return next();
+    }
+
+    // 檢查用戶是否有 inventory 權限
+    if (req.user.main_permissions?.inventory === true) {
+        console.log('User has inventory permission, granting access');
+        return next();
+    }
+
+    console.log('Access denied: No inventory permission');
+    return res.status(403).json({
+        success: false,
+        error: 'No permission to access inventory'
+    });
+};
+
 // Get all records with inventory permission check
-router.get('/', auth, checkMainPermission('inventory'), catchAsync(async (req, res) => {
+router.get('/', auth, checkInventoryPermission, catchAsync(async (req, res) => {
     const { page = 1, limit = 20, search = '', store_id } = req.query;
     const offset = (page - 1) * limit;
     const client = await pool.connect();

@@ -233,6 +233,16 @@ export const rmaApi = {
         return await api.put(`/rma/${storeId}/${rmaId}/send-to-inventory`);
     }),
 
+    sendToStore: async (storeId, rmaId) => {
+        try {
+            const response = await api.put(`/rma/${storeId}/${rmaId}/send-to-store`);
+            return response;
+        } catch (error) {
+            console.error('Error sending RMA item to store:', error);
+            throw error;
+        }
+    },
+
     updateRmaFields: createApiWrapper(async (storeId, rmaId, fields) => {
         return await api.put(`/rma/${storeId}/${rmaId}/fields`, fields);
     }),
@@ -451,6 +461,17 @@ export const orderApi = {
             return { success: true };
         } catch (error) {
             console.error('Error exporting orders:', error);
+            throw error;
+        }
+    },
+
+    // Add deleteOrder method
+    deleteOrder: async (storeId, orderId) => {
+        try {
+            const response = await api.delete(`/orders/${storeId}/completed/${orderId}`);
+            return response;
+        } catch (error) {
+            console.error('Error deleting order:', error);
             throw error;
         }
     }

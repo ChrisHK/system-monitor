@@ -740,9 +740,6 @@ const InventoryPage = () => {
             width: 100,
             render: (_, record) => (
                 <Space size="middle">
-                    <Button type="link" onClick={() => handleEdit(record)}>
-                        Edit
-                    </Button>
                     {duplicateSerials.has(record.serialnumber) && (
                         <Popconfirm
                             title="Delete this record?"
@@ -756,7 +753,7 @@ const InventoryPage = () => {
                 </Space>
             )
         }
-    ], [duplicateSerials, handleDelete, handleEdit]);
+    ], [duplicateSerials, handleDelete]);
 
     return (
         <div>

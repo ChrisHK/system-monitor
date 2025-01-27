@@ -6,65 +6,186 @@ const { checkStorePermission } = require('../middleware/checkPermission');
 const { catchAsync } = require('../middleware/errorHandler');
 const { ValidationError, NotFoundError, AuthorizationError } = require('../middleware/errorTypes');
 
+console.log('Loading orderRoutes module...');
+
 // Get store orders
 router.get('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
     const { storeId } = req.params;
     const client = await pool.connect();
     
     try {
-        const query = `
+        // Add is_deleted column if it doesn't exist
+        try {
+            await client.query(`
+                DO $$ 
+                BEGIN 
+                    IF NOT EXISTS (
+                        SELECT 1 
+                        FROM information_schema.columns 
+                        WHERE table_name = 'store_order_items' 
+                        AND column_name = 'is_deleted'
+                    ) THEN 
+                        ALTER TABLE store_order_items 
+                        ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE;
+                    END IF;
+                END $$;
+            `);
+            console.log('Checked/Added is_deleted column');
+        } catch (migrationError) {
+            console.error('Migration error:', migrationError);
+            // Continue even if migration fails
+        }
+
+        console.log('Fetching orders for store:', storeId);
+        
+        // Clean up redundant pending orders
+        const cleanupQuery = `
+            WITH latest_pending AS (
+                SELECT id
+                FROM store_orders
+                WHERE store_id = $1 AND status = 'pending'
+                ORDER BY created_at DESC
+                LIMIT 1
+            ),
+            redundant_orders AS (
+                SELECT o.id
+                FROM store_orders o
+                LEFT JOIN store_order_items oi ON o.id = oi.order_id
+                WHERE o.store_id = $1 
+                AND o.status = 'pending'
+                AND o.id NOT IN (SELECT id FROM latest_pending)
+                GROUP BY o.id
+            )
+            DELETE FROM store_orders
+            WHERE id IN (SELECT id FROM redundant_orders)
+            RETURNING id;
+        `;
+        
+        try {
+            const cleanupResult = await client.query(cleanupQuery, [storeId]);
+            if (cleanupResult.rows.length > 0) {
+                console.log('Cleaned up redundant pending orders:', cleanupResult.rows.map(row => row.id));
+            }
+        } catch (cleanupError) {
+            console.error('Error during cleanup:', cleanupError);
+            // Continue even if cleanup fails
+        }
+
+        // First, get pending order details
+        const pendingOrderQuery = `
             SELECT 
                 o.id as order_id,
                 o.status,
                 o.created_at,
-                oi.id as item_id,
-                oi.record_id,
-                sr.serialnumber,
-                sr.computername,
-                sr.model,
-                sr.systemsku,
-                sr.operatingsystem,
-                sr.cpu,
-                sr.ram_gb,
-                sr.disks,
-                oi.price,
-                oi.notes
+                COUNT(oi.id) as item_count,
+                json_agg(
+                    json_build_object(
+                        'id', oi.id,
+                        'record_id', oi.record_id,
+                        'serialnumber', sr.serialnumber,
+                        'model', sr.model
+                    )
+                ) as items
             FROM store_orders o
             LEFT JOIN store_order_items oi ON o.id = oi.order_id
             LEFT JOIN system_records sr ON oi.record_id = sr.id
-            WHERE o.store_id = $1
-            ORDER BY o.created_at DESC
+            WHERE o.store_id = $1 AND o.status = 'pending'
+            GROUP BY o.id, o.status, o.created_at;
         `;
         
+        const pendingResult = await client.query(pendingOrderQuery, [storeId]);
+        console.log('Pending order details:', {
+            found: pendingResult.rows.length > 0,
+            order: pendingResult.rows[0],
+            itemCount: pendingResult.rows[0]?.item_count,
+            items: pendingResult.rows[0]?.items
+        });
+
+        // Then get all orders with items
+        const query = `
+            WITH order_items_count AS (
+                SELECT 
+                    order_id,
+                    COUNT(*) as total_items,
+                    COUNT(*) FILTER (WHERE NOT is_deleted) as active_items
+                FROM store_order_items
+                GROUP BY order_id
+            )
+            SELECT 
+                o.id as order_id,
+                o.status,
+                o.created_at,
+                COALESCE(
+                    json_agg(
+                        CASE WHEN oi.id IS NOT NULL THEN
+                            json_build_object(
+                                'id', oi.id,
+                                'record_id', oi.record_id,
+                                'serialnumber', sr.serialnumber,
+                                'computername', sr.computername,
+                                'model', sr.model,
+                                'system_sku', sr.systemsku,
+                                'operating_system', sr.operatingsystem,
+                                'cpu', sr.cpu,
+                                'ram_gb', sr.ram_gb,
+                                'disks', sr.disks,
+                                'price', oi.price,
+                                'notes', oi.notes,
+                                'is_deleted', oi.is_deleted,
+                                'order', json_build_object(
+                                    'id', o.id,
+                                    'status', o.status,
+                                    'items_count', COALESCE(oic.active_items, 0),
+                                    'total_items', COALESCE(oic.total_items, 0)
+                                )
+                            )
+                        ELSE NULL END
+                    ) FILTER (WHERE oi.id IS NOT NULL),
+                    '[]'::json
+                ) as items
+            FROM store_orders o
+            LEFT JOIN store_order_items oi ON o.id = oi.order_id
+            LEFT JOIN system_records sr ON oi.record_id = sr.id
+            LEFT JOIN order_items_count oic ON o.id = oic.order_id
+            WHERE o.store_id = $1
+            GROUP BY o.id, o.status, o.created_at, oic.total_items, oic.active_items
+            ORDER BY 
+                CASE WHEN o.status = 'pending' THEN 0 ELSE 1 END,
+                o.created_at DESC;
+        `;
+        
+        console.log('Executing query with storeId:', storeId);
         const result = await client.query(query, [storeId]);
+        console.log('Query executed successfully, row count:', result.rows.length);
+        
+        // Log each order's details
+        result.rows.forEach(row => {
+            console.log(`Order #${row.order_id} details:`, {
+                status: row.status,
+                itemCount: Array.isArray(row.items) ? row.items.length : 0,
+                items: row.items
+            });
+        });
         
         const orders = result.rows.map(row => ({
             order_id: row.order_id,
             status: row.status,
             created_at: row.created_at,
-            id: row.item_id,
-            record_id: row.record_id,
-            serialnumber: row.serialnumber,
-            computername: row.computername,
-            model: row.model,
-            system_sku: row.systemsku,
-            operating_system: row.operatingsystem,
-            cpu: row.cpu,
-            ram: row.ram_gb,
-            disks: row.disks,
-            price: row.price,
-            notes: row.notes
+            items: row.items || []
         }));
 
+        console.log('Sending response with orders count:', orders.length);
         res.json({
             success: true,
             orders
         });
     } catch (error) {
         console.error('Error fetching store orders:', error);
+        console.error('Error stack:', error.stack);
         res.status(500).json({
             success: false,
-            error: error.message
+            error: error.message,
+            details: error.stack
         });
     } finally {
         client.release();
@@ -78,58 +199,148 @@ router.post('/:storeId', auth, checkStorePermission('orders'), catchAsync(async 
     const client = await pool.connect();
     
     try {
-        if (!items || !Array.isArray(items) || items.length === 0) {
-            throw new Error('No items provided');
+        // Remove unique constraint if it exists
+        try {
+            await client.query(`
+                DO $$ 
+                BEGIN 
+                    IF EXISTS (
+                        SELECT 1 
+                        FROM pg_constraint 
+                        WHERE conname = 'store_order_items_record_id_key'
+                    ) THEN 
+                        ALTER TABLE store_order_items 
+                        DROP CONSTRAINT store_order_items_record_id_key;
+                    END IF;
+                END $$;
+            `);
+            console.log('Checked/Removed record_id unique constraint');
+        } catch (migrationError) {
+            console.error('Migration error:', migrationError);
+            // Continue even if migration fails
+        }
+
+        // Validate items array
+        if (!items) {
+            throw new ValidationError('Items array is required');
+        }
+        if (!Array.isArray(items)) {
+            throw new ValidationError('Items must be an array');
+        }
+        if (items.length === 0) {
+            throw new ValidationError('At least one item is required');
         }
 
         await client.query('BEGIN');
 
-        // Check if there's a pending order
-        let orderId;
-        const pendingOrderResult = await client.query(
-            'SELECT id FROM store_orders WHERE store_id = $1 AND status = $2',
-            [storeId, 'pending']
-        );
+        // First check if there's an existing pending order
+        const pendingOrderQuery = await client.query(`
+            SELECT id 
+            FROM store_orders 
+            WHERE store_id = $1 AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [storeId]);
 
-        if (pendingOrderResult.rows.length > 0) {
-            orderId = pendingOrderResult.rows[0].id;
+        let orderId;
+        if (pendingOrderQuery.rows.length > 0) {
+            orderId = pendingOrderQuery.rows[0].id;
+            console.log('Using existing pending order:', orderId);
         } else {
             // Create new order if no pending order exists
             const orderResult = await client.query(`
                 INSERT INTO store_orders (store_id, status)
                 VALUES ($1, 'pending')
                 RETURNING id
-            `, [storeId]);
+            `, [storeId]).catch(err => {
+                console.error('Database error creating new order:', err);
+                throw new Error('Failed to create new order');
+            });
+            
             orderId = orderResult.rows[0].id;
+            console.log('Created new pending order:', orderId);
         }
 
-        // Verify and add items
+        // First check if any items are in pending orders (except our target order)
         for (const item of items) {
             if (!item.recordId) {
-                throw new Error('Invalid item data: recordId is required');
+                throw new ValidationError('Each item must have a recordId');
             }
 
+            // Check if item exists in any order (pending or completed)
+            const orderCheck = await client.query(`
+                SELECT 
+                    o.id as order_id, 
+                    o.status, 
+                    oi.id as item_id,
+                    oi.is_deleted
+                FROM store_order_items oi 
+                JOIN store_orders o ON oi.order_id = o.id 
+                WHERE oi.record_id = $1 
+                AND (oi.is_deleted IS NULL OR NOT oi.is_deleted)
+                ORDER BY o.status = 'pending' DESC
+                LIMIT 1
+            `, [item.recordId]).catch(err => {
+                console.error('Database error checking orders:', err);
+                throw new Error(`Failed to check if item ${item.recordId} is in orders`);
+            });
+
+            if (orderCheck.rows.length > 0) {
+                const { status, order_id, item_id, is_deleted } = orderCheck.rows[0];
+                
+                if (status === 'pending') {
+                    throw new ValidationError(`Item ${item.recordId} already exists in another pending order`);
+                }
+                
+                // If item is in completed order and not already deleted, mark it as deleted
+                if (status === 'completed' && !is_deleted) {
+                    console.log(`Item ${item.recordId} exists in completed order ${order_id}, marking as deleted`);
+                    
+                    // Mark the item as deleted in the old order
+                    await client.query(`
+                        UPDATE store_order_items 
+                        SET is_deleted = true
+                        WHERE id = $1
+                    `, [item_id]).catch(err => {
+                        console.error('Database error marking item as deleted:', err);
+                        throw new Error(`Failed to mark item ${item.recordId} as deleted in old order`);
+                    });
+                }
+            }
+        }
+
+        // Add items to the order
+        for (const item of items) {
             // Check if item exists in store
             const storeItemCheck = await client.query(
                 'SELECT id FROM store_items WHERE store_id = $1 AND record_id = $2',
                 [storeId, item.recordId]
-            );
+            ).catch(err => {
+                console.error('Database error checking store item:', err);
+                throw new Error(`Failed to check item ${item.recordId} in store`);
+            });
             
             if (storeItemCheck.rows.length === 0) {
-                throw new Error(`Item ${item.recordId} not found in store`);
+                throw new NotFoundError(`Item with recordId ${item.recordId} not found in store`);
             }
 
             // Add to order_items
             await client.query(`
                 INSERT INTO store_order_items (order_id, record_id, notes)
                 VALUES ($1, $2, $3)
-            `, [orderId, item.recordId, item.notes || null]);
+            `, [orderId, item.recordId, item.notes || null]).catch(err => {
+                console.error('Database error adding item to order:', err);
+                throw new Error(`Failed to add item ${item.recordId} to order`);
+            });
             
             // Remove from store_items
             await client.query(
                 'DELETE FROM store_items WHERE store_id = $1 AND record_id = $2',
                 [storeId, item.recordId]
-            );
+            ).catch(err => {
+                console.error('Database error removing item from store:', err);
+                throw new Error(`Failed to remove item ${item.recordId} from store`);
+            });
         }
         
         await client.query('COMMIT');
@@ -141,10 +352,24 @@ router.post('/:storeId', auth, checkStorePermission('orders'), catchAsync(async 
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error adding to order:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        
+        // Send appropriate error status based on error type
+        if (error instanceof ValidationError) {
+            res.status(400).json({
+                success: false,
+                error: error.message
+            });
+        } else if (error instanceof NotFoundError) {
+            res.status(404).json({
+                success: false,
+                error: error.message
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                error: error.message || 'An error occurred while adding items to order'
+            });
+        }
     } finally {
         client.release();
     }
@@ -196,7 +421,7 @@ router.delete('/:storeId/items/:itemId', auth, checkStorePermission('orders'), c
     try {
         await client.query('BEGIN');
 
-        // Get item details with a more specific query
+        // 獲取要刪除的項目詳細信息
         const itemResult = await client.query(`
             SELECT 
                 oi.id as item_id,
@@ -210,40 +435,44 @@ router.delete('/:storeId/items/:itemId', auth, checkStorePermission('orders'), c
             AND o.store_id = $2
         `, [itemId, storeId]);
 
-        console.log('Delete item query result:', itemResult.rows);
-
         if (itemResult.rows.length === 0) {
             throw new Error('Item not found');
         }
 
         const item = itemResult.rows[0];
 
-        // Check if the order is pending
+        // 檢查 order 是否為 pending
         if (item.status !== 'pending') {
             throw new Error('Cannot delete item from a completed order');
         }
 
-        // Return item to store_items
+        // 將項目返回到 store_items
         await client.query(`
             INSERT INTO store_items (store_id, record_id)
             VALUES ($1, $2)
             RETURNING id
         `, [storeId, item.record_id]);
 
-        // Delete from order_items
-        const deleteResult = await client.query(
-            'DELETE FROM store_order_items WHERE id = $1 RETURNING id', 
-            [itemId]
-        );
+        // 刪除 pending order 中的項目
+        await client.query('DELETE FROM store_order_items WHERE id = $1', [itemId]);
 
-        console.log('Delete result:', deleteResult.rows);
+        // 重要：將 completed orders 中對應的項目標記為未刪除
+        await client.query(`
+            UPDATE store_order_items oi
+            SET is_deleted = false
+            FROM store_orders o
+            WHERE oi.order_id = o.id
+            AND o.store_id = $1
+            AND o.status = 'completed'
+            AND oi.record_id = $2
+        `, [storeId, item.record_id]);
 
         await client.query('COMMIT');
         
         res.json({
             success: true,
-            message: 'Item deleted successfully',
-            itemId: deleteResult.rows[0].id
+            message: 'Item deleted successfully and restored in completed orders',
+            itemId: itemResult.rows[0].id
         });
     } catch (error) {
         await client.query('ROLLBACK');
@@ -358,53 +587,69 @@ router.put('/:storeId/items/:itemId/price', auth, checkStorePermission('orders')
     }
 }));
 
-// Delete order (admin group only)
-router.delete('/:storeId/:orderId', auth, checkGroup(['admin']), catchAsync(async (req, res) => {
+// Delete order item from completed order
+router.delete('/:storeId/completed/:orderId', auth, checkGroup(['admin']), catchAsync(async (req, res) => {
     const { storeId, orderId } = req.params;
+    console.log('Delete order request received:', {
+        storeId,
+        orderId,
+        url: req.originalUrl,
+        method: req.method,
+        headers: req.headers,
+        path: req.path,
+        baseUrl: req.baseUrl
+    });
     const client = await pool.connect();
     
     try {
         await client.query('BEGIN');
 
-        // Get order details and verify it exists
-        const orderResult = await client.query(`
-            SELECT o.*, oi.record_id
-            FROM store_orders o
-            LEFT JOIN store_order_items oi ON o.id = oi.order_id
-            WHERE o.id = $1 AND o.store_id = $2
+        // 檢查 order 是否存在且屬於該商店
+        const orderCheck = await client.query(`
+            SELECT id 
+            FROM store_orders 
+            WHERE id = $1 AND store_id = $2 AND status = 'completed'
         `, [orderId, storeId]);
 
-        if (orderResult.rows.length === 0) {
-            throw new NotFoundError('Order not found');
+        if (orderCheck.rows.length === 0) {
+            throw new Error('Order not found or not completed');
         }
 
-        // If order is completed, return items to store inventory
-        if (orderResult.rows[0].status === 'completed') {
-            for (const row of orderResult.rows) {
-                if (row.record_id) {
-                    await client.query(
-                        'INSERT INTO store_items (store_id, record_id) VALUES ($1, $2)',
-                        [storeId, row.record_id]
-                    );
-                }
-            }
+        // 獲取所有 order items
+        const itemsResult = await client.query(`
+            SELECT id, record_id
+            FROM store_order_items
+            WHERE order_id = $1
+        `, [orderId]);
+
+        // 將所有 items 返回到 store_items
+        for (const item of itemsResult.rows) {
+            await client.query(`
+                INSERT INTO store_items (store_id, record_id)
+                VALUES ($1, $2)
+            `, [storeId, item.record_id]);
         }
 
-        // Delete order items first
+        // 刪除所有 order items
         await client.query('DELETE FROM store_order_items WHERE order_id = $1', [orderId]);
-        
-        // Then delete the order
+
+        // 刪除 order
         await client.query('DELETE FROM store_orders WHERE id = $1', [orderId]);
 
         await client.query('COMMIT');
         
         res.json({
             success: true,
-            message: 'Order deleted successfully'
+            message: 'Order and all items deleted successfully',
+            orderDeleted: true
         });
     } catch (error) {
         await client.query('ROLLBACK');
-        throw error;
+        console.error('Error deleting order:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
     } finally {
         client.release();
     }

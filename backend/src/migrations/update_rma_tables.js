@@ -21,8 +21,10 @@ async function updateRmaTables() {
                 CREATE TYPE rma_store_status AS ENUM (
                     'pending',
                     'sent_to_inventory',
+                    'processing',
                     'completed',
-                    'failed'
+                    'failed',
+                    'sent_to_store'
                 );
             EXCEPTION
                 WHEN duplicate_object THEN null;
