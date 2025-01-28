@@ -14,4 +14,9 @@ CREATE TABLE IF NOT EXISTS outbound_items (
     record_id INTEGER REFERENCES system_records(id) ON DELETE CASCADE,
     added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(outbound_id, record_id)
-); 
+);
+
+-- 建議添加覆蓋索引
+CREATE INDEX idx_outbound_items_composite 
+ON outbound_items (outbound_id, record_id)
+INCLUDE (added_at); 

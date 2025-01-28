@@ -38,4 +38,15 @@ const testConnection = async () => {
     }
 };
 
+// 建議加入監控指標
+const monitorPoolMetrics = () => {
+  setInterval(() => {
+    console.log({
+      total: pool.totalCount,
+      idle: pool.idleCount,
+      waiting: pool.waitingCount
+    });
+  }, 5000);
+};
+
 module.exports = { pool, testConnection }; 

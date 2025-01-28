@@ -152,13 +152,11 @@ const createGroup = async (req, res) => {
 
             // 添加商店權限
             if (store_permissions && Object.keys(store_permissions).length > 0) {
-                for (const [storeId, features] of Object.entries(store_permissions)) {
-                    await client.query(
-                        `INSERT INTO group_store_permissions (group_id, store_id, features)
-                         VALUES ($1, $2, $3)`,
-                        [group.id, parseInt(storeId), features]
-                    );
-                }
+                const values = store_permissions.map(p => `(${group.id}, ${p})`).join(',');
+                await client.query(`
+                    INSERT INTO group_store_permissions (group_id, store_id)
+                    VALUES ${values}
+                `);
             }
 
             await client.query('COMMIT');
@@ -235,13 +233,11 @@ const updateGroup = async (req, res) => {
             
             // 添加新的商店權限
             if (store_permissions && Object.keys(store_permissions).length > 0) {
-                for (const [storeId, features] of Object.entries(store_permissions)) {
-                    await client.query(
-                        `INSERT INTO group_store_permissions (group_id, store_id, features)
-                         VALUES ($1, $2, $3)`,
-                        [id, parseInt(storeId), features]
-                    );
-                }
+                const values = store_permissions.map(p => `(${id}, ${p})`).join(',');
+                await client.query(`
+                    INSERT INTO group_store_permissions (group_id, store_id)
+                    VALUES ${values}
+                `);
             }
 
             await client.query('COMMIT');
