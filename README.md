@@ -4,7 +4,8 @@ A full-stack application for managing retail store operations, inventory, and or
 
 ## 📦 System Components
 
-### Backend Services 
+### Backend Services
+```
 ├── src/
 │ ├── config/
 │ │ ├── database.js # PostgreSQL connection pool with SSL configuration
@@ -17,7 +18,7 @@ A full-stack application for managing retail store operations, inventory, and or
 │ │ └── order.js # RESTful endpoints with JWT auth
 │ └── db/
 │ └── createTables.sql # Schema with indexes and constraints
-
+```
 ### Frontend UI
 ```
 ├── src/
