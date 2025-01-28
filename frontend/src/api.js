@@ -1,5 +1,6 @@
 import axios from 'axios';
 import api from './services/api';
+import { debounce } from 'lodash';
 
 export const rmaApi = {
     getInventoryRmaItems: async (page = 1, limit = 50) => {
@@ -125,4 +126,47 @@ export const orderApi = {
             throw error.response?.data || error;
         }
     }
+};
+
+// 原WebSocket處理
+const ws = new WebSocket(REACT_APP_WS_URL);
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  // 立即處理單條消息
+};
+
+// 建議加入批處理
+let messageQueue = [];
+let isProcessing = false;
+
+ws.onmessage = (event) => {
+  messageQueue.push(JSON.parse(event.data));
+  if (!isProcessing) {
+    requestAnimationFrame(() => {
+      processBatch(messageQueue);
+      messageQueue = [];
+      isProcessing = false;
+    });
+    isProcessing = true;
+  }
+};
+
+// 建議加入請求合併
+const pendingRequests = new Map();
+
+export const createDebouncedApi = (endpoint, wait = 300) => {
+  return debounce(async (params) => {
+    const key = JSON.stringify(params);
+    if (pendingRequests.has(key)) {
+      return pendingRequests.get(key);
+    }
+    const promise = api.get(endpoint, { params });
+    pendingRequests.set(key, promise);
+    try {
+      const result = await promise;
+      return result;
+    } finally {
+      pendingRequests.delete(key);
+    }
+  }, wait);
 }; 

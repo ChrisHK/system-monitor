@@ -17,14 +17,13 @@ exports.getRecords = async (req, res) => {
             const totalPages = Math.ceil(totalRecords / limit);
 
             // 獲取分頁數據
+            const cursor = Buffer.from(lastRecordDate + '|' + lastId).toString('base64');
             const result = await client.query(`
-                SELECT 
-                    *,
-                    TO_CHAR(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei', 'YYYY-MM-DD HH24:MI:SS') as formatted_date 
-                FROM system_records 
-                ORDER BY created_at DESC, id DESC
-                LIMIT $1 OFFSET $2
-            `, [limit, offset]);
+                SELECT * FROM system_records 
+                WHERE created_at > $1 OR (created_at = $1 AND id > $2)
+                ORDER BY created_at, id
+                LIMIT $3
+            `, [lastRecordDate, lastId, limit]);
 
             console.log(`Found ${result.rows.length} records`);
 

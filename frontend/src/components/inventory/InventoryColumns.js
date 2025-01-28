@@ -1,5 +1,6 @@
 import { Tag } from 'antd';
 import { formatDate, formatSystemSku, formatOS } from '../../utils/formatters';
+import { useMemo } from 'react';
 
 // Add modern forced colors mode styles
 const tagStyle = {
@@ -190,4 +191,9 @@ export const createInventoryColumns = ({
         width: 150,
         render: formatDate
     }
-]; 
+];
+
+const memoizedColumns = useMemo(() => 
+  createInventoryColumns({/* 參數 */}),
+  [itemLocations, duplicateSerials] // 依賴項
+); 
