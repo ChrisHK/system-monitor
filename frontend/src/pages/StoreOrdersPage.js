@@ -340,7 +340,23 @@ const StoreOrdersPage = () => {
             title: 'Pay Method',
             dataIndex: 'pay_method',
             key: 'pay_method',
-            render: (text) => text || 'Credit Card'
+            render: (text, record) => {
+                if (record.is_deleted) {
+                    return <span style={{ color: '#999' }}>{text || 'Credit Card'}</span>;
+                }
+                return (
+                    <Select
+                        defaultValue={text || 'credit_card'}
+                        style={{ width: 120 }}
+                        onChange={(value) => handleSavePayMethod(record.id, value)}
+                    >
+                        <Option value="credit_card">Credit Card</Option>
+                        <Option value="cash">Cash</Option>
+                        <Option value="bank_transfer">Bank Transfer</Option>
+                        <Option value="other">Other</Option>
+                    </Select>
+                );
+            }
         },
         {
             title: 'Price',

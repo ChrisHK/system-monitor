@@ -55,7 +55,7 @@ const Layout = ({ children }) => {
                     </Typography>
                     <Box sx={{ display: 'flex', alignItems: 'center' }}>
                         <Typography variant="body1" sx={{ mr: 2 }}>
-                            {user?.username} ({user?.role})
+                            {user?.username} ({user?.group_name})
                         </Typography>
                         <IconButton color="inherit" onClick={handleLogout}>
                             <LogoutIcon />
