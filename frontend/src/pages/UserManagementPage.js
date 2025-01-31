@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Select, message, Space, Tag } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, message, Space, Tag, Alert } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
-import { userApi, storeApi } from '../services/api';
+import { userService, storeService } from '../api';
 
 const { Option } = Select;
 
@@ -10,29 +10,47 @@ const UserManagementPage = () => {
     const [stores, setStores] = useState([]);
     const [editingUser, setEditingUser] = useState(null);
     const [isModalVisible, setIsModalVisible] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
     const [form] = Form.useForm();
 
     const fetchUsers = async () => {
         try {
-            const response = await userApi.getUsers();
-            if (response?.success) {
-                setUsers(response.users);
+            setLoading(true);
+            setError(null);
+            const response = await userService.getUsers();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load users');
             }
+            
+            setUsers(response.users);
         } catch (error) {
             console.error('Error fetching users:', error);
+            setError(error.message);
             message.error('Failed to load users');
+        } finally {
+            setLoading(false);
         }
     };
 
     const fetchStores = async () => {
         try {
-            const response = await storeApi.getStores();
-            if (response?.success) {
-                setStores(response.stores);
+            setLoading(true);
+            setError(null);
+            const response = await storeService.getStores();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load stores');
             }
+            
+            setStores(response.stores);
         } catch (error) {
             console.error('Error fetching stores:', error);
+            setError(error.message);
             message.error('Failed to load stores');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -53,16 +71,25 @@ const UserManagementPage = () => {
 
     const handleSubmit = async (values) => {
         try {
-            const response = await userApi.updateUser(editingUser.id, values);
-            if (response?.success) {
-                message.success('User updated successfully');
-                setIsModalVisible(false);
-                form.resetFields();
-                fetchUsers();
+            setLoading(true);
+            setError(null);
+            
+            const response = await userService.updateUser(editingUser.id, values);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to update user');
             }
+            
+            message.success('User updated successfully');
+            setIsModalVisible(false);
+            form.resetFields();
+            await fetchUsers();
         } catch (error) {
             console.error('Error updating user:', error);
+            setError(error.message);
             message.error('Failed to update user');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -103,6 +130,7 @@ const UserManagementPage = () => {
                         type="link" 
                         icon={<EditOutlined />}
                         onClick={() => handleEdit(record)}
+                        disabled={loading}
                     >
                         Edit
                     </Button>
@@ -114,10 +142,19 @@ const UserManagementPage = () => {
     return (
         <div style={{ padding: '24px' }}>
             <h2>User Management</h2>
+            {error && (
+                <Alert
+                    message={error}
+                    type="error"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                />
+            )}
             <Table 
                 columns={columns} 
                 dataSource={users}
                 rowKey="id"
+                loading={loading}
             />
 
             <Modal
@@ -126,9 +163,19 @@ const UserManagementPage = () => {
                 onOk={() => form.submit()}
                 onCancel={() => {
                     setIsModalVisible(false);
+                    setError(null);
                     form.resetFields();
                 }}
+                confirmLoading={loading}
             >
+                {error && (
+                    <Alert
+                        message={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                    />
+                )}
                 <Form
                     form={form}
                     layout="vertical"
@@ -147,7 +194,7 @@ const UserManagementPage = () => {
                         label="Role"
                         rules={[{ required: true, message: 'Please select role!' }]}
                     >
-                        <Select>
+                        <Select disabled={loading}>
                             <Option value="admin">Admin</Option>
                             <Option value="user">User</Option>
                         </Select>
@@ -162,6 +209,7 @@ const UserManagementPage = () => {
                             mode="multiple"
                             placeholder="Select stores"
                             style={{ width: '100%' }}
+                            disabled={loading}
                         >
                             {stores.map(store => (
                                 <Option key={store.id} value={store.id}>

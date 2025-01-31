@@ -12,11 +12,12 @@ import {
     Grid,
     Card,
     CardContent,
-    CardActions
+    CardActions,
+    CircularProgress
 } from '@mui/material';
 import { Edit as EditIcon, Delete as DeleteIcon, LocationOn, Phone, Email } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import { storeApi } from '../../services/api';
+import { storeService } from '../../api';
 
 const StoreManagement = () => {
     const [stores, setStores] = useState([]);
@@ -31,6 +32,7 @@ const StoreManagement = () => {
     });
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
+    const [loading, setLoading] = useState(false);
     const { isAdmin } = useAuth();
 
     useEffect(() => {
@@ -39,22 +41,25 @@ const StoreManagement = () => {
 
     const fetchStores = async () => {
         try {
-            console.log('Fetching stores...');
-            const response = await storeApi.getStores();
-            console.log('Stores response:', response);
+            setLoading(true);
+            setError('');
+            const response = await storeService.getStores();
             
-            if (response?.success) {
-                setStores(response.stores);
-            } else {
+            if (!response?.success) {
                 throw new Error(response?.error || 'Failed to fetch stores');
             }
+            
+            setStores(response.stores);
         } catch (error) {
             console.error('Error fetching stores:', error);
-            setError('Failed to fetch stores');
+            setError(error.message || 'Failed to fetch stores');
+        } finally {
+            setLoading(false);
         }
     };
 
     const handleOpenDialog = (store = null) => {
+        setError('');
         if (store) {
             setEditingStore(store);
             setFormData({
@@ -94,47 +99,48 @@ const StoreManagement = () => {
         e.preventDefault();
         setError('');
         setSuccess('');
+        setLoading(true);
 
         try {
             let response;
             if (editingStore) {
-                console.log('Updating store:', editingStore.id);
-                response = await storeApi.updateStore(editingStore.id, formData);
+                response = await storeService.updateStore(editingStore.id, formData);
             } else {
-                console.log('Creating new store');
-                response = await storeApi.createStore(formData);
+                response = await storeService.createStore(formData);
             }
-
-            console.log('Store operation response:', response);
             
-            if (response?.success) {
-                setSuccess(editingStore ? 'Store updated successfully' : 'Store created successfully');
-                handleCloseDialog();
-                fetchStores();
-            } else {
+            if (!response?.success) {
                 throw new Error(response?.error || 'Operation failed');
             }
+            
+            setSuccess(editingStore ? 'Store updated successfully' : 'Store created successfully');
+            handleCloseDialog();
+            await fetchStores();
         } catch (error) {
             console.error('Error in store operation:', error);
             setError(error.message || 'Operation failed');
+        } finally {
+            setLoading(false);
         }
     };
 
     const handleDelete = async (storeId) => {
         try {
-            console.log('Deleting store:', storeId);
-            const response = await storeApi.deleteStore(storeId);
-            console.log('Delete store response:', response);
+            setLoading(true);
+            setError('');
+            const response = await storeService.deleteStore(storeId);
             
-            if (response?.success) {
-                setSuccess('Store deleted successfully');
-                fetchStores();
-            } else {
+            if (!response?.success) {
                 throw new Error(response?.error || 'Failed to delete store');
             }
+            
+            setSuccess('Store deleted successfully');
+            await fetchStores();
         } catch (error) {
             console.error('Error deleting store:', error);
             setError(error.message || 'Failed to delete store');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -154,6 +160,7 @@ const StoreManagement = () => {
                     variant="contained"
                     color="primary"
                     onClick={() => handleOpenDialog()}
+                    disabled={loading}
                 >
                     Add New Store
                 </Button>
@@ -168,6 +175,12 @@ const StoreManagement = () => {
                 <Alert severity="success" sx={{ mb: 2 }}>
                     {success}
                 </Alert>
+            )}
+
+            {loading && (
+                <Box display="flex" justifyContent="center" my={3}>
+                    <CircularProgress />
+                </Box>
             )}
 
             <Grid container spacing={3}>
@@ -207,6 +220,7 @@ const StoreManagement = () => {
                                     size="small"
                                     startIcon={<EditIcon />}
                                     onClick={() => handleOpenDialog(store)}
+                                    disabled={loading}
                                 >
                                     Edit
                                 </Button>
@@ -215,6 +229,7 @@ const StoreManagement = () => {
                                     color="error"
                                     startIcon={<DeleteIcon />}
                                     onClick={() => handleDelete(store.id)}
+                                    disabled={loading}
                                 >
                                     Delete
                                 </Button>
@@ -224,11 +239,21 @@ const StoreManagement = () => {
                 ))}
             </Grid>
 
-            <Dialog open={openDialog} onClose={handleCloseDialog}>
+            <Dialog 
+                open={openDialog} 
+                onClose={handleCloseDialog}
+                fullWidth
+                maxWidth="sm"
+            >
                 <DialogTitle>
                     {editingStore ? 'Edit Store' : 'Add New Store'}
                 </DialogTitle>
                 <DialogContent>
+                    {error && (
+                        <Alert severity="error" sx={{ mt: 2, mb: 2 }}>
+                            {error}
+                        </Alert>
+                    )}
                     <Box component="form" onSubmit={handleSubmit} sx={{ mt: 2 }}>
                         <TextField
                             fullWidth
@@ -239,6 +264,7 @@ const StoreManagement = () => {
                             }
                             margin="normal"
                             required
+                            disabled={loading}
                         />
                         <TextField
                             fullWidth
@@ -249,6 +275,7 @@ const StoreManagement = () => {
                             }
                             margin="normal"
                             required
+                            disabled={loading}
                         />
                         <TextField
                             fullWidth
@@ -259,6 +286,7 @@ const StoreManagement = () => {
                             }
                             margin="normal"
                             required
+                            disabled={loading}
                         />
                         <TextField
                             fullWidth
@@ -270,6 +298,7 @@ const StoreManagement = () => {
                             }
                             margin="normal"
                             required
+                            disabled={loading}
                         />
                         <TextField
                             fullWidth
@@ -281,13 +310,25 @@ const StoreManagement = () => {
                             margin="normal"
                             multiline
                             rows={4}
+                            disabled={loading}
                         />
                     </Box>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={handleCloseDialog}>Cancel</Button>
-                    <Button onClick={handleSubmit} variant="contained" color="primary">
-                        {editingStore ? 'Update' : 'Create'}
+                    <Button onClick={handleCloseDialog} disabled={loading}>
+                        Cancel
+                    </Button>
+                    <Button 
+                        onClick={handleSubmit} 
+                        variant="contained" 
+                        color="primary"
+                        disabled={loading}
+                    >
+                        {loading ? (
+                            <CircularProgress size={24} color="inherit" />
+                        ) : (
+                            editingStore ? 'Update' : 'Create'
+                        )}
                     </Button>
                 </DialogActions>
             </Dialog>

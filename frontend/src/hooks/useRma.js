@@ -1,18 +1,22 @@
 import { useState, useEffect, useCallback } from 'react';
 import { message } from 'antd';
-import { rmaApi } from '../services/api';
+import { rmaService } from '../api';
 
-export const useRmaItems = (page = 1, limit = 50) => {
+export const useRmaItems = (storeId = null, page = 1, limit = 50) => {
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
 
     const fetchItems = useCallback(async () => {
         try {
-            console.log('Fetching RMA items with:', { page, limit });
+            console.log('Fetching RMA items with:', { storeId, page, limit });
             setLoading(true);
             setError(null);
-            const response = await rmaApi.getInventoryRmaItems(page, limit);
+            
+            const response = await rmaService.getRmaItems(
+                storeId, 
+                { page, limit }
+            );
             console.log('API Response:', response);
             
             // Set the response data directly
@@ -27,11 +31,13 @@ export const useRmaItems = (page = 1, limit = 50) => {
         } finally {
             setLoading(false);
         }
-    }, [page, limit]);
+    }, [storeId, page, limit]);
 
     useEffect(() => {
-        fetchItems();
-    }, [fetchItems]);
+        if (storeId) {
+            fetchItems();
+        }
+    }, [fetchItems, storeId]);
 
     return {
         loading,
@@ -47,7 +53,7 @@ export const useRmaOperations = () => {
     const processRma = async (rmaId) => {
         try {
             setLoading(true);
-            const response = await rmaApi.processRma(rmaId);
+            const response = await rmaService.processRma(rmaId);
             if (response?.success) {
                 message.success('RMA item processed successfully');
                 return true;
@@ -64,7 +70,7 @@ export const useRmaOperations = () => {
     const completeRma = async (rmaId) => {
         try {
             setLoading(true);
-            const response = await rmaApi.completeRma(rmaId);
+            const response = await rmaService.completeRma(rmaId);
             if (response?.success) {
                 message.success('RMA item completed successfully');
                 return true;
@@ -81,7 +87,7 @@ export const useRmaOperations = () => {
     const failRma = async (rmaId, reason) => {
         try {
             setLoading(true);
-            const response = await rmaApi.failRma(rmaId, reason);
+            const response = await rmaService.failRma(rmaId, reason);
             if (response?.success) {
                 message.success('RMA item marked as failed');
                 return true;
@@ -101,7 +107,7 @@ export const useRmaOperations = () => {
         try {
             setLoading(true);
             const results = await Promise.allSettled(
-                rmaIds.map(id => rmaApi.processRma(id))
+                rmaIds.map(id => rmaService.processRma(id))
             );
 
             const successful = results.filter(r => r.status === 'fulfilled' && r.value?.success).length;
@@ -141,7 +147,7 @@ export const useRmaStats = () => {
         try {
             setLoading(true);
             setError(null);
-            const response = await rmaApi.getRmaStats();
+            const response = await rmaService.getRmaStats();
             setStats(response.data);
         } catch (err) {
             setError(err);
@@ -160,5 +166,86 @@ export const useRmaStats = () => {
         stats,
         error,
         refetch: fetchStats
+    };
+};
+
+export const useRma = (storeId) => {
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const [rmaItems, setRmaItems] = useState([]);
+
+    const fetchRmaItems = useCallback(async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            const response = await rmaService.getRmaItems(storeId);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to fetch RMA items');
+            }
+            
+            setRmaItems(response.rma_items);
+        } catch (error) {
+            console.error('Error fetching RMA items:', error);
+            setError(error.message || 'Failed to fetch RMA items');
+            message.error('Failed to fetch RMA items');
+        } finally {
+            setLoading(false);
+        }
+    }, [storeId]);
+
+    const addToRma = useCallback(async (data) => {
+        try {
+            setLoading(true);
+            setError(null);
+            const response = await rmaService.addToRma(storeId, data);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to add item to RMA');
+            }
+            
+            message.success('Item added to RMA successfully');
+            await fetchRmaItems();
+            return true;
+        } catch (error) {
+            console.error('Error adding to RMA:', error);
+            setError(error.message || 'Failed to add item to RMA');
+            message.error('Failed to add item to RMA');
+            return false;
+        } finally {
+            setLoading(false);
+        }
+    }, [storeId, fetchRmaItems]);
+
+    const removeFromRma = useCallback(async (rmaId) => {
+        try {
+            setLoading(true);
+            setError(null);
+            const response = await rmaService.removeFromRma(storeId, rmaId);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to remove item from RMA');
+            }
+            
+            message.success('Item removed from RMA successfully');
+            await fetchRmaItems();
+            return true;
+        } catch (error) {
+            console.error('Error removing from RMA:', error);
+            setError(error.message || 'Failed to remove item from RMA');
+            message.error('Failed to remove item from RMA');
+            return false;
+        } finally {
+            setLoading(false);
+        }
+    }, [storeId, fetchRmaItems]);
+
+    return {
+        loading,
+        error,
+        rmaItems,
+        fetchRmaItems,
+        addToRma,
+        removeFromRma
     };
 }; 

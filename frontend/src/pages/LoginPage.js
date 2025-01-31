@@ -1,15 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Form, Input, Button, Card, message } from 'antd';
+import { Form, Input, Button, Card, message, Alert } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { login as apiLogin } from '../services/api';
 
 const LoginPage = () => {
     const navigate = useNavigate();
     const location = useLocation();
-    const { login, isAuthenticated } = useAuth();
+    const { login, isAuthenticated, error: authError } = useAuth();
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         // If already authenticated, redirect to home
@@ -18,22 +18,31 @@ const LoginPage = () => {
         }
     }, [isAuthenticated, navigate]);
 
+    useEffect(() => {
+        // Update local error state when auth error changes
+        if (authError) {
+            setError(authError);
+        }
+    }, [authError]);
+
     const onFinish = async (values) => {
         try {
             setLoading(true);
+            setError(null);
+            
             const result = await login(values.username, values.password);
             
-            if (result.success) {
-                message.success('Login successful');
-                // Navigate to the intended page or home
-                const from = location.state?.from || '/';
-                navigate(from, { replace: true });
-            } else {
-                throw new Error(result.error || 'Login failed');
+            if (!result?.success) {
+                throw new Error(result?.error || 'Login failed');
             }
+
+            message.success('Login successful');
+            // Navigate to the intended page or home
+            const from = location.state?.from || '/';
+            navigate(from, { replace: true });
         } catch (error) {
             console.error('Login failed:', error);
-            message.error(error.message || 'Failed to login');
+            setError(error.message || 'Failed to login');
         } finally {
             setLoading(false);
         }
@@ -49,6 +58,14 @@ const LoginPage = () => {
         }}>
             <Card style={{ width: 300, boxShadow: '0 4px 8px rgba(0,0,0,0.1)' }}>
                 <h2 style={{ textAlign: 'center', marginBottom: 24 }}>Login</h2>
+                {error && (
+                    <Alert
+                        message={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 24 }}
+                    />
+                )}
                 <Form
                     name="login"
                     onFinish={onFinish}
@@ -62,6 +79,8 @@ const LoginPage = () => {
                             prefix={<UserOutlined />} 
                             placeholder="Username" 
                             size="large"
+                            disabled={loading}
+                            autoComplete="username"
                         />
                     </Form.Item>
 
@@ -73,6 +92,8 @@ const LoginPage = () => {
                             prefix={<LockOutlined />}
                             placeholder="Password"
                             size="large"
+                            disabled={loading}
+                            autoComplete="current-password"
                         />
                     </Form.Item>
 

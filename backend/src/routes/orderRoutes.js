@@ -28,19 +28,9 @@ router.get('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (
                         ALTER TABLE store_order_items 
                         ADD COLUMN is_deleted BOOLEAN DEFAULT FALSE;
                     END IF;
-
-                    IF NOT EXISTS (
-                        SELECT 1 
-                        FROM information_schema.columns 
-                        WHERE table_name = 'store_order_items' 
-                        AND column_name = 'pay_method'
-                    ) THEN 
-                        ALTER TABLE store_order_items 
-                        ADD COLUMN pay_method VARCHAR(50) DEFAULT 'credit_card';
-                    END IF;
                 END $$;
             `);
-            console.log('Checked/Added is_deleted and pay_method columns');
+            console.log('Checked/Added is_deleted column');
         } catch (migrationError) {
             console.error('Migration error:', migrationError);
             // Continue even if migration fails
@@ -93,8 +83,7 @@ router.get('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (
                         'id', oi.id,
                         'record_id', oi.record_id,
                         'serialnumber', sr.serialnumber,
-                        'model', sr.model,
-                        'pay_method', oi.pay_method
+                        'model', sr.model
                     )
                 ) as items
             FROM store_orders o
@@ -143,7 +132,6 @@ router.get('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (
                                 'price', oi.price,
                                 'notes', oi.notes,
                                 'is_deleted', oi.is_deleted,
-                                'pay_method', oi.pay_method,
                                 'order', json_build_object(
                                     'id', o.id,
                                     'status', o.status,
@@ -590,60 +578,6 @@ router.put('/:storeId/items/:itemId/price', auth, checkStorePermission('orders')
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error updating price:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    } finally {
-        client.release();
-    }
-}));
-
-// Update order item payment method
-router.put('/:storeId/items/:itemId/pay-method', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
-    const { storeId, itemId } = req.params;
-    const { pay_method } = req.body;
-    const client = await pool.connect();
-    
-    try {
-        // Validate payment method
-        const validPayMethods = ['credit_card', 'cash', 'bank_transfer', 'other'];
-        if (!validPayMethods.includes(pay_method)) {
-            throw new ValidationError('Invalid payment method');
-        }
-
-        await client.query('BEGIN');
-
-        // Check if item exists and belongs to a pending order
-        const itemResult = await client.query(`
-            SELECT oi.id
-            FROM store_order_items oi
-            JOIN store_orders o ON oi.order_id = o.id
-            WHERE oi.id = $1 
-            AND o.store_id = $2
-            AND o.status = 'pending'
-        `, [itemId, storeId]);
-
-        if (itemResult.rows.length === 0) {
-            throw new Error('Item not found or order is not pending');
-        }
-
-        // Update payment method
-        await client.query(`
-            UPDATE store_order_items
-            SET pay_method = $1
-            WHERE id = $2
-        `, [pay_method, itemId]);
-
-        await client.query('COMMIT');
-        
-        res.json({
-            success: true,
-            message: 'Payment method updated successfully'
-        });
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('Error updating payment method:', error);
         res.status(500).json({
             success: false,
             error: error.message

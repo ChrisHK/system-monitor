@@ -4,7 +4,7 @@ import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, M
 import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
-import { storeApi, removeFromOutbound, searchRecords, addToOutbound, sendToStore, getOutboundItems, salesApi, rmaApi, orderApi } from '../services/api';
+import { storeService, inventoryService, salesService, rmaService, orderService } from '../api';
 import { formatSystemSku } from '../utils/formatters';
 
 const { Search } = Input;
@@ -86,7 +86,7 @@ const StorePage = () => {
     const fetchOutboundItems = useCallback(async () => {
         try {
             setOutboundLoading(true);
-            const response = await getOutboundItems();
+            const response = await inventoryService.getOutboundItems();
             if (response?.items) {
                 setOutboundRecords(response.items);
             } else {
@@ -124,8 +124,8 @@ const StorePage = () => {
             
             // 並行請求數據
             const [storeResponse, itemsResponse] = await Promise.all([
-                storeApi.getStore(storeId),
-                storeApi.getStoreItems(storeId)
+                storeService.getStore(storeId),
+                storeService.getStoreItems(storeId)
             ]);
 
             if (storeResponse?.success) {
@@ -225,10 +225,10 @@ const StorePage = () => {
     const handleAddToOutbound = async (serialNumber) => {
         try {
             setOutboundLoading(true);
-            const searchResponse = await searchRecords(serialNumber);
+            const searchResponse = await inventoryService.searchRecords(serialNumber);
             if (searchResponse?.success && searchResponse.records?.length > 0) {
                 const record = searchResponse.records[0];
-                const addResponse = await addToOutbound(record.id);
+                const addResponse = await inventoryService.addToOutbound(record.id);
                 if (addResponse?.success) {
                     message.success('Item added to outbound successfully');
                     await fetchOutboundItems();
@@ -253,12 +253,12 @@ const StorePage = () => {
     const handleRemoveFromOutbound = async (itemId) => {
         try {
             setOutboundLoading(true);
-            const response = await removeFromOutbound(itemId);
+            const response = await inventoryService.removeFromOutbound(itemId);
             if (response?.success) {
-                message.success('Item removed successfully');
+                message.success('Item removed from outbound successfully');
                 await fetchOutboundItems();
             } else {
-                throw new Error(response?.error || 'Failed to remove item');
+                throw new Error(response?.error || 'Failed to remove item from outbound');
             }
         } catch (error) {
             console.error('Remove from outbound error:', error);
@@ -270,271 +270,126 @@ const StorePage = () => {
 
     const handleSendToStore = async () => {
         if (!selectedOutboundStore) {
-            message.error('Please select a store first');
+            message.error('Please select a store');
             return;
         }
 
-        let selectedStoreData;
-        let outboundIds;
-
         try {
             setOutboundLoading(true);
-            selectedStoreData = stores.find(s => s.value === selectedOutboundStore);
-            if (!selectedStoreData) {
-                throw new Error('Store not found');
-            }
-
-            outboundIds = outboundRecords.map(r => r.outbound_item_id).filter(Boolean);
-            if (outboundIds.length === 0) {
-                throw new Error('No valid outbound items found');
-            }
-
-            console.log('Sending items to store:', { selectedOutboundStore, outboundIds });
-            const response = await sendToStore(selectedOutboundStore, outboundIds);
-            console.log('Send to store response:', response);
-
+            const itemIds = outboundRecords.map(item => item.id);
+            const response = await inventoryService.sendToStore(selectedOutboundStore, itemIds);
+            
             if (response?.success) {
-                // First add the notification
-                console.log('Adding notification for store:', selectedOutboundStore);
-                addNotification('inventory', selectedOutboundStore);
-                
-                // Then refresh the data
-                console.log('Refreshing data...');
-                await fetchOutboundItems();
-                await fetchData();
-                
                 message.success('Items sent to store successfully');
                 handleModalClose('outbound');
-            } else if (response?.error && response.error.includes('already in stores:')) {
-                Modal.confirm({
-                    title: 'Items Already in Store',
-                    content: `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
-                    okText: 'Yes, Move Items',
-                    cancelText: 'No, Keep Current',
-                    onOk: async () => {
-                        try {
-                            console.log('Retrying with force move:', { selectedOutboundStore, outboundIds });
-                            const retryResponse = await sendToStore(selectedOutboundStore, outboundIds, true);
-                            console.log('Force move response:', retryResponse);
-
-                            if (retryResponse?.success) {
-                                // First add the notification
-                                console.log('Adding notification for store:', selectedOutboundStore);
-                                addNotification('inventory', selectedOutboundStore);
-                                
-                                // Then refresh the data
-                                console.log('Refreshing data...');
-                                await fetchOutboundItems();
-                                await fetchData();
-                                
-                                message.success('Items moved to new store successfully');
-                                handleModalClose('outbound');
-                            } else {
-                                throw new Error(retryResponse?.error || 'Failed to move items to new store');
-                            }
-                        } catch (error) {
-                            console.error('Error moving items:', error);
-                            message.error(error.message || 'Failed to move items to new store');
-                        }
-                    }
-                });
+                await refreshData('outbound');
             } else {
                 throw new Error(response?.error || 'Failed to send items to store');
             }
         } catch (error) {
-            console.error('Error sending items to store:', error);
+            console.error('Send to store error:', error);
             message.error(error.message || 'Failed to send items to store');
         } finally {
             setOutboundLoading(false);
         }
     };
 
-    const handleExportCSV = () => {
+    const handleExportCSV = async () => {
         try {
-            const headers = [
-                'Serial Number',
-                'Computer Name',
-                'Manufacturer',
-                'Model',
-                'System SKU',
-                'Operating System',
-                'CPU',
-                'Resolution',
-                'Graphics Card',
-                'Touch Screen',
-                'RAM (GB)',
-                'Disks',
-                'Design Capacity',
-                'Full Charge',
-                'Cycle Count',
-                'Battery Health',
-                'Created Time'
-            ];
-
-            const csvData = filteredRecords.map(record => [
-                record.serialnumber,
-                record.computername || '',
-                record.manufacturer || '',
-                record.model || '',
-                record.systemsku || '',
-                formatOS(record.operatingsystem) || '',
-                record.cpu || '',
-                record.resolution || '',
-                record.graphicscard || '',
-                record.touchscreen ? 'Yes' : 'No',
-                record.ram_gb || '',
-                record.disks || '',
-                record.design_capacity || '',
-                record.full_charge_capacity || '',
-                record.cycle_count || '',
-                record.battery_health ? `${record.battery_health}%` : '',
-                record.created_at ? new Date(record.created_at).toLocaleString() : ''
-            ]);
-
-            // Add headers to CSV data
-            csvData.unshift(headers);
-
-            // Convert to CSV string
-            const csvString = csvData.map(row => row.map(cell => {
-                // Handle cells that contain commas or quotes
-                if (cell && (cell.includes(',') || cell.includes('"') || cell.includes('\n'))) {
-                    return `"${cell.replace(/"/g, '""')}"`;
-                }
-                return cell;
-            }).join(',')).join('\n');
-
-            // Create blob and download
-            const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            link.setAttribute('href', url);
-            link.setAttribute('download', `store_${storeId}_inventory_${new Date().toISOString().split('T')[0]}.csv`);
-            link.style.visibility = 'hidden';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            message.success('Export successful');
+            setLoading(true);
+            const response = await storeService.exportStoreInventory(storeId);
+            if (response?.success) {
+                message.success('Export successful');
+            } else {
+                throw new Error('Export failed');
+            }
         } catch (error) {
             console.error('Export error:', error);
             message.error('Failed to export data');
-        }
-    };
-
-    const handleSalesClick = () => {
-        setSalesModalVisible(true);
-        setSearchSerialNumber('');
-        setSelectedItem(null);
-        setPrice(0);
-        setNotes('');
-    };
-
-    const handleRmaClick = () => {
-        setRmaModalVisible(true);
-        setSearchSerialNumber('');
-        setSelectedItem(null);
-        setReason('');
-        setNotes('');
-    };
-
-    const handleSalesSearch = async () => {
-        if (!searchSerialNumber) {
-            message.warning('Please enter a serial number');
-            return;
-        }
-        
-        try {
-            setLoading(true);
-            const response = await storeApi.searchItems(storeId, searchSerialNumber);
-            if (response.data && response.data.success) {
-                const items = response.data.items || [];
-                if (items.length === 0) {
-                    message.warning('No items found with this serial number');
-                    setFilteredRecords([]);
-                    setSearchPerformed(false);
-                    return;
-                }
-                // Process items to ensure unique keys
-                const processedItems = items.map((item, index) => ({
-                    ...item,
-                    uniqueKey: `store-${item.id}-${item.serialnumber}-${item.store_id || storeId}-${item.received_at || Date.now()}-${index}`
-                }));
-                setFilteredRecords(processedItems);
-                setSearchPerformed(true);
-            } else {
-                message.error('Failed to search items');
-                setFilteredRecords([]);
-                setSearchPerformed(false);
-            }
-        } catch (error) {
-            console.error('Search error:', error);
-            message.error('Error searching items');
-            setFilteredRecords([]);
-            setSearchPerformed(false);
         } finally {
             setLoading(false);
         }
     };
 
-    const handleRmaSearch = async () => {
+    const handleSalesClick = () => {
+        setSalesModalVisible(true);
+    };
+
+    const handleRmaClick = () => {
+        setRmaModalVisible(true);
+    };
+
+    const handleSalesSearch = async () => {
         try {
-            const result = await salesApi.searchSales(storeId, searchSerialNumber);
-            if (result.data) {
-                setSelectedItem(result.data);
+            const response = await salesService.searchSales(storeId, searchSerialNumber);
+            if (response?.success) {
+                setSelectedItem(response.item);
             } else {
-                message.error('Item not found in sales');
-                setSelectedItem(null);
+                message.warning('No item found with this serial number');
             }
         } catch (error) {
-            message.error('Error searching for item');
-            console.error(error);
+            console.error('Sales search error:', error);
+            message.error('Failed to search item');
+        }
+    };
+
+    const handleRmaSearch = async () => {
+        try {
+            const response = await rmaService.searchRma(storeId, searchSerialNumber);
+            if (response?.success) {
+                setSelectedItem(response.item);
+            } else {
+                message.warning('No item found with this serial number');
+            }
+        } catch (error) {
+            console.error('RMA search error:', error);
+            message.error('Failed to search item');
         }
     };
 
     const handleSalesSubmit = async () => {
-        try {
-            if (!selectedItem || !price) {
-                message.error('Please select an item and enter a price');
-                return;
-            }
+        if (!selectedItem || !price) {
+            message.error('Please fill in all required fields');
+            return;
+        }
 
-            await salesApi.addToSales(storeId, {
-                recordId: selectedItem.id,
+        try {
+            const response = await salesService.addToSales(storeId, {
+                item_id: selectedItem.id,
                 price,
                 notes
             });
 
-            message.success('Item added to sales successfully');
-            setSalesModalVisible(false);
-            fetchData(); // Refresh the items list
-            navigate(`/stores/${storeId}/sales`);
+            if (response?.success) {
+                message.success('Item added to sales successfully');
+                handleModalClose('sales');
+                await refreshData('sales');
+            } else {
+                throw new Error(response?.error || 'Failed to add item to sales');
+            }
         } catch (error) {
-            message.error('Error adding item to sales');
-            console.error(error);
+            console.error('Sales submit error:', error);
+            message.error(error.message || 'Failed to add item to sales');
         }
     };
 
     const handleRmaSubmit = async () => {
-        try {
-            if (!selectedItem || !reason) {
-                message.error('Please select an item and enter a reason');
-                return;
-            }
+        if (!selectedItem || !reason) {
+            message.error('Please fill in all required fields');
+            return;
+        }
 
-            const response = await rmaApi.addToRma(storeId, {
-                recordId: selectedItem.id,
+        try {
+            const response = await rmaService.addToRma(storeId, {
+                item_id: selectedItem.id,
                 reason,
                 notes
             });
 
             if (response?.success) {
-                // Add notification for RMA
-                console.log('Adding RMA notification for store:', storeId);
-                addNotification('rma', storeId);
-                
                 message.success('Item added to RMA successfully');
-                setRmaModalVisible(false);
-                fetchData();
-                navigate(`/stores/${storeId}/rma`);
+                handleModalClose('rma');
+                await refreshData('rma');
             } else {
                 throw new Error(response?.error || 'Failed to add item to RMA');
             }
@@ -546,16 +401,16 @@ const StorePage = () => {
 
     const handleDeleteItem = async (itemId) => {
         try {
-            const response = await storeApi.deleteStoreItem(storeId, itemId);
-            if (response && response.success) {
+            const response = await storeService.deleteStoreItem(storeId, itemId);
+            if (response?.success) {
                 message.success('Item deleted successfully');
-                navigate('/inventory/items');
+                await fetchData();
             } else {
-                message.error('Failed to delete item');
+                throw new Error(response?.error || 'Failed to delete item');
             }
         } catch (error) {
-            console.error('Delete error:', error);
-            message.error('Error deleting item');
+            console.error('Delete item error:', error);
+            message.error(error.message || 'Failed to delete item');
         }
     };
 
@@ -568,7 +423,7 @@ const StorePage = () => {
             cancelText: 'No',
             onOk() {
                 handleDeleteItem(itemId);
-            },
+            }
         });
     };
 
@@ -754,7 +609,7 @@ const StorePage = () => {
             }));
 
             console.log('Formatted items:', items);
-            const response = await orderApi.addToOrder(storeId, items);
+            const response = await orderService.addToOrder(storeId, items);
 
             if (response && response.success) {
                 // Add notification for order

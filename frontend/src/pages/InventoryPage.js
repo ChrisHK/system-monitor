@@ -1,25 +1,39 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useParams, useNavigate } from 'react-router-dom';
-import { Table, Input, Button, message, Popconfirm, Space, Tag, Row, Col, Select, Card, Modal, Form, Statistic } from 'antd';
-import { SearchOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useAuth } from '../contexts/AuthContext';
 import { 
-    getInventoryRecords, 
-    getDuplicateRecords, 
-    updateRecord,
-    deleteRecord,
-    searchRecords,
-    addToOutbound,
-    removeFromOutbound,
-    sendToStore,
-    getOutboundItems,
-    storeApi,
-    checkItemLocation
-} from '../services/api';
+    Table, 
+    Input, 
+    Button, 
+    message, 
+    Popconfirm, 
+    Space, 
+    Tag, 
+    Row, 
+    Col, 
+    Select, 
+    Card, 
+    Modal, 
+    Form, 
+    Statistic,
+    Alert,
+    Tooltip
+} from 'antd';
+import { 
+    SearchOutlined, 
+    ReloadOutlined,
+    DeleteOutlined,
+    EditOutlined,
+    SendOutlined,
+    ExclamationCircleOutlined
+} from '@ant-design/icons';
+import { useAuth } from '../contexts/AuthContext';
+import { inventoryService, storeService } from '../api';
 import { useNotification } from '../contexts/NotificationContext';
+import moment from 'moment';
 
 const { Search } = Input;
 const { Option } = Select;
+const { confirm } = Modal;
 
 const InventoryPage = () => {
     const navigate = useNavigate();
@@ -27,6 +41,9 @@ const InventoryPage = () => {
     const { "*": storeId } = useParams();
     const { user, logout } = useAuth();
     const [loading, setLoading] = useState(false);
+    const [outboundLoading, setOutboundLoading] = useState(false);
+    const [storesLoading, setStoresLoading] = useState(false);
+    const [error, setError] = useState('');
     const [records, setRecords] = useState([]);
     const [duplicateSerials, setDuplicateSerials] = useState(new Set());
     const [searchText, setSearchText] = useState('');
@@ -42,11 +59,21 @@ const InventoryPage = () => {
         pageSize: 20,
         total: 0
     });
+    const [outboundItems, setOutboundItems] = useState([]);
     const [outboundModalVisible, setOutboundModalVisible] = useState(false);
     const [isInitialLoad, setIsInitialLoad] = useState(true);
     const [storesList, setStoresList] = useState([]);
     const isFirstMount = useRef(true);
     const { addNotification } = useNotification();
+    const [selectedStore, setSelectedStore] = useState(null);
+
+    // 使用 useRef 來存儲最後一次的搜索參數
+    const lastSearchParams = useRef({
+        searchText: '',
+        page: 1,
+        pageSize: 20,
+        storeId: null
+    });
 
     // 檢查用戶是否有 outbound 權限
     const hasOutboundPermission = useMemo(() => {
@@ -72,14 +99,22 @@ const InventoryPage = () => {
     useEffect(() => {
         const fetchDuplicates = async () => {
             try {
-                const duplicatesResponse = await getDuplicateRecords();
-                if (duplicatesResponse?.success) {
-                    const duplicatesList = duplicatesResponse.duplicates.map(d => d.serialnumber);
-                    setDuplicateSerials(new Set(duplicatesList));
+                setLoading(true);
+                setError('');
+                const response = await inventoryService.getDuplicateRecords();
+                
+                if (!response?.success) {
+                    throw new Error(response?.error || 'Failed to fetch duplicates');
                 }
+                
+                const duplicatesList = response.duplicates.map(d => d.serialnumber);
+                setDuplicateSerials(new Set(duplicatesList));
             } catch (error) {
                 console.error('Failed to fetch duplicates:', error);
+                setError(error.message || 'Failed to fetch duplicates');
                 setDuplicateSerials(new Set());
+            } finally {
+                setLoading(false);
             }
         };
 
@@ -95,462 +130,344 @@ const InventoryPage = () => {
         navigate('/login');
     }, [logout, navigate]);
 
-    const fetchRecords = useCallback(async () => {
-        if (loading) return; // Prevent concurrent fetches
+    const fetchRecords = useCallback(async (force = false) => {
+        // 檢查參數是否有變化
+        const currentParams = {
+            searchText,
+            page: pagination.current,
+            pageSize: pagination.pageSize,
+            storeId: storeId !== 'all' ? parseInt(storeId, 10) : null
+        };
+
+        // 如果參數沒有變化且不是強制更新，則跳過
+        if (!force && 
+            JSON.stringify(currentParams) === JSON.stringify(lastSearchParams.current)) {
+            return;
+        }
+
+        // 更新最後一次的搜索參數
+        lastSearchParams.current = currentParams;
+
+        if (loading) return;
         
         try {
             setLoading(true);
+            setError('');
+            
             const searchParams = {
                 page: pagination.current,
                 limit: pagination.pageSize,
                 ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {})
             };
-
-            console.log('Fetching records with params:', searchParams);
             
             const response = searchText ? 
-                await searchRecords(searchText, searchParams) :
-                await getInventoryRecords(searchParams);
+                await inventoryService.searchRecords('serialnumber', searchText, searchParams) :
+                await inventoryService.getInventoryRecords(searchParams);
             
-            if (response?.success) {
-                let processedRecords = [];
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load inventory data');
+            }
+
+            // 只在有記錄時檢查位置
+            if (response.records?.length > 0) {
                 try {
-                    // Check locations for each item individually
+                    // 使用 Set 來去重序號
+                    const uniqueSerials = [...new Set(response.records.map(r => r.serialnumber))];
                     const locationChecks = await Promise.all(
-                        response.records.map(async record => {
+                        uniqueSerials.map(async serialNumber => {
                             try {
-                                const locationResponse = await checkItemLocation(record.serialnumber);
+                                const locationResponse = await inventoryService.checkItemLocation(serialNumber);
+                                console.log('Location response for', serialNumber, ':', locationResponse);
                                 return {
-                                    serialnumber: record.serialnumber,
-                                    locationInfo: locationResponse?.success ? {
-                                        store_id: locationResponse.location?.store_id,
-                                        store_name: locationResponse.location?.store_name,
-                                        location_type: locationResponse.location?.location
-                                    } : null
+                                    serialnumber: serialNumber,
+                                    locationInfo: locationResponse
                                 };
                             } catch (error) {
-                                console.warn(`Failed to check location for ${record.serialnumber}:`, error);
+                                console.warn(`Failed to check location for ${serialNumber}:`, error);
                                 return {
-                                    serialnumber: record.serialnumber,
+                                    serialnumber: serialNumber,
                                     locationInfo: null
                                 };
                             }
                         })
                     );
 
-                    // Create location map from individual checks
-                    const locationMap = new Map(
-                        locationChecks.map(check => [
-                            check.serialnumber,
-                            check.locationInfo
-                        ])
-                    );
+                    // 創建位置映射
+                    const locationMap = new Map(locationChecks.map(check => [check.serialnumber, check]));
 
-                    processedRecords = (response.records || []).map(record => {
+                    // 處理記錄
+                    const processedRecords = response.records.map(record => {
                         const locationInfo = locationMap.get(record.serialnumber);
+                        console.log('Processing record:', record.serialnumber, 'Location info:', locationInfo);
                         
-                        // If we have location info from the API
-                        if (locationInfo) {
-                            // Handle store location
-                            if (locationInfo.location_type === 'store') {
+                        if (locationInfo?.locationInfo?.success) {
+                            const info = locationInfo.locationInfo;
+                            
+                            // 如果在商店中
+                            if (info.location === 'store') {
                                 return {
                                     ...record,
-                                    location: locationInfo.store_name,
+                                    location: info.storeName || info.store?.name || 'Unknown Store',
                                     locationColor: 'blue'
                                 };
                             }
-                            // Handle outbound location
-                            if (locationInfo.location_type === 'outbound') {
+                            // 如果在 outbound 中
+                            if (info.location === 'outbound') {
                                 return {
                                     ...record,
                                     location: 'Outbound',
                                     locationColor: 'orange'
                                 };
                             }
+                            // 如果在 inventory 中
+                            if (info.location === 'inventory') {
+                                return {
+                                    ...record,
+                                    location: 'Inventory',
+                                    locationColor: 'green'
+                                };
+                            }
                         }
                         
-                        // If the record has store_id/store_name from the original data
-                        if (record.store_id && record.store_name) {
-                            return {
-                                ...record,
-                                location: record.store_name,
-                                locationColor: 'blue'
-                            };
-                        }
-                        
-                        // Default to Inventory if no location info is available
+                        // 默認為 Inventory
                         return {
                             ...record,
                             location: 'Inventory',
                             locationColor: 'green'
                         };
                     });
-                } catch (locationError) {
-                    console.warn('Failed to check locations, falling back to record data:', locationError);
-                    // Fall back to using store information from the records
-                    processedRecords = (response.records || []).map(record => ({
-                        ...record,
-                        location: record.store_id ? {
-                            storeName: record.store_name || storesList.find(s => s.value === record.store_id)?.label,
-                            color: 'blue'
-                        } : {
-                            storeName: 'Inventory',
-                            color: 'green'
-                        }
-                    }));
-                }
 
-                setRecords(processedRecords);
-                setFilteredRecords(processedRecords);
-                setTotalRecords(response.total || 0);
-                setTotalItems(response.totalItems || response.total || 0);
-                setPagination(prev => ({
-                    ...prev,
-                    total: response.total || 0
-                }));
+                    setRecords(processedRecords);
+                    setFilteredRecords(processedRecords);
+                } catch (locationError) {
+                    console.warn('Failed to check locations:', locationError);
+                    setRecords(response.records);
+                    setFilteredRecords(response.records);
+                }
             } else {
-                console.error('API request succeeded but response indicates failure:', response);
-                message.error('Failed to load inventory data');
+                setRecords([]);
+                setFilteredRecords([]);
             }
+
+            setTotalRecords(response.total || 0);
+            setTotalItems(response.totalItems || response.total || 0);
+            setPagination(prev => ({
+                ...prev,
+                total: response.total || 0
+            }));
         } catch (error) {
             console.error('Failed to fetch records:', error);
             if (error.response?.status === 401) {
                 handleSessionExpired();
             } else {
-                message.error('Failed to load inventory data: ' + (error.response?.data?.message || error.message));
+                setError(error.message || 'Failed to load inventory data');
             }
         } finally {
             setLoading(false);
         }
-    }, [pagination.current, pagination.pageSize, storeId, handleSessionExpired, searchText, loading, storesList]);
+    }, [loading, pagination.current, pagination.pageSize, storeId, searchText, handleSessionExpired]);
 
-    // Handle pagination changes
-    const handleTableChange = useCallback((newPagination, filters, sorter) => {
-        setPagination(prev => ({
-            ...prev,
-            current: newPagination.current,
-            pageSize: newPagination.pageSize
-        }));
-    }, []);
-
-    // Combined effect for data fetching
+    // 初始加載
     useEffect(() => {
-        const fetchData = async () => {
-            // Skip if it's not the initial load and we're already loading
-            if (!isFirstMount.current && loading) return;
-            
-            // If it's the first mount, mark it as done
-            if (isFirstMount.current) {
-                isFirstMount.current = false;
-            }
-
-            // Add debounce for search and pagination changes
-            const timer = setTimeout(() => {
-                fetchRecords();
-            }, searchText ? 300 : 0); // Only debounce for search
-
-            return () => clearTimeout(timer);
-        };
-
-        fetchData();
-    }, [pagination.current, pagination.pageSize, storeId, searchText]);
-
-    // Handle search
-    const handleSearch = useCallback((value) => {
-        setSearchText(value);
-        setPagination(prev => ({
-            ...prev,
-            current: 1 // Reset to first page on new search
-        }));
-    }, []);
-
-    const handleEdit = useCallback((record) => {
-        setEditingRecord(record);
-        form.setFieldsValue(record);
-        setEditModalVisible(true);
-    }, [form]);
-
-    const handleDelete = useCallback(async (recordId) => {
-        if (!recordId) {
-            message.error('Invalid record to delete');
-            return;
-        }
-
-        try {
-            const response = await deleteRecord(recordId);
-            if (response.data.success) {
-                message.success('Record deleted successfully');
-                fetchRecords();
-            }
-        } catch (error) {
-            console.error('Delete failed:', error);
-            message.error('Failed to delete record');
+        if (isFirstMount.current) {
+            fetchRecords(true);  // 強制第一次加載
+            isFirstMount.current = false;
         }
     }, [fetchRecords]);
 
-    const handleEditSubmit = async () => {
-        try {
-            const values = await form.validateFields();
-            const response = await updateRecord(editingRecord.id, values);
-            if (response.data.success) {
-                message.success('Record updated successfully');
-                setEditModalVisible(false);
-                fetchRecords();
-            }
-        } catch (error) {
-            console.error('Update failed:', error);
-            message.error('Failed to update record');
-        }
-    };
+    // 處理分頁變化
+    const handleTableChange = useCallback((newPagination, filters, sorter) => {
+        setPagination(newPagination);
+        fetchRecords();
+    }, [fetchRecords]);
 
-    const fetchStores = useCallback(async () => {
-        try {
-            const response = await storeApi.getStores();
-            if (response?.success) {
-                const stores = response.stores.map(store => ({
+    // Fetch stores list
+    useEffect(() => {
+        const fetchStores = async () => {
+            try {
+                setStoresLoading(true);
+                setError('');
+                const response = await storeService.getStores();
+                
+                if (!response?.success) {
+                    throw new Error(response?.error || 'Failed to load stores');
+                }
+                
+                setStoresList(response.stores.map(store => ({
                     value: store.id,
                     label: store.name
-                }));
-                setStoresList(stores);
+                })));
+            } catch (error) {
+                console.error('Failed to fetch stores:', error);
+                setError(error.message || 'Failed to load stores');
+            } finally {
+                setStoresLoading(false);
             }
+        };
+
+        fetchStores();
+    }, []);
+
+    // Use selectedBranch and filteredRecords
+    useEffect(() => {
+        if (selectedBranch !== 'all') {
+            const filtered = records.filter(record => 
+                record.store_id === parseInt(selectedBranch, 10)
+            );
+            setFilteredRecords(filtered);
+        } else {
+            setFilteredRecords(records);
+        }
+    }, [selectedBranch, records]);
+
+    // 獲取 Outbound 項目
+    const fetchOutboundItems = useCallback(async () => {
+        try {
+            setOutboundLoading(true);
+            setError('');
+            const response = await inventoryService.getOutboundItems();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to fetch outbound items');
+            }
+            
+            setOutboundItems(response.items || []);
         } catch (error) {
-            console.error('Error fetching stores:', error);
-            message.error('Failed to load stores');
+            console.error('Failed to fetch outbound items:', error);
+            setError(error.message || 'Failed to fetch outbound items');
+        } finally {
+            setOutboundLoading(false);
         }
     }, []);
 
-    useEffect(() => {
-        fetchStores();
-    }, [fetchStores]);
-
-    const OutboundModal = () => {
-        const [outboundRecords, setOutboundRecords] = useState([]);
-        const [outboundLoading, setOutboundLoading] = useState(false);
-        const [selectedStore, setSelectedStore] = useState(null);
-        const [addSerialNumber, setAddSerialNumber] = useState('');
-        const [isOutboundInitialized, setIsOutboundInitialized] = useState(false);
-
-        const handleRemoveItem = async (itemId) => {
-            try {
-                setOutboundLoading(true);
-                const response = await removeFromOutbound(itemId);
-                if (response?.success) {
-                    message.success('Item removed successfully');
-                    await fetchOutboundItems();
-                } else {
-                    throw new Error(response?.error || 'Failed to remove item');
-                }
-            } catch (error) {
-                console.error('Remove item error:', error);
-                message.error(error.message || 'Failed to remove item');
-            } finally {
-                setOutboundLoading(false);
-            }
-        };
-
-        const handleAddItem = async (serialNumber) => {
-            if (!serialNumber) return;
-            try {
-                setOutboundLoading(true);
-                const searchResponse = await searchRecords(serialNumber);
-                if (searchResponse?.success && searchResponse.records?.length > 0) {
-                    const record = searchResponse.records[0];
-                    const addResponse = await addToOutbound(record.id);
-                    if (addResponse?.success) {
-                        message.success('Item added to outbound successfully');
-                        await fetchOutboundItems();
-                        setAddSerialNumber('');
-                    } else {
-                        throw new Error(addResponse?.error || 'Failed to add item to outbound');
-                    }
-                } else {
-                    message.warning('No record found with this serial number');
-                }
-            } catch (error) {
-                console.error('Add item error:', error);
-                if (error.response?.data?.error?.includes('already in outbound')) {
-                    message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
-                } else {
-                    message.error(error.message || 'Failed to add item');
-                }
-            } finally {
-                setOutboundLoading(false);
-                setAddSerialNumber('');
-            }
-        };
-
-        const handleSendToStore = async () => {
-            if (!selectedStore) {
-                message.error('Please select a store first');
-                return;
-            }
-
-            try {
-                setOutboundLoading(true);
-                const selectedStoreData = storesList.find(s => s.value === selectedStore);
-                if (!selectedStoreData) {
-                    throw new Error('Store not found');
-                }
-
-                const outboundIds = outboundRecords.map(r => r.outbound_item_id).filter(Boolean);
-                if (outboundIds.length === 0) {
-                    throw new Error('No valid outbound items found');
-                }
-
-                console.log('Sending items to store:', {
-                    storeId: selectedStore,
-                    outboundIds,
-                    storeName: selectedStoreData.label
-                });
-
-                const response = await sendToStore(selectedStore, outboundIds);
-                if (response?.success) {
-                    message.success(`Successfully sent items to ${selectedStoreData.label}`);
-                    // Add notification for target store's inventory
-                    addNotification('inventory', selectedStore);
-                    await fetchOutboundItems();
-                    fetchRecords();
-                    setOutboundModalVisible(false);
-                } else if (response?.error?.includes('already in stores:')) {
-                    Modal.confirm({
-                        title: 'Items Already in Store',
-                        content: `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`,
-                        onOk: async () => {
-                            try {
-                                const retryResponse = await sendToStore(selectedStore, outboundIds, true);
-                                if (retryResponse?.success) {
-                                    message.success('Items moved to new store successfully');
-                                    // Add notification for target store's inventory when moving items
-                                    addNotification('inventory', selectedStore);
-                                    await fetchOutboundItems();
-                                    fetchRecords();
-                                    setOutboundModalVisible(false);
-                                } else {
-                                    throw new Error(retryResponse?.error || 'Failed to move items to new store');
-                                }
-                            } catch (error) {
-                                console.error('Error moving items:', error);
-                                message.error(error.message || 'Failed to move items to new store');
-                            }
-                        }
-                    });
-                } else {
-                    throw new Error(response?.error || 'Failed to send items to store');
-                }
-            } catch (error) {
-                console.error('Error sending items to store:', error);
-                message.error(error.message || 'Failed to send items to store');
-            } finally {
-                setOutboundLoading(false);
-            }
-        };
-
-        const fetchOutboundItems = async () => {
-            if (!outboundModalVisible) return;
+    // Use addNotification
+    const handleAddToOutbound = useCallback(async (record) => {
+        try {
+            setOutboundLoading(true);
+            setError('');
             
-            try {
-                setOutboundLoading(true);
-                const response = await getOutboundItems();
-                if (response?.items) {
-                    setOutboundRecords(response.items);
-                }
-            } catch (error) {
-                message.error('Failed to fetch outbound items');
-            } finally {
-                setOutboundLoading(false);
+            // 先檢查物品位置
+            const locationResponse = await inventoryService.checkItemLocation(record.serialnumber);
+            if (locationResponse?.success && locationResponse.location === 'outbound') {
+                throw new Error('Item is already in outbound');
             }
-        };
-
-        useEffect(() => {
-            if (!isOutboundInitialized) {
-                fetchOutboundItems();
-                setIsOutboundInitialized(true);
+            
+            const response = await inventoryService.addToOutbound(record.id);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to add to outbound');
             }
-        }, [isOutboundInitialized]);
+            
+            message.success('Item added to outbound successfully');
+            addNotification('outbound', 'add');
+            await fetchOutboundItems();
+        } catch (error) {
+            console.error('Error adding to outbound:', error);
+            message.error(error.message || 'Failed to add to outbound');
+            setError(error.message || 'Failed to add to outbound');
+        } finally {
+            setOutboundLoading(false);
+        }
+    }, [addNotification, fetchOutboundItems]);
 
-        useEffect(() => {
-            return () => {
-                setIsOutboundInitialized(false);
-            };
-        }, []);
-
-        return (
-            <>
-                <Row gutter={[16, 16]}>
-                    <Col span={8}>
-                        <Search
-                            placeholder="Enter serial number to add..."
-                            allowClear
-                            enterButton="Add"
-                            value={addSerialNumber}
-                            onChange={(e) => setAddSerialNumber(e.target.value)}
-                            onSearch={handleAddItem}
-                        />
-                    </Col>
-                    <Col span={8}>
-                        <Select
-                            style={{ width: '100%' }}
-                            placeholder="Select store"
-                            value={selectedStore}
-                            onChange={setSelectedStore}
-                        >
-                            {storesList.map(store => (
-                                <Option key={store.value} value={store.value}>
-                                    {store.label}
-                                </Option>
-                            ))}
-                        </Select>
-                    </Col>
-                    <Col span={8}>
-                        <Button
-                            type="primary"
-                            onClick={handleSendToStore}
-                            disabled={!selectedStore || outboundRecords.length === 0}
-                            loading={outboundLoading}
-                        >
-                            Send to Store
-                        </Button>
-                    </Col>
-                </Row>
-                <Table
-                    columns={[
-                        {
-                            title: 'Serial Number',
-                            dataIndex: 'serialnumber',
-                            key: 'serialnumber'
-                        },
-                        {
-                            title: 'Computer Name',
-                            dataIndex: 'computername',
-                            key: 'computername'
-                        },
-                        {
-                            title: 'Model',
-                            dataIndex: 'model',
-                            key: 'model'
-                        },
-                        {
-                            title: 'Actions',
-                            key: 'actions',
-                            render: (_, record) => (
-                                <Button
-                                    type="link"
-                                    danger
-                                    onClick={() => handleRemoveItem(record.outbound_item_id)}
-                                >
-                                    Remove
-                                </Button>
-                            )
-                        }
-                    ]}
-                    dataSource={outboundRecords}
-                    rowKey="outbound_item_id"
-                    loading={outboundLoading}
-                    style={{ marginTop: 16 }}
-                />
-            </>
-        );
+    const handleEditSubmit = async () => {
+        try {
+            setLoading(true);
+            setError('');
+            const values = await form.validateFields();
+            
+            const response = await inventoryService.updateRecord(editingRecord.id, values);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to update record');
+            }
+            
+            message.success('Record updated successfully');
+            setEditModalVisible(false);
+            form.resetFields();
+            await fetchRecords();
+        } catch (error) {
+            console.error('Failed to update record:', error);
+            setError(error.message || 'Failed to update record');
+        } finally {
+            setLoading(false);
+        }
     };
+
+    const handleDelete = async (recordId) => {
+        try {
+            setLoading(true);
+            setError('');
+            const response = await inventoryService.deleteRecord(recordId);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to delete record');
+            }
+            
+            message.success('Record deleted successfully');
+            await fetchRecords();
+        } catch (error) {
+            console.error('Failed to delete record:', error);
+            setError(error.message || 'Failed to delete record');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    // 當 Outbound Modal 打開時獲取項目
+    useEffect(() => {
+        if (outboundModalVisible) {
+            fetchOutboundItems();
+        }
+    }, [outboundModalVisible, fetchOutboundItems]);
+
+    // 處理商店選擇變更
+    const handleStoreChange = useCallback((value) => {
+        setSelectedStore(value);
+    }, []);
+
+    // 處理發送到商店
+    const handleSendToStore = useCallback(async (record) => {
+        try {
+            setLoading(true);
+            setError('');
+            const response = await inventoryService.sendToStore(record.store_id);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to send to store');
+            }
+            
+            message.success('Items sent to store successfully');
+            await fetchOutboundItems();
+            await fetchRecords();
+        } catch (error) {
+            console.error('Failed to send to store:', error);
+            setError(error.message || 'Failed to send to store');
+        } finally {
+            setLoading(false);
+        }
+    }, [fetchOutboundItems, fetchRecords]);
+
+    // 處理從 Outbound 移除
+    const handleRemoveFromOutbound = useCallback(async (itemId) => {
+        try {
+            setOutboundLoading(true);
+            setError('');
+            const response = await inventoryService.removeFromOutbound(itemId);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to remove from outbound');
+            }
+            
+            message.success('Item removed from outbound successfully');
+            await fetchOutboundItems();
+        } catch (error) {
+            console.error('Failed to remove from outbound:', error);
+            setError(error.message || 'Failed to remove from outbound');
+        } finally {
+            setOutboundLoading(false);
+        }
+    }, [fetchOutboundItems]);
 
     const columns = useMemo(() => [
         {
@@ -558,33 +475,29 @@ const InventoryPage = () => {
             dataIndex: 'location',
             key: 'location',
             width: 120,
-            render: (location, record) => {
-                const displayLocation = typeof location === 'string' ? location : 'Inventory';
-                const color = record.locationColor || 'green';
-                
-                return (
-                    <Tag color={color} style={{ minWidth: '80px', textAlign: 'center' }}>
-                        {displayLocation}
-                    </Tag>
-                );
-            }
+            fixed: 'left',
+            render: (text, record) => (
+                <Tooltip title={`Location: ${text}`}>
+                    <Tag color={record.locationColor}>{text}</Tag>
+                </Tooltip>
+            )
         },
         {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
-            width: 150,
-            filterable: true,
+            width: 200,
+            fixed: 'left',
             render: (text) => (
-                <span>
+                <Space>
                     {text}
                     {duplicateSerials.has(text) && (
-                        <Tag color="red" style={{ marginLeft: 8 }}>
-                            Duplicate
-                        </Tag>
+                        <Tooltip title="Duplicate serial number">
+                            <Tag color="red">Duplicate</Tag>
+                        </Tooltip>
                     )}
-                </span>
-            ),
+                </Space>
+            )
         },
         {
             title: 'Computer Name',
@@ -737,90 +650,211 @@ const InventoryPage = () => {
             title: 'Actions',
             key: 'actions',
             fixed: 'right',
-            width: 100,
+            width: 150,
             render: (_, record) => (
-                <Space size="middle">
-                    {duplicateSerials.has(record.serialnumber) && (
-                        <Popconfirm
-                            title="Delete this record?"
-                            onConfirm={() => handleDelete(record.id)}
-                            okText="Yes"
-                            cancelText="No"
-                        >
-                            <Button danger type="link">Delete</Button>
-                        </Popconfirm>
+                <Space>
+                    <Tooltip title="Edit">
+                        <Button
+                            type="link"
+                            icon={<EditOutlined />}
+                            onClick={() => {
+                                setEditingRecord(record);
+                                form.setFieldsValue(record);
+                                setEditModalVisible(true);
+                            }}
+                        />
+                    </Tooltip>
+                    {hasOutboundPermission && (
+                        <Tooltip title="Add to Outbound">
+                            <Button
+                                type="link"
+                                icon={<SendOutlined />}
+                                onClick={() => handleAddToOutbound(record)}
+                                disabled={record.location === 'Outbound'}
+                            />
+                        </Tooltip>
+                    )}
+                    {user?.group_name === 'admin' && (
+                        <Tooltip title="Delete">
+                            <Popconfirm
+                                title="Are you sure you want to delete this record?"
+                                onConfirm={() => handleDelete(record.id)}
+                                okText="Yes"
+                                cancelText="No"
+                            >
+                                <Button
+                                    type="link"
+                                    danger
+                                    icon={<DeleteOutlined />}
+                                />
+                            </Popconfirm>
+                        </Tooltip>
                     )}
                 </Space>
             )
         }
-    ], [duplicateSerials, handleDelete]);
+    ], [hasOutboundPermission, user?.group_name, form, handleAddToOutbound, handleDelete]);
+
+    // 添加 Outbound 按鈕到工具欄
+    const toolbarButtons = (
+        <Space>
+            {hasOutboundPermission && (
+                <Button
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={() => setOutboundModalVisible(true)}
+                >
+                    Outbound Management
+                </Button>
+            )}
+            <Button
+                icon={<ReloadOutlined />}
+                onClick={() => {
+                    setPagination(prev => ({ ...prev, current: 1 }));
+                    fetchRecords();
+                }}
+            >
+                Refresh
+            </Button>
+        </Space>
+    );
+
+    const handleAddToOutboundBySerial = useCallback(async (serial) => {
+        try {
+            setLoading(true);
+            setError('');
+            const response = await inventoryService.addToOutboundBySerial(serial);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to add to outbound');
+            }
+            
+            message.success('Item added to outbound successfully');
+            addNotification('outbound', 'add');
+            await fetchOutboundItems();
+            await fetchRecords();
+        } catch (error) {
+            console.error('Error adding to outbound:', error);
+            setError(error.message || 'Failed to add to outbound');
+        } finally {
+            setLoading(false);
+        }
+    }, [addNotification, fetchRecords, fetchOutboundItems]);
+
+    const handleBulkSendToStore = useCallback(async () => {
+        try {
+            setOutboundLoading(true);
+            setError('');
+            const response = await inventoryService.sendToStoreBulk(selectedStore);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to send to store');
+            }
+            
+            message.success('Items sent to store successfully');
+            await fetchOutboundItems();
+            setSelectedStore(null);
+        } catch (error) {
+            console.error('Failed to send to store:', error);
+            setError(error.message || 'Failed to send to store');
+        } finally {
+            setOutboundLoading(false);
+        }
+    }, [selectedStore, fetchOutboundItems]);
+
+    // 處理搜索
+    const handleSearch = useCallback((value) => {
+        setSearchText(value);
+        setPagination(prev => ({ ...prev, current: 1 }));
+    }, []);
+
+    // 使用防抖來處理搜索
+    useEffect(() => {
+        if (isFirstMount.current) return;
+
+        const timer = setTimeout(() => {
+            fetchRecords();
+        }, 500);
+
+        return () => clearTimeout(timer);
+    }, [searchText, fetchRecords]);
 
     return (
-        <div>
-            <Row gutter={[16, 16]} className="stats-row">
-                <Col span={8}>
-                    <Card>
-                        <Statistic 
-                            title="Inventory Items" 
-                            value={totalRecords || 0}
-                        />
-                    </Card>
-                </Col>
-                <Col span={8}>
-                    <Card>
-                        <Statistic 
-                            title="Total Items" 
-                            value={totalItems || 0}
-                        />
-                    </Card>
-                </Col>
-            </Row>
-
-            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+        <div style={{ padding: '24px' }}>
+            <Row gutter={[16, 16]}>
                 <Col span={24}>
-                    <Card>
-                        <Row gutter={16}>
-                            <Col span={24}>
-                                <Space>
-                                    <Select
-                                        style={{ width: 200 }}
-                                        value={selectedBranch}
-                                        onChange={setSelectedBranch}
-                                    >
-                                        <Option value="all">All Stores</Option>
-                                        {storesList.map(store => (
-                                            <Option key={store.value} value={store.value}>
-                                                {store.label}
-                                            </Option>
-                                        ))}
-                                    </Select>
-                                    <Search
-                                        placeholder="Search records..."
-                                        allowClear
-                                        enterButton={<SearchOutlined />}
-                                        onSearch={handleSearch}
-                                        style={{ width: 300 }}
-                                    />
-                                    {hasOutboundPermission && (
-                                        <Button
-                                            type="primary"
-                                            onClick={() => setOutboundModalVisible(true)}
-                                        >
-                                            Outbound
-                                        </Button>
-                                    )}
-                                    <Button
-                                        icon={<ReloadOutlined />}
-                                        onClick={() => fetchRecords(pagination.current, pagination.pageSize)}
-                                        loading={loading}
-                                    >
-                                        Refresh
-                                    </Button>
-                                </Space>
-                            </Col>
-                        </Row>
-                    </Card>
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                        <Space>
+                            <Search
+                                placeholder="Search records..."
+                                allowClear
+                                onSearch={handleSearch}
+                                style={{ width: 200 }}
+                            />
+                            <Select
+                                value={selectedBranch}
+                                onChange={value => {
+                                    setSelectedBranch(value);
+                                    setPagination(prev => ({ ...prev, current: 1 }));
+                                }}
+                                style={{ width: 200 }}
+                            >
+                                <Option value="all">All Branches</Option>
+                                {storesList.map(store => (
+                                    <Option key={store.value} value={store.value}>
+                                        {store.label}
+                                    </Option>
+                                ))}
+                            </Select>
+                        </Space>
+                        {toolbarButtons}
+                    </Space>
                 </Col>
+
+                <Col span={24}>
+                    <Row gutter={16}>
+                        <Col span={8}>
+                            <Card>
+                                <Statistic
+                                    title="Total Records"
+                                    value={totalRecords}
+                                    loading={loading}
+                                />
+                            </Card>
+                        </Col>
+                        <Col span={8}>
+                            <Card>
+                                <Statistic
+                                    title="Total Items"
+                                    value={totalItems}
+                                    loading={loading}
+                                />
+                            </Card>
+                        </Col>
+                        <Col span={8}>
+                            <Card>
+                                <Statistic
+                                    title="Duplicate Items"
+                                    value={duplicateSerials.size}
+                                    loading={loading}
+                                />
+                            </Card>
+                        </Col>
+                    </Row>
+                </Col>
+
+                {error && (
+                    <Col span={24}>
+                        <Alert
+                            message="Error"
+                            description={error}
+                            type="error"
+                            showIcon
+                            closable
+                            onClose={() => setError('')}
+                        />
+                    </Col>
+                )}
 
                 <Col span={24}>
                     <Table
@@ -828,94 +862,141 @@ const InventoryPage = () => {
                         dataSource={filteredRecords}
                         rowKey="id"
                         loading={loading}
-                        scroll={{ x: 1500 }}
-                        pagination={{
-                            ...pagination,
-                            showSizeChanger: true,
-                            showQuickJumper: true,
-                            pageSizeOptions: ['20', '50', '100']
-                        }}
+                        pagination={pagination}
                         onChange={handleTableChange}
-                        summary={pageData => {
-                            return (
-                                <Table.Summary fixed>
-                                    <Table.Summary.Row>
-                                        <Table.Summary.Cell index={0} colSpan={columns.length}>
-                                            Total Records: {totalRecords}
-                                        </Table.Summary.Cell>
-                                    </Table.Summary.Row>
-                                </Table.Summary>
-                            );
-                        }}
+                        scroll={{ x: true }}
                     />
                 </Col>
             </Row>
 
             <Modal
-                title="Edit Record"
+                title={editingRecord ? 'Edit Record' : 'Add Record'}
                 open={editModalVisible}
                 onOk={handleEditSubmit}
                 onCancel={() => {
                     setEditModalVisible(false);
+                    setEditingRecord(null);
+                    setError('');
                     form.resetFields();
                 }}
+                confirmLoading={loading}
             >
+                {error && (
+                    <Alert
+                        message="Error"
+                        description={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                    />
+                )}
+                
                 <Form
                     form={form}
                     layout="vertical"
                 >
-                    <Form.Item
-                        name="serialnumber"
-                        label="Serial Number"
-                        rules={[{ required: true, message: 'Please input serial number!' }]}
-                    >
-                        <Input />
-                    </Form.Item>
-                    <Form.Item
-                        name="computername"
-                        label="Computer Name"
-                        rules={[{ required: true, message: 'Please input computer name!' }]}
-                    >
-                        <Input />
-                    </Form.Item>
-                    <Form.Item
-                        name="manufacturer"
-                        label="Manufacturer"
-                    >
-                        <Input />
-                    </Form.Item>
-                    <Form.Item
-                        name="model"
-                        label="Model"
-                    >
-                        <Input />
-                    </Form.Item>
-                    <Form.Item
-                        name="systemsku"
-                        label="System SKU"
-                    >
-                        <Input />
-                    </Form.Item>
-                    <Form.Item
-                        name="operatingsystem"
-                        label="Operating System"
-                    >
-                        <Input />
-                    </Form.Item>
+                    {/* ... 表單字段 ... */}
                 </Form>
             </Modal>
 
+            {/* Outbound Modal */}
             <Modal
                 title="Outbound Management"
                 open={outboundModalVisible}
-                onCancel={() => setOutboundModalVisible(false)}
-                width={1000}
+                onCancel={() => {
+                    setOutboundModalVisible(false);
+                    setError('');
+                }}
                 footer={null}
+                width={800}
             >
-                <OutboundModal />
+                {error && (
+                    <Alert
+                        message="Error"
+                        description={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                    />
+                )}
+
+                <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+                    <Col xs={24} sm={12} md={8} lg={6}>
+                        <Search
+                            placeholder="Enter serial number to add..."
+                            allowClear
+                            enterButton="Add"
+                            onSearch={handleAddToOutboundBySerial}
+                            style={{ width: '100%' }}
+                        />
+                    </Col>
+                    <Col xs={24} sm={12} md={8} lg={6}>
+                        <Select
+                            placeholder="Select store"
+                            style={{ width: '100%' }}
+                            value={selectedStore}
+                            onChange={handleStoreChange}
+                        >
+                            {storesList.map(store => (
+                                <Option key={store.value} value={store.value}>
+                                    {store.label}
+                                </Option>
+                            ))}
+                        </Select>
+                    </Col>
+                    <Col xs={24} sm={12} md={8} lg={6}>
+                        <Button
+                            type="primary"
+                            icon={<SendOutlined />}
+                            onClick={handleBulkSendToStore}
+                            disabled={!selectedStore || outboundItems.length === 0}
+                        >
+                            Send All to Store
+                        </Button>
+                    </Col>
+                </Row>
+
+                <Table
+                    columns={[
+                        {
+                            title: 'Serial Number',
+                            dataIndex: 'serialnumber',
+                            key: 'serialnumber',
+                        },
+                        {
+                            title: 'Model',
+                            dataIndex: 'model',
+                            key: 'model',
+                        },
+                        {
+                            title: 'Computer Name',
+                            dataIndex: 'computername',
+                            key: 'computername',
+                        },
+                        {
+                            title: 'Actions',
+                            key: 'actions',
+                            render: (_, record) => (
+                                <Space>
+                                    <Button
+                                        danger
+                                        onClick={() => handleRemoveFromOutbound(record.outbound_item_id)}
+                                        icon={<DeleteOutlined />}
+                                    >
+                                        Remove
+                                    </Button>
+                                </Space>
+                            ),
+                        },
+                    ]}
+                    dataSource={outboundItems}
+                    rowKey="outbound_item_id"
+                    loading={outboundLoading}
+                    pagination={false}
+                />
             </Modal>
         </div>
     );
 };
 
-export default InventoryPage; 
+export default InventoryPage;

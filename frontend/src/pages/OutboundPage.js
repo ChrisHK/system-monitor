@@ -1,15 +1,37 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Input, Button, message, Row, Col, Select, Tag } from 'antd';
-import { SearchOutlined, ReloadOutlined, DeleteOutlined, SendOutlined } from '@ant-design/icons';
-import { searchRecords, addToOutbound, getOutboundItems, removeFromOutbound, sendToStore, storeApi, checkItemLocation } from '../services/api';
+import { 
+    Table, 
+    Input, 
+    Button, 
+    message, 
+    Row, 
+    Col, 
+    Select, 
+    Tag, 
+    Alert, 
+    Space,
+    Tooltip,
+    Modal
+} from 'antd';
+import { 
+    SearchOutlined, 
+    ReloadOutlined, 
+    DeleteOutlined, 
+    SendOutlined,
+    ExclamationCircleOutlined
+} from '@ant-design/icons';
+import { inventoryService, storeService } from '../api';
 import { useNotification } from '../contexts/NotificationContext';
+import moment from 'moment';
 
 const { Search } = Input;
 const { Option } = Select;
+const { confirm } = Modal;
 
 const OutboundPage = () => {
     const [records, setRecords] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
     const [searchText, setSearchText] = useState('');
     const [addSerialNumber, setAddSerialNumber] = useState('');
     const [selectedStore, setSelectedStore] = useState(null);
@@ -18,12 +40,36 @@ const OutboundPage = () => {
     const [itemLocations, setItemLocations] = useState({});
     const { addNotification } = useNotification();
 
+    const fetchStores = async () => {
+        try {
+            setLoading(true);
+            setError('');
+            const response = await storeService.getStores();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load stores');
+            }
+            
+            setStores(response.stores);
+        } catch (error) {
+            console.error('Error fetching stores:', error);
+            setError(error.message || 'Failed to load stores');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchStores();
+    }, []);
+
     const columns = [
         {
             title: 'Location',
             dataIndex: 'serialnumber',
             key: 'location',
             width: 120,
+            fixed: 'left',
             render: (serialnumber) => {
                 const location = itemLocations[serialnumber];
                 if (!location) {
@@ -31,22 +77,28 @@ const OutboundPage = () => {
                 }
                 if (location.location === 'store') {
                     return (
-                        <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
-                            {location.store_name || 'Store'}
-                        </Tag>
+                        <Tooltip title={`Store: ${location.store_name || 'Unknown'}`}>
+                            <Tag color="blue" style={{ minWidth: '80px', textAlign: 'center' }}>
+                                {location.store_name || 'Store'}
+                            </Tag>
+                        </Tooltip>
                     );
                 }
                 if (location.location === 'inventory') {
                     return (
-                        <Tag color="green" style={{ minWidth: '80px', textAlign: 'center' }}>
-                            Inventory
-                        </Tag>
+                        <Tooltip title="Main Inventory">
+                            <Tag color="green" style={{ minWidth: '80px', textAlign: 'center' }}>
+                                Inventory
+                            </Tag>
+                        </Tooltip>
                     );
                 }
                 return (
-                    <Tag color="default" style={{ minWidth: '80px', textAlign: 'center' }}>
-                        {location.location || 'Unknown'}
-                    </Tag>
+                    <Tooltip title={`Location: ${location.location || 'Unknown'}`}>
+                        <Tag color="default" style={{ minWidth: '80px', textAlign: 'center' }}>
+                            {location.location || 'Unknown'}
+                        </Tag>
+                    </Tooltip>
                 );
             }
         },
@@ -54,35 +106,32 @@ const OutboundPage = () => {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
-            width: 200
+            width: 200,
+            fixed: 'left'
         },
         {
             title: 'Computer Name',
             dataIndex: 'computername',
             key: 'computername',
-            width: 150,
-            filterable: true
+            width: 150
         },
         {
             title: 'Manufacturer',
             dataIndex: 'manufacturer',
             key: 'manufacturer',
-            width: 100,
-            filterable: true
+            width: 100
         },
         {
             title: 'Model',
             dataIndex: 'model',
             key: 'model',
-            width: 120,
-            filterable: true
+            width: 120
         },
         {
             title: 'System SKU',
             dataIndex: 'systemsku',
             key: 'systemsku',
             width: 150,
-            filterable: true,
             render: (text) => {
                 if (!text) return 'N/A';
                 const parts = text.split('_');
@@ -190,7 +239,11 @@ const OutboundPage = () => {
                 let color = 'green';
                 if (health < 50) color = 'red';
                 else if (health < 80) color = 'orange';
-                return health ? <Tag color={color}>{health}%</Tag> : 'N/A';
+                return health ? (
+                    <Tooltip title={`Battery Health: ${health}%`}>
+                        <Tag color={color}>{health}%</Tag>
+                    </Tooltip>
+                ) : 'N/A';
             }
         },
         {
@@ -200,7 +253,7 @@ const OutboundPage = () => {
             width: 150,
             render: (text) => {
                 if (!text) return 'N/A';
-                return new Date(text).toLocaleString();
+                return moment(text).format('YYYY-MM-DD HH:mm:ss');
             }
         },
         {
@@ -209,14 +262,17 @@ const OutboundPage = () => {
             fixed: 'right',
             width: 100,
             render: (_, record) => (
-                <Button
-                    type="link"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={() => handleRemoveItem(record.outbound_item_id)}
-                >
-                    Delete
-                </Button>
+                <Space>
+                    <Tooltip title="Remove from Outbound">
+                        <Button
+                            type="text"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={() => handleRemoveItem(record.outbound_item_id)}
+                            disabled={loading}
+                        />
+                    </Tooltip>
+                </Space>
             )
         }
     ];
@@ -232,126 +288,72 @@ const OutboundPage = () => {
         
         try {
             setLoading(true);
-            // Search for record in inventory
-            const response = await searchRecords(searchValue);
+            setError('');
             
-            if (response?.data?.success && response.data.records?.length > 0) {
-                const records = response.data.records;
-                
-                // Check locations for found records
-                const locationPromises = records.map(record => 
-                    checkItemLocation(record.serialnumber)
-                        .catch(error => {
-                            console.warn(`Failed to check location for ${record.serialnumber}:`, error);
-                            return { data: { success: true, location: 'unknown' } };
-                        })
-                );
-                
-                const locations = await Promise.all(locationPromises);
-                const locationMap = {};
-                locations.forEach((loc, index) => {
-                    if (loc?.data?.success) {
-                        locationMap[records[index].serialnumber] = loc.data;
-                    }
-                });
-                
-                setItemLocations(prev => ({
-                    ...prev,
-                    ...locationMap
-                }));
-                
-                setFilteredRecords(records);
-            } else {
-                message.warning('No records found');
-                setFilteredRecords([]);
+            // Search for record in inventory
+            const response = await inventoryService.searchRecords(searchValue);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to search records');
             }
+            
+            const records = response.records;
+            
+            // Check locations for found records
+            const locationPromises = records.map(record => 
+                inventoryService.checkItemLocation(record.serialnumber)
+                    .catch(error => {
+                        console.warn(`Failed to check location for ${record.serialnumber}:`, error);
+                        return { success: true, location: 'unknown' };
+                    })
+            );
+            
+            const locations = await Promise.all(locationPromises);
+            
+            // Update locations state
+            const newLocations = {};
+            locations.forEach((locationResponse, index) => {
+                if (locationResponse?.success) {
+                    newLocations[records[index].serialnumber] = locationResponse.data;
+                }
+            });
+            
+            setItemLocations(prev => ({ ...prev, ...newLocations }));
+            setFilteredRecords(records);
         } catch (error) {
-            console.error('Search error:', error);
-            message.error(`Search failed: ${error.message}`);
+            console.error('Error searching records:', error);
+            setError(error.message || 'Failed to search records');
             setFilteredRecords([]);
         } finally {
             setLoading(false);
         }
     }, []);
 
-    const fetchOutboundItems = useCallback(async () => {
-        try {
-            setLoading(true);
-            const response = await getOutboundItems();
-            
-            if (response?.items) {
-                setRecords(response.items);
-
-                // Fetch locations for all items
-                const locationPromises = response.items.map(item => 
-                    checkItemLocation(item.serialnumber)
-                        .then(location => [item.serialnumber, location])
-                        .catch(() => [item.serialnumber, { location: 'unknown' }])
-                );
-
-                const locations = await Promise.all(locationPromises);
-                const locationMap = Object.fromEntries(locations);
-                setItemLocations(locationMap);
-            }
-        } catch (error) {
-            message.error('Failed to fetch outbound items');
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    const fetchStores = useCallback(async () => {
-        try {
-            console.log('Fetching stores for outbound page...');
-            const response = await storeApi.getStores();
-            console.log('Outbound stores response:', response);
-
-            if (response?.success) {
-                const validStores = response.stores
-                    .filter(store => store && (store.id || store.value))
-                    .map(store => ({
-                        value: store.id?.toString() || store.value?.toString(),
-                        label: store.name || 'Unknown Store'
-                    }));
-                console.log('Valid stores:', validStores);
-                setStores(validStores);
-            } else {
-                throw new Error(response?.error || 'Failed to fetch stores');
-            }
-        } catch (error) {
-            console.error('Error fetching stores:', error);
-            message.error('Failed to load stores');
-        }
-    }, []);
-
-    // Effect for initial data fetch
-    useEffect(() => {
-        fetchOutboundItems();
-        fetchStores();
-    }, [fetchOutboundItems, fetchStores]);
-
-    const handleStoreChange = useCallback((value) => {
-        console.log('Store selected:', value);
-        const storeId = value?.toString();
-        console.log('Store ID:', storeId);
-        setSelectedStore(storeId);
-    }, []);
-
-    const handleRefresh = useCallback(() => {
-        fetchOutboundItems();
-    }, [fetchOutboundItems]);
-
     const handleRemoveItem = async (itemId) => {
         try {
-            setLoading(true);
-            const response = await removeFromOutbound(itemId);
-
-            if (response.success) {
-                message.success('Item removed successfully');
-                await fetchOutboundItems();
-            }
+            confirm({
+                title: 'Remove Item',
+                icon: <ExclamationCircleOutlined />,
+                content: 'Are you sure you want to remove this item from outbound?',
+                okText: 'Yes',
+                okType: 'danger',
+                cancelText: 'No',
+                onOk: async () => {
+                    setLoading(true);
+                    setError('');
+                    const response = await inventoryService.removeFromOutbound(itemId);
+                    
+                    if (!response?.success) {
+                        throw new Error(response?.error || 'Failed to remove item');
+                    }
+                    
+                    message.success('Item removed successfully');
+                    await fetchOutboundItems();
+                }
+            });
         } catch (error) {
-            message.error(`Failed to remove item: ${error.message}`);
+            console.error('Error removing item:', error);
+            setError(error.message || 'Failed to remove item');
         } finally {
             setLoading(false);
         }
@@ -359,266 +361,168 @@ const OutboundPage = () => {
 
     const handleSendToStore = async () => {
         if (!selectedStore) {
-            message.error('Please select a store first');
+            message.error('Please select a store');
             return;
         }
 
         try {
             setLoading(true);
+            setError('');
+            const response = await inventoryService.sendToStore(selectedStore);
             
-            // Get the store details for location update
-            const selectedStoreData = stores.find(s => s.value === selectedStore);
-            if (!selectedStoreData) {
-                throw new Error('Store not found');
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to send items to store');
             }
-
-            // Log the full records for debugging
-            console.log('Current records:', records);
-
-            // Get the outbound item IDs - using outbound_item_id
-            const outboundIds = records.map(r => r.outbound_item_id).filter(Boolean);
-            if (outboundIds.length === 0) {
-                throw new Error('No valid outbound items found');
-            }
-
-            console.log('Sending items to store:', { 
-                selectedStore,
-                outboundIds,
-                records: records.map(r => ({ 
-                    id: r.id,
-                    outbound_item_id: r.outbound_item_id,
-                    serialnumber: r.serialnumber 
-                }))
-            });
-
-            // Send items to store using outbound IDs
-            const response = await sendToStore(selectedStore, outboundIds);
-            console.log('Send to store response:', response);
             
-            if (response?.success) {
-                // Update locations for sent items
-                const newLocations = {};
-                records.forEach(record => {
-                    newLocations[record.serialnumber] = {
-                        location: 'store',
-                        store_name: selectedStoreData.label,
-                        store_id: selectedStore
-                    };
-                });
-
-                // Update itemLocations state
-                setItemLocations(prev => ({
-                    ...prev,
-                    ...newLocations
-                }));
-
-                message.success('Items sent to store successfully');
-                await fetchOutboundItems();
-            } else {
-                // Check if items are already in stores
-                if (response?.error?.includes('already in stores:')) {
-                    const confirmMove = window.confirm(
-                        `${response.error}\n\nDo you want to move these items to ${selectedStoreData.label}?`
-                    );
-                    
-                    if (confirmMove) {
-                        // Retry sending with force flag
-                        const retryResponse = await sendToStore(selectedStore, outboundIds, true);
-                        if (retryResponse?.success) {
-                            // Update locations for sent items
-                            const newLocations = {};
-                            records.forEach(record => {
-                                newLocations[record.serialnumber] = {
-                                    location: 'store',
-                                    store_name: selectedStoreData.label,
-                                    store_id: selectedStore
-                                };
-                            });
-
-                            // Update itemLocations state
-                            setItemLocations(prev => ({
-                                ...prev,
-                                ...newLocations
-                            }));
-
-                            message.success('Items moved to new store successfully');
-                            await fetchOutboundItems();
-                        } else {
-                            throw new Error(retryResponse?.error || 'Failed to move items to new store');
-                        }
-                    }
-                } else {
-                    throw new Error(response?.error || 'Failed to send items to store');
-                }
-            }
+            message.success('Items sent to store successfully');
+            addNotification('store', selectedStore);
+            await fetchOutboundItems();
+            setSelectedStore(null);
         } catch (error) {
-            console.error('Error sending items to store:', error);
-            message.error(error.message || 'Failed to send items to store');
+            console.error('Error sending to store:', error);
+            setError(error.message || 'Failed to send items to store');
         } finally {
             setLoading(false);
         }
     };
 
-    const handleAddItem = useCallback(async (serialNumber) => {
-        if (!serialNumber) return;
+    const fetchOutboundItems = async () => {
+        try {
+            setLoading(true);
+            setError('');
+            const response = await inventoryService.getOutboundItems();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load outbound items');
+            }
+            
+            setRecords(response.items);
+        } catch (error) {
+            console.error('Error fetching outbound items:', error);
+            setError(error.message || 'Failed to load outbound items');
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchOutboundItems();
+    }, []);
+
+    const handleAddItem = async () => {
+        if (!addSerialNumber.trim()) {
+            message.error('Please enter a serial number');
+            return;
+        }
 
         try {
             setLoading(true);
-            // First check if the item is already in the outbound list
-            const isDuplicate = records.some(record => record.serialnumber === serialNumber);
-            if (isDuplicate) {
-                message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
-                setAddSerialNumber('');
-                return;
-            }
-
-            // Search for record in inventory
-            const searchResponse = await searchRecords(serialNumber);
-            console.log('Search response:', searchResponse);
+            setError('');
+            const response = await inventoryService.addToOutbound(addSerialNumber.trim());
             
-            // Check if we have a valid record
-            if (searchResponse?.success && searchResponse.records?.length > 0) {
-                const record = searchResponse.records[0];
-                console.log('Found record:', record);
-                
-                // Add to outbound
-                const addResponse = await addToOutbound(record.id);
-                console.log('Add to outbound response:', addResponse);
-
-                if (addResponse?.success) {
-                    message.success('Item added to outbound successfully');
-                    await fetchOutboundItems();
-                    setAddSerialNumber('');
-                } else {
-                    throw new Error(addResponse?.error || 'Failed to add item to outbound');
-                }
-            } else {
-                console.log('No record found. Search response:', searchResponse);
-                message.warning('No record found with this serial number');
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to add item to outbound');
             }
+            
+            message.success('Item added to outbound successfully');
+            setAddSerialNumber('');
+            await fetchOutboundItems();
         } catch (error) {
-            console.error('Add item error:', error);
-            if (error.response?.data?.error?.includes('already in outbound')) {
-                message.warning(`Serial Number ${serialNumber} is already in the outbound list`);
-            } else {
-                message.error(error.message || 'Failed to add item');
-            }
+            console.error('Error adding item:', error);
+            setError(error.message || 'Failed to add item to outbound');
         } finally {
             setLoading(false);
-            setAddSerialNumber('');
-        }
-    }, [records, fetchOutboundItems]);
-
-    // Update the columns definition to include row highlighting
-    const getRowClassName = (record) => {
-        return '';
-    };
-
-    const handleSendToInventory = async (record) => {
-        try {
-            const response = await outboundApi.sendToInventory(storeId, record.id);
-            if (response.success) {
-                // Add notification for the target store
-                addNotification('inventory', record.target_store_id);
-                // Add notification for the current store
-                addNotification('store', storeId);
-                
-                message.success('Item sent to inventory successfully');
-                fetchOutboundItems();
-            }
-        } catch (error) {
-            message.error(error.message || 'Failed to send item to inventory');
         }
     };
 
     return (
-        <div>
-            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Search
-                        placeholder="Search outbound items..."
-                        allowClear
-                        enterButton={<SearchOutlined />}
-                        onSearch={handleSearch}
-                        value={searchText}
-                        onChange={(e) => handleSearch(e.target.value)}
-                        style={{ width: '100%' }}
+        <div style={{ padding: '24px' }}>
+            <Row gutter={[16, 16]}>
+                <Col span={24}>
+                    <Space size="middle">
+                        <Search
+                            placeholder="Search inventory by serial number"
+                            allowClear
+                            enterButton={<SearchOutlined />}
+                            onSearch={handleSearch}
+                            style={{ width: 300 }}
+                            disabled={loading}
+                        />
+                        <Input
+                            placeholder="Add item by serial number"
+                            value={addSerialNumber}
+                            onChange={(e) => setAddSerialNumber(e.target.value)}
+                            style={{ width: 200 }}
+                            disabled={loading}
+                        />
+                        <Button
+                            type="primary"
+                            onClick={handleAddItem}
+                            disabled={!addSerialNumber.trim() || loading}
+                            icon={<SendOutlined />}
+                        >
+                            Add to Outbound
+                        </Button>
+                        <Select
+                            placeholder="Select store"
+                            style={{ width: 200 }}
+                            value={selectedStore}
+                            onChange={setSelectedStore}
+                            disabled={loading || !records.length}
+                        >
+                            {stores.map(store => (
+                                <Option key={store.id} value={store.id}>
+                                    {store.name}
+                                </Option>
+                            ))}
+                        </Select>
+                        <Button
+                            type="primary"
+                            onClick={handleSendToStore}
+                            disabled={!selectedStore || !records.length || loading}
+                            icon={<SendOutlined />}
+                        >
+                            Send to Store
+                        </Button>
+                        <Button
+                            icon={<ReloadOutlined />}
+                            onClick={fetchOutboundItems}
+                            disabled={loading}
+                        >
+                            Refresh
+                        </Button>
+                    </Space>
+                </Col>
+
+                {error && (
+                    <Col span={24}>
+                        <Alert
+                            message="Error"
+                            description={error}
+                            type="error"
+                            showIcon
+                            closable
+                            onClose={() => setError('')}
+                        />
+                    </Col>
+                )}
+
+                <Col span={24}>
+                    <Table
+                        columns={columns}
+                        dataSource={searchText ? filteredRecords : records}
+                        rowKey="serialnumber"
+                        loading={loading}
+                        scroll={{ x: 2000 }}
+                        pagination={{
+                            showSizeChanger: true,
+                            showQuickJumper: true,
+                            pageSizeOptions: ['10', '20', '50', '100'],
+                            showTotal: (total) => `Total ${total} records`
+                        }}
                     />
                 </Col>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Search
-                        placeholder="Enter serial number to add..."
-                        allowClear
-                        enterButton="Add"
-                        onSearch={handleAddItem}
-                        value={addSerialNumber}
-                        onChange={(e) => setAddSerialNumber(e.target.value)}
-                        style={{ width: '100%' }}
-                    />
-                </Col>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Button
-                        icon={<ReloadOutlined />}
-                        onClick={handleRefresh}
-                        loading={loading}
-                    >
-                        Refresh
-                    </Button>
-                </Col>
             </Row>
-
-            <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <span style={{ marginRight: 8 }}>
-                        Total Items: {records.length}
-                    </span>
-                </Col>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Select
-                        placeholder="Select store"
-                        style={{ width: '100%' }}
-                        value={selectedStore}
-                        onChange={handleStoreChange}
-                    >
-                        {stores.map(store => (
-                            <Option key={store.value} value={store.value}>
-                                {store.label}
-                            </Option>
-                        ))}
-                    </Select>
-                </Col>
-                <Col xs={24} sm={12} md={8} lg={6}>
-                    <Button
-                        type="primary"
-                        icon={<SendOutlined />}
-                        onClick={handleSendToStore}
-                        loading={loading}
-                        disabled={!selectedStore || records.length === 0}
-                    >
-                        Send to Store
-                    </Button>
-                </Col>
-            </Row>
-
-            <Table
-                columns={columns}
-                dataSource={searchText ? filteredRecords : records}
-                rowKey="id"
-                loading={loading}
-                scroll={{ x: 1500 }}
-                rowClassName={getRowClassName}
-                onRow={(record) => ({
-                    style: {}
-                })}
-                pagination={{
-                    total: (searchText ? filteredRecords : records).length,
-                    pageSize: 20,
-                    showSizeChanger: true,
-                    showQuickJumper: true,
-                    pageSizeOptions: ['20', '50', '100'],
-                    defaultPageSize: 20
-                }}
-            />
         </div>
     );
 };

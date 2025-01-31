@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Table, Button, message, Input, Collapse, Space, Modal, Tag, Select, DatePicker } from 'antd';
-import { orderApi, rmaApi } from '../services/api';
+import { orderService } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { ExclamationCircleOutlined, PrinterOutlined } from '@ant-design/icons';
@@ -34,7 +34,7 @@ const StoreOrdersPage = () => {
     const fetchOrders = useCallback(async () => {
         try {
             setIsLoading(true);
-            const response = await orderApi.getOrders(storeId);
+            const response = await orderService.getStoreOrders(storeId);
             console.log('Orders API Response:', {
                 success: response.success,
                 orderCount: response.orders?.length,
@@ -96,7 +96,7 @@ const StoreOrdersPage = () => {
         }
         
         try {
-            await orderApi.saveOrder(storeId, pendingOrder.id);
+            await orderService.saveOrder(storeId, pendingOrder.id);
             message.success('Order saved successfully');
             fetchOrders();
         } catch (error) {
@@ -112,7 +112,7 @@ const StoreOrdersPage = () => {
         }
 
         try {
-            await orderApi.deleteOrderItem(storeId, itemId);
+            await orderService.deleteOrderItem(storeId, itemId);
             message.success('Item deleted successfully');
             fetchOrders();
         } catch (error) {
@@ -123,7 +123,7 @@ const StoreOrdersPage = () => {
 
     const handleSaveNotes = async (itemId, notes) => {
         try {
-            await orderApi.updateOrderItemNotes(storeId, itemId, notes);
+            await orderService.updateOrderItemNotes(storeId, itemId, notes);
             message.success('Notes saved successfully');
             setEditingNotes(prev => ({
                 ...prev,
@@ -143,7 +143,7 @@ const StoreOrdersPage = () => {
         }
 
         try {
-            const response = await orderApi.updateOrderItemPrice(storeId, itemId, parseFloat(price));
+            const response = await orderService.updateOrderItemPrice(storeId, itemId, parseFloat(price));
             if (response?.success) {
                 message.success('Price saved successfully');
                 setEditingPrice(prev => ({
@@ -162,7 +162,7 @@ const StoreOrdersPage = () => {
 
     const handleSavePayMethod = async (itemId, payMethod) => {
         try {
-            const response = await orderApi.updateOrderItemPayMethod(storeId, itemId, payMethod);
+            const response = await orderService.updateOrderItemPayMethod(storeId, itemId, payMethod);
             if (response?.success) {
                 message.success('Payment method saved successfully');
                 fetchOrders();
@@ -226,7 +226,7 @@ const StoreOrdersPage = () => {
             };
             console.log('RMA data to be sent:', rmaData);
             
-            const response = await rmaApi.addToRma(storeId, rmaData);
+            const response = await orderService.addToRma(storeId, rmaData);
             console.log('RMA API response:', response);
 
             if (response && response.success) {
@@ -254,7 +254,7 @@ const StoreOrdersPage = () => {
 
     const handleDeleteOrder = async (storeId, orderId) => {
         try {
-            const response = await orderApi.deleteOrder(storeId, orderId);
+            const response = await orderService.deleteOrder(storeId, orderId);
             if (response.success) {
                 message.success('Order deleted successfully');
                 fetchOrders();
@@ -340,23 +340,7 @@ const StoreOrdersPage = () => {
             title: 'Pay Method',
             dataIndex: 'pay_method',
             key: 'pay_method',
-            render: (text, record) => {
-                if (record.is_deleted) {
-                    return <span style={{ color: '#999' }}>{text || 'Credit Card'}</span>;
-                }
-                return (
-                    <Select
-                        defaultValue={text || 'credit_card'}
-                        style={{ width: 120 }}
-                        onChange={(value) => handleSavePayMethod(record.id, value)}
-                    >
-                        <Option value="credit_card">Credit Card</Option>
-                        <Option value="cash">Cash</Option>
-                        <Option value="bank_transfer">Bank Transfer</Option>
-                        <Option value="other">Other</Option>
-                    </Select>
-                );
-            }
+            render: (text) => text || 'Credit Card'
         },
         {
             title: 'Price',
@@ -577,7 +561,7 @@ const StoreOrdersPage = () => {
                                     cancelText: 'No',
                                     onOk: async () => {
                                         try {
-                                            await orderApi.saveOrder(storeId, pendingOrder.id);
+                                            await orderService.saveOrder(storeId, pendingOrder.id);
                                             message.success('Order saved successfully');
                                             fetchOrders();
                                         } catch (error) {

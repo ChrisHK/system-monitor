@@ -11,17 +11,23 @@ import {
     Tag, 
     Tooltip,
     Typography,
-    Checkbox
+    Checkbox,
+    Alert,
+    Card,
+    Divider
 } from 'antd';
 import { 
     EditOutlined, 
     PlusOutlined,
     QuestionCircleOutlined,
-    DeleteOutlined 
+    DeleteOutlined,
+    LockOutlined
 } from '@ant-design/icons';
-import { groupApi, storeApi } from '../../services/api';
+import { userService, storeService } from '../../api';
 
 const { Option } = Select;
+const { TextArea } = Input;
+const { Title } = Typography;
 
 const DEFAULT_GROUPS = [
     {
@@ -36,82 +42,65 @@ const DEFAULT_GROUPS = [
             inbound: true
         },
         is_system: true
-    },
-    {
-        id: 2,
-        name: 'user',
-        description: 'Regular user group with limited access',
-        permitted_stores: [], // Specific stores only
-        main_permissions: {
-            inventory: false,
-            inventory_ram: false,
-            outbound: false,
-            inbound: false
-        },
-        is_system: true
     }
 ];
 
 const GroupManagement = () => {
-    const [groups, setGroups] = useState(DEFAULT_GROUPS);
+    const [groups, setGroups] = useState([]);
     const [stores, setStores] = useState([]);
     const [editingGroup, setEditingGroup] = useState(null);
     const [isModalVisible, setIsModalVisible] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
     const [form] = Form.useForm();
-    const [isSubmitting, setIsSubmitting] = useState(false);
-    const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
-    const [groupToDelete, setGroupToDelete] = useState(null);
+    const [selectedStores, setSelectedStores] = useState([]);
 
     const fetchGroups = async () => {
         try {
-            console.log('Fetching groups...');
-            const response = await groupApi.getGroups();
-            console.log('Groups response:', response);
-
-            if (response?.success) {
-                // Get the groups from the backend
-                const backendGroups = response.groups || [];
-                console.log('Backend groups:', backendGroups);
-                
-                // Only keep admin from DEFAULT_GROUPS
-                const adminGroup = DEFAULT_GROUPS.find(g => g.name === 'admin');
-                const updatedDefaultGroups = [adminGroup];
-                
-                // Update admin group with data from backend if it exists
-                const backendAdmin = backendGroups.find(bg => bg.name === 'admin');
-                if (backendAdmin) {
-                    updatedDefaultGroups[0] = { ...backendAdmin, is_system: true };
-                }
-
-                // Get all other groups from backend
-                const otherGroups = backendGroups.filter(group => group.name !== 'admin');
-                
-                // Set all groups
-                const allGroups = [...updatedDefaultGroups, ...otherGroups];
-                console.log('Setting all groups:', allGroups);
-                setGroups(allGroups);
-                return true;
+            setLoading(true);
+            setError(null);
+            const response = await userService.getGroups();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load groups');
             }
-            console.warn('No success in response:', response);
-            return false;
+            
+            // Merge with default admin group if not present
+            const backendGroups = response.groups || [];
+            const adminGroup = backendGroups.find(g => g.name === 'admin');
+            const updatedGroups = adminGroup 
+                ? backendGroups 
+                : [...DEFAULT_GROUPS, ...backendGroups];
+            
+            setGroups(updatedGroups);
         } catch (error) {
             console.error('Error fetching groups:', error);
+            setError(error.message);
             message.error('Failed to load groups');
-            // Fallback to admin group only
-            setGroups([DEFAULT_GROUPS.find(g => g.name === 'admin')]);
-            return false;
+            // Fallback to default admin group
+            setGroups(DEFAULT_GROUPS);
+        } finally {
+            setLoading(false);
         }
     };
 
     const fetchStores = async () => {
         try {
-            const response = await storeApi.getStores();
-            if (response?.success) {
-                setStores(response.stores);
+            setLoading(true);
+            setError(null);
+            const response = await storeService.getStores();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load stores');
             }
+            
+            setStores(response.stores);
         } catch (error) {
             console.error('Error fetching stores:', error);
+            setError(error.message);
             message.error('Failed to load stores');
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -120,9 +109,55 @@ const GroupManagement = () => {
         fetchStores();
     }, []);
 
+    // 監聽 permitted_stores 的變化
+    const handleStoreSelect = (values) => {
+        setSelectedStores(values);
+        const currentPermissions = form.getFieldValue('store_permissions') || {};
+
+        // 找出新增的商店
+        const newStores = values.filter(storeId => !selectedStores.includes(storeId));
+
+        // 只為新增的商店設置默認權限
+        const updatedPermissions = {
+            ...currentPermissions,
+            ...newStores.reduce((acc, storeId) => {
+                const storePrefix = `store_${storeId}_`;
+                acc[`${storePrefix}inventory`] = false;
+                acc[`${storePrefix}orders`] = false;
+                acc[`${storePrefix}rma`] = false;
+                acc[`${storePrefix}outbound`] = false;
+                return acc;
+            }, {})
+        };
+
+        // 移除不再選中的商店的權限
+        const removedStores = selectedStores.filter(storeId => !values.includes(storeId));
+        removedStores.forEach(storeId => {
+            const storePrefix = `store_${storeId}_`;
+            delete updatedPermissions[`${storePrefix}inventory`];
+            delete updatedPermissions[`${storePrefix}orders`];
+            delete updatedPermissions[`${storePrefix}rma`];
+            delete updatedPermissions[`${storePrefix}outbound`];
+        });
+
+        form.setFieldsValue({
+            permitted_stores: values,
+            store_permissions: updatedPermissions
+        });
+    };
+
     const handleAdd = () => {
         setEditingGroup(null);
+        setSelectedStores([]);
         form.resetFields();
+        form.setFieldsValue({
+            main_permissions: {
+                inventory: false,
+                inventory_ram: false,
+                outbound: false,
+                inbound: false
+            }
+        });
         setIsModalVisible(true);
     };
 
@@ -132,30 +167,43 @@ const GroupManagement = () => {
             return;
         }
         setEditingGroup(group);
-        
-        // Set basic fields
+        setSelectedStores(group.permitted_stores || []);
+
+        // 轉換現有的商店權限格式
+        const storePermissions = {};
+        if (group.store_permissions) {
+            Object.entries(group.store_permissions).forEach(([storeId, features]) => {
+                const storePrefix = `store_${storeId}_`;
+                
+                // 檢查 features 是否為字符串，如果是則解析它
+                const parsedFeatures = typeof features === 'string' ? JSON.parse(features) : features;
+
+                // 檢查每個權限值並設置默認值
+                const inventory = parsedFeatures?.inventory ?? false;
+                const orders = parsedFeatures?.orders ?? false;
+                const rma = parsedFeatures?.rma ?? false;
+                const outbound = parsedFeatures?.outbound ?? false;
+
+                storePermissions[`${storePrefix}inventory`] = inventory;
+                storePermissions[`${storePrefix}orders`] = orders;
+                storePermissions[`${storePrefix}rma`] = rma;
+                storePermissions[`${storePrefix}outbound`] = outbound;
+            });
+        }
+
+        // 設置表單值
         const formValues = {
             name: group.name,
             description: group.description,
             permitted_stores: group.permitted_stores || [],
-            store_permissions: {},
-            main_permissions: group.main_permissions || {
-                inventory: false,
-                inventory_ram: false,
-                outbound: false,
-                inbound: false
+            store_permissions: storePermissions,
+            main_permissions: {
+                inventory: group.main_permissions?.inventory ?? false,
+                inventory_ram: group.main_permissions?.inventory_ram ?? false,
+                outbound: group.main_permissions?.outbound ?? false,
+                inbound: group.main_permissions?.inbound ?? false
             }
         };
-
-        // Set store permissions
-        if (group.permitted_stores && group.store_permissions) {
-            group.permitted_stores.forEach(storeId => {
-                const permissions = group.store_permissions[storeId] || {};
-                formValues.store_permissions[`store_${storeId}_inventory`] = permissions.inventory || false;
-                formValues.store_permissions[`store_${storeId}_orders`] = permissions.orders || false;
-                formValues.store_permissions[`store_${storeId}_rma`] = permissions.rma || false;
-            });
-        }
 
         form.setFieldsValue(formValues);
         setIsModalVisible(true);
@@ -163,95 +211,240 @@ const GroupManagement = () => {
 
     const handleSubmit = async (values) => {
         try {
-            const { name, description, permitted_stores, store_permissions = {}, main_permissions = {} } = values;
-            
-            // 重構 store_permissions 以匹配後端期望的格式
-            const transformedStorePermissions = {};
-            permitted_stores.forEach(storeId => {
-                transformedStorePermissions[storeId] = {
-                    inventory: store_permissions[`store_${storeId}_inventory`] || false,
-                    orders: store_permissions[`store_${storeId}_orders`] || false,
-                    rma: store_permissions[`store_${storeId}_rma`] || false,
-                    outbound: store_permissions[`store_${storeId}_outbound`] || false
-                };
-            });
+            setLoading(true);
+            setError(null);
 
+            // 1. Update basic group info
             const groupData = {
-                name,
-                description,
-                store_permissions: transformedStorePermissions
+                name: values.name,
+                description: values.description
             };
 
-            let response;
-            if (editingGroup) {
-                response = await groupApi.updateGroup(editingGroup.id, groupData);
-                
-                // Update main permissions separately
-                if (response?.success) {
-                    const permissionsResponse = await groupApi.updateGroupPermissions(editingGroup.id, main_permissions);
-                    if (!permissionsResponse?.success) {
-                        throw new Error('Failed to update main permissions');
-                    }
-                }
-            } else {
-                response = await groupApi.createGroup(groupData);
-                
-                // Set main permissions for new group
-                if (response?.success) {
-                    const newGroupId = response.group.id;
-                    const permissionsResponse = await groupApi.updateGroupPermissions(newGroupId, main_permissions);
-                    if (!permissionsResponse?.success) {
-                        throw new Error('Failed to set main permissions');
-                    }
-                }
+            const updateResponse = await userService.updateGroup(editingGroup.id, groupData);
+            if (!updateResponse?.success) {
+                throw new Error(updateResponse?.error || 'Failed to update group');
             }
 
-            if (response?.success) {
-                message.success(`Group ${editingGroup ? 'updated' : 'created'} successfully`);
-                setIsModalVisible(false);
-                form.resetFields();
-                fetchGroups();
+            // 2. Process and update permissions
+            const storePermissions = values.store_permissions || {};
+
+            // 確保只處理被選中的商店
+            const validStorePermissions = [];
+            (values.permitted_stores || []).forEach(storeId => {
+                const storePrefix = `store_${storeId}_`;
+                const currentPermissions = {
+                    inventory: storePermissions[`${storePrefix}inventory`] === true,
+                    orders: storePermissions[`${storePrefix}orders`] === true,
+                    rma: storePermissions[`${storePrefix}rma`] === true,
+                    outbound: storePermissions[`${storePrefix}outbound`] === true
+                };
+
+                validStorePermissions.push({
+                    store_id: String(storeId),
+                    inventory: currentPermissions.inventory ? '1' : '0',
+                    orders: currentPermissions.orders ? '1' : '0',
+                    rma: currentPermissions.rma ? '1' : '0',
+                    outbound: currentPermissions.outbound ? '1' : '0'
+                });
+            });
+
+            const permissionsData = {
+                main_permissions: values.main_permissions,
+                permitted_stores: values.permitted_stores || [],
+                store_permissions: validStorePermissions
+            };
+            
+            const permissionsResponse = await userService.updateGroupPermissions(editingGroup.id, permissionsData);
+            
+            if (!permissionsResponse?.success) {
+                throw new Error(permissionsResponse?.error || 'Failed to update permissions');
             }
+
+            // 3. Convert the response data to match our local state format
+            const convertedStorePermissions = {};
+            Object.entries(permissionsResponse.store_permissions || {}).forEach(([storeId, permissions]) => {
+                const storePrefix = `store_${storeId}_`;
+                convertedStorePermissions[`${storePrefix}inventory`] = permissions.inventory === true;
+                convertedStorePermissions[`${storePrefix}orders`] = permissions.orders === true;
+                convertedStorePermissions[`${storePrefix}rma`] = permissions.rma === true;
+                convertedStorePermissions[`${storePrefix}outbound`] = permissions.outbound === true;
+            });
+
+            // 4. Update local state
+            setGroups(prevGroups => {
+                return prevGroups.map(group => {
+                    if (group.id === editingGroup.id) {
+                        return {
+                            ...group,
+                            ...groupData,
+                            main_permissions: permissionsResponse.main_permissions,
+                            permitted_stores: permissionsResponse.permitted_stores,
+                            store_permissions: permissionsResponse.store_permissions
+                        };
+                    }
+                    return group;
+                });
+            });
+
+            // 5. Update form values to match the response
+            form.setFieldsValue({
+                ...groupData,
+                main_permissions: permissionsResponse.main_permissions,
+                permitted_stores: permissionsResponse.permitted_stores,
+                store_permissions: convertedStorePermissions
+            });
+
+            // 6. Update selected stores
+            setSelectedStores(permissionsResponse.permitted_stores);
+
+            message.success('Group updated successfully');
+            setIsModalVisible(false);
+            await fetchGroups(); // Refresh the groups list
         } catch (error) {
-            console.error('Error saving group:', error);
-            message.error(error.response?.data?.error || `Failed to ${editingGroup ? 'update' : 'create'} group`);
+            console.error('Error updating group:', error);
+            setError(error.message);
+            message.error('Failed to update group');
+        } finally {
+            setLoading(false);
         }
     };
 
     const handleDelete = async (group) => {
-        if (group.name === 'admin') {
-            message.warning('Admin group cannot be deleted');
+        if (group.is_system) {
+            message.warning('System groups cannot be deleted');
             return;
         }
-        setGroupToDelete(group);
-        setDeleteConfirmVisible(true);
+
+        Modal.confirm({
+            title: 'Delete Group',
+            content: 'Are you sure you want to delete this group? This action cannot be undone.',
+            okText: 'Yes',
+            okType: 'danger',
+            cancelText: 'No',
+            onOk: async () => {
+                try {
+                    setLoading(true);
+                    setError(null);
+                    
+                    const response = await userService.deleteGroup(group.id);
+                    
+                    if (!response?.success) {
+                        throw new Error(response?.error || 'Failed to delete group');
+                    }
+                    
+                    message.success('Group deleted successfully');
+                    await fetchGroups();
+                } catch (error) {
+                    console.error('Error deleting group:', error);
+                    setError(error.message);
+                    message.error('Failed to delete group');
+                } finally {
+                    setLoading(false);
+                }
+            }
+        });
     };
 
-    const confirmDelete = async () => {
-        try {
-            const response = await groupApi.deleteGroup(groupToDelete.id);
-            if (response?.success) {
-                message.success('Group deleted successfully');
-                await fetchGroups();
-            }
-        } catch (error) {
-            console.error('Error deleting group:', error);
-            message.error(error.response?.data?.error || 'Failed to delete group');
-        } finally {
-            setDeleteConfirmVisible(false);
-            setGroupToDelete(null);
+    const renderStorePermissions = () => {
+        // 使用 selectedStores 而不是從表單獲取值
+        if (selectedStores.length === 0) {
+            return null;
         }
+
+        return (
+            <>
+                <Divider orientation="left">Store Permissions</Divider>
+                {selectedStores.map(storeId => {
+                    const store = stores.find(s => s.id === storeId);
+                    if (!store) return null;
+
+                    const storePrefix = `store_${storeId}_`;
+
+                    return (
+                        <Card 
+                            key={storeId} 
+                            size="small" 
+                            title={store.name}
+                            style={{ marginBottom: 16 }}
+                        >
+                            <Form.Item
+                                name={['store_permissions', `${storePrefix}inventory`]}
+                                valuePropName="checked"
+                                initialValue={false}
+                            >
+                                <Checkbox>Inventory Management</Checkbox>
+                            </Form.Item>
+                            <Form.Item
+                                name={['store_permissions', `${storePrefix}orders`]}
+                                valuePropName="checked"
+                                initialValue={false}
+                            >
+                                <Checkbox>Orders Management</Checkbox>
+                            </Form.Item>
+                            <Form.Item
+                                name={['store_permissions', `${storePrefix}rma`]}
+                                valuePropName="checked"
+                                initialValue={false}
+                            >
+                                <Checkbox>RMA Management</Checkbox>
+                            </Form.Item>
+                            <Form.Item
+                                name={['store_permissions', `${storePrefix}outbound`]}
+                                valuePropName="checked"
+                                initialValue={false}
+                            >
+                                <Checkbox>Outbound Management</Checkbox>
+                            </Form.Item>
+                        </Card>
+                    );
+                })}
+            </>
+        );
     };
+
+    const renderMainPermissions = () => (
+        <>
+            <Divider orientation="left">Main Permissions</Divider>
+            <Form.Item
+                name={['main_permissions', 'inventory']}
+                valuePropName="checked"
+            >
+                <Checkbox>Inventory Access</Checkbox>
+            </Form.Item>
+            <Form.Item
+                name={['main_permissions', 'inventory_ram']}
+                valuePropName="checked"
+            >
+                <Checkbox>RAM Inventory Access</Checkbox>
+            </Form.Item>
+            <Form.Item
+                name={['main_permissions', 'outbound']}
+                valuePropName="checked"
+            >
+                <Checkbox>Outbound Access</Checkbox>
+            </Form.Item>
+            <Form.Item
+                name={['main_permissions', 'inbound']}
+                valuePropName="checked"
+            >
+                <Checkbox>Inbound Access</Checkbox>
+            </Form.Item>
+        </>
+    );
 
     const columns = [
         {
-            title: 'Group Name',
+            title: 'Name',
             dataIndex: 'name',
             key: 'name',
             render: (text, record) => (
                 <Space>
                     {text}
-                    {record.name === 'admin' && <Tag color="gold">System</Tag>}
+                    {record.is_system && (
+                        <Tooltip title="System Group">
+                            <LockOutlined style={{ color: '#1890ff' }} />
+                        </Tooltip>
+                    )}
                 </Space>
             )
         },
@@ -264,44 +457,18 @@ const GroupManagement = () => {
             title: 'Permitted Stores',
             dataIndex: 'permitted_stores',
             key: 'permitted_stores',
-            render: (permitted_stores, record) => (
-                <Space direction="vertical">
-                    {record.name === 'admin' ? (
-                        <Tag color="blue">All Stores</Tag>
-                    ) : (permitted_stores || []).map(storeId => {
+            render: (permitted_stores) => (
+                <Space>
+                    {(permitted_stores || []).map(storeId => {
                         const store = stores.find(s => s.id === storeId);
-                        if (!store) return null;
-
-                        const permissions = record.store_permissions?.[storeId] || {};
-                        return (
-                            <div key={storeId}>
-                                <Tag color="blue">{store.name}</Tag>
-                                <div style={{ marginLeft: 8, display: 'inline-block' }}>
-                                    {permissions.inventory && <Tag color="green">Inventory</Tag>}
-                                    {permissions.orders && <Tag color="cyan">Orders</Tag>}
-                                    {permissions.rma && <Tag color="purple">RMA</Tag>}
-                                    {permissions.outbound && <Tag color="orange">Outbound</Tag>}
-                                </div>
-                            </div>
-                        );
+                        return store ? (
+                            <Tag key={storeId} color="blue">
+                                {store.name}
+                            </Tag>
+                        ) : null;
                     })}
-                </Space>
-            )
-        },
-        {
-            title: 'Main Permissions',
-            key: 'main_permissions',
-            render: (_, record) => (
-                <Space direction="vertical">
-                    {record.name === 'admin' ? (
-                        <Tag color="blue">All Permissions</Tag>
-                    ) : (
-                        <>
-                            {record.main_permissions?.inventory && <Tag color="green">Inventory</Tag>}
-                            {record.main_permissions?.inventory_ram && <Tag color="cyan">Inventory RAM</Tag>}
-                            {record.main_permissions?.outbound && <Tag color="orange">Outbound</Tag>}
-                            {record.main_permissions?.inbound && <Tag color="purple">Inbound</Tag>}
-                        </>
+                    {(!permitted_stores || permitted_stores.length === 0) && (
+                        <Tag color="green">All Stores</Tag>
                     )}
                 </Space>
             )
@@ -315,16 +482,16 @@ const GroupManagement = () => {
                         type="link" 
                         icon={<EditOutlined />}
                         onClick={() => handleEdit(record)}
-                        disabled={record.name === 'admin'}
+                        disabled={loading || record.is_system}
                     >
                         Edit
                     </Button>
-                    <Button 
-                        type="link" 
+                    <Button
+                        type="link"
                         danger
                         icon={<DeleteOutlined />}
                         onClick={() => handleDelete(record)}
-                        disabled={record.name === 'admin'}
+                        disabled={loading || record.is_system}
                     >
                         Delete
                     </Button>
@@ -333,204 +500,120 @@ const GroupManagement = () => {
         }
     ];
 
-    const renderStorePermissions = () => {
-        const selectedStores = form.getFieldValue('permitted_stores') || [];
-        
-        if (selectedStores.length === 0) {
-            return null;
-        }
-
-        return (
-            <div style={{ marginTop: 16 }}>
-                <Typography.Title level={5}>Store Feature Permissions</Typography.Title>
-                {selectedStores.map(storeId => {
-                    const store = stores.find(s => s.id === storeId);
-                    if (!store) return null;
-
-                    return (
-                        <div key={storeId} style={{ marginBottom: 16 }}>
-                            <Typography.Text strong>{store.name}</Typography.Text>
-                            <div style={{ marginLeft: 24, marginTop: 8 }}>
-                                <Form.Item
-                                    name={['store_permissions', `store_${storeId}_inventory`]}
-                                    valuePropName="checked"
-                                    initialValue={false}
-                                >
-                                    <Checkbox>Inventory Management</Checkbox>
-                                </Form.Item>
-                                <Form.Item
-                                    name={['store_permissions', `store_${storeId}_orders`]}
-                                    valuePropName="checked"
-                                    initialValue={false}
-                                >
-                                    <Checkbox>Order Management</Checkbox>
-                                </Form.Item>
-                                <Form.Item
-                                    name={['store_permissions', `store_${storeId}_rma`]}
-                                    valuePropName="checked"
-                                    initialValue={false}
-                                >
-                                    <Checkbox>RMA Management</Checkbox>
-                                </Form.Item>
-                                <Form.Item
-                                    name={['store_permissions', `store_${storeId}_outbound`]}
-                                    valuePropName="checked"
-                                    initialValue={false}
-                                >
-                                    <Checkbox>Outbound Management</Checkbox>
-                                </Form.Item>
-                            </div>
-                        </div>
-                    );
-                })}
-            </div>
-        );
-    };
-
-    const renderMainPermissions = () => {
-        return (
-            <div style={{ marginTop: 16 }}>
-                <Typography.Title level={5}>Main Permissions</Typography.Title>
-                <Form.Item
-                    name={['main_permissions', 'inbound']}
-                    valuePropName="checked"
-                    initialValue={false}
-                >
-                    <Checkbox>Inbound Management</Checkbox>
-                </Form.Item>
-                <Form.Item
-                    name={['main_permissions', 'inventory']}
-                    valuePropName="checked"
-                    initialValue={false}
-                >
-                    <Checkbox>Inventory Management</Checkbox>
-                </Form.Item>
-                <Form.Item
-                    name={['main_permissions', 'inventory_ram']}
-                    valuePropName="checked"
-                    initialValue={false}
-                >
-                    <Checkbox>Inventory RAM Management</Checkbox>
-                </Form.Item>
-                <Form.Item
-                    name={['main_permissions', 'outbound']}
-                    valuePropName="checked"
-                    initialValue={false}
-                >
-                    <Checkbox>Outbound Management</Checkbox>
-                </Form.Item>
-            </div>
-        );
-    };
-
     return (
-        <div>
-            <div style={{ marginBottom: 16 }}>
-                <Button 
-                    type="primary" 
+        <div style={{ padding: '24px' }}>
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Title level={2}>Group Management</Title>
+                <Button
+                    type="primary"
                     icon={<PlusOutlined />}
                     onClick={handleAdd}
+                    disabled={loading}
                 >
                     Add Group
                 </Button>
             </div>
 
+            {error && (
+                <Alert
+                    message={error}
+                    type="error"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                />
+            )}
+
             <Table 
                 columns={columns} 
                 dataSource={groups}
+                loading={loading}
                 rowKey="id"
             />
 
             <Modal
-                title={editingGroup ? "Edit Group" : "Add Group"}
+                title={`${editingGroup ? 'Edit' : 'Add'} Group`}
                 open={isModalVisible}
                 onOk={() => form.submit()}
-                onCancel={() => {
-                    setIsModalVisible(false);
-                    form.resetFields();
-                }}
-                width={600}
+                onCancel={() => setIsModalVisible(false)}
+                confirmLoading={loading}
+                width={800}
             >
                 <Form
                     form={form}
                     layout="vertical"
                     onFinish={handleSubmit}
-                    onValuesChange={(changedValues) => {
-                        if (changedValues.permitted_stores) {
-                            // Reset store permissions when stores selection changes
-                            const currentValues = form.getFieldValue('store_permissions') || {};
-                            const newPermissions = {};
-                            changedValues.permitted_stores.forEach(storeId => {
-                                newPermissions[`store_${storeId}_inventory`] = currentValues[`store_${storeId}_inventory`] || false;
-                                newPermissions[`store_${storeId}_orders`] = currentValues[`store_${storeId}_orders`] || false;
-                                newPermissions[`store_${storeId}_rma`] = currentValues[`store_${storeId}_rma`] || false;
-                            });
-                            form.setFieldsValue({ store_permissions: newPermissions });
-                        }
-                    }}
                 >
                     <Form.Item
                         name="name"
                         label="Group Name"
                         rules={[
-                            { required: true, message: 'Please input group name!' },
-                            { 
+                            { required: true, message: 'Please enter group name' },
+                            { min: 3, message: 'Name must be at least 3 characters' }
+                        ]}
+                    >
+                        <Input placeholder="Enter group name" />
+                    </Form.Item>
+
+                    <Form.Item
+                        name="description"
+                        label="Description"
+                        rules={[
+                            { required: true, message: 'Please enter group description' }
+                        ]}
+                    >
+                        <TextArea 
+                            placeholder="Enter group description"
+                            autoSize={{ minRows: 2, maxRows: 6 }}
+                        />
+                    </Form.Item>
+
+                    <Form.Item
+                        name="permitted_stores"
+                        label={
+                            <Space>
+                                Permitted Stores
+                                <Tooltip title={editingGroup?.is_system ? 
+                                    "System groups have access to all stores" : 
+                                    "At least one store must be selected"}>
+                                    <QuestionCircleOutlined />
+                                </Tooltip>
+                            </Space>
+                        }
+                        rules={[
+                            {
+                                required: !editingGroup?.is_system,
+                                message: 'Please select at least one store'
+                            },
+                            {
                                 validator: (_, value) => {
-                                    if (value === 'admin' && !editingGroup) {
-                                        return Promise.reject('This group name is reserved');
+                                    if (!editingGroup?.is_system && (!value || value.length === 0)) {
+                                        return Promise.reject('At least one store must be selected');
                                     }
                                     return Promise.resolve();
                                 }
                             }
                         ]}
                     >
-                        <Input disabled={editingGroup?.name === 'admin'} />
-                    </Form.Item>
-
-                    <Form.Item
-                        name="description"
-                        label="Description"
-                    >
-                        <Input.TextArea />
-                    </Form.Item>
-
-                    <Form.Item
-                        name="permitted_stores"
-                        label="Permitted Stores"
-                        rules={[{ required: true, message: 'Please select at least one store!' }]}
-                    >
                         <Select
                             mode="multiple"
                             placeholder="Select stores"
-                            disabled={editingGroup?.name === 'admin'}
+                            style={{ width: '100%' }}
+                            allowClear
+                            disabled={editingGroup?.is_system}
+                            onChange={handleStoreSelect}
+                            value={selectedStores}
                         >
                             {stores.map(store => (
                                 <Option key={store.id} value={store.id}>
-                                    Store {store.id} - {store.name}
+                                    {store.name}
                                 </Option>
                             ))}
                         </Select>
                     </Form.Item>
 
-                    {renderMainPermissions()}
                     {renderStorePermissions()}
+                    {renderMainPermissions()}
                 </Form>
-            </Modal>
-
-            <Modal
-                title="Confirm Delete"
-                open={deleteConfirmVisible}
-                onOk={confirmDelete}
-                onCancel={() => {
-                    setDeleteConfirmVisible(false);
-                    setGroupToDelete(null);
-                }}
-                okText="Yes, delete"
-                cancelText="No, cancel"
-                okButtonProps={{ danger: true }}
-            >
-                <p>Are you sure you want to delete the group "{groupToDelete?.name}"?</p>
-                <p>This action cannot be undone.</p>
             </Modal>
         </div>
     );

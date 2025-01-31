@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Table, Card, Space, Button, Tag, Modal, Input, message, Statistic, Typography } from 'antd';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Table, Card, Space, Button, Tag, Modal, Input, message, Statistic, Typography, Alert } from 'antd';
 import { DeleteOutlined, ExportOutlined } from '@ant-design/icons';
 import { useRmaItems, useRmaOperations, useRmaStats } from '../hooks/useRma';
 import { useAuth } from '../contexts/AuthContext';
-import { rmaApi } from '../services/api';
+import { rmaService } from '../api';
+import moment from 'moment';
 
 const { Search } = Input;
 const { Paragraph } = Typography;
@@ -15,7 +16,7 @@ const InventoryRmaPage = () => {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(50);
 
-    const { loading, data, refetch } = useRmaItems(page, pageSize);
+    const { loading, data, refetch } = useRmaItems('inventory', page, pageSize);
     const { loading: operationLoading, processRma, completeRma, failRma, batchProcess } = useRmaOperations();
     const { stats } = useRmaStats();
 
@@ -27,7 +28,7 @@ const InventoryRmaPage = () => {
 
     const handleUpdateRma = async (rmaId, field, value) => {
         try {
-            await rmaApi.updateInventoryRma(rmaId, { [field]: value });
+            await rmaService.updateInventoryRma(rmaId, { [field]: value });
             message.success(`${field} updated successfully`);
             refetch();
         } catch (error) {
@@ -49,7 +50,7 @@ const InventoryRmaPage = () => {
 
     const handleExport = async () => {
         try {
-            const response = await rmaApi.exportToExcel({
+            const response = await rmaService.exportToExcel({
                 searchText,
                 status: 'all'
             });
@@ -74,7 +75,7 @@ const InventoryRmaPage = () => {
             cancelText: 'No',
             onOk: async () => {
                 try {
-                    await rmaApi.deleteInventoryRma(rmaId);
+                    await rmaService.deleteInventoryRma(rmaId);
                     message.success('RMA item deleted successfully');
                     refetch();
                 } catch (error) {

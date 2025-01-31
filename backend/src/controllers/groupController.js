@@ -17,10 +17,12 @@ const getGroups = async (req, res) => {
 
             // Get store permissions for each group
             const permissionsResult = await client.query(`
-                SELECT group_id, store_id
-                FROM group_store_permissions
-                ORDER BY group_id, store_id
+                SELECT gsp.group_id, gsp.store_id, gsp.features
+                FROM group_store_permissions gsp
+                ORDER BY gsp.group_id, gsp.store_id
             `);
+
+            console.log('Raw permissions from database:', permissionsResult.rows);
 
             // Get main permissions for each group
             const mainPermissionsResult = await client.query(`
@@ -46,13 +48,16 @@ const getGroups = async (req, res) => {
                             acc[store.id] = {
                                 inventory: true,
                                 orders: true,
-                                rma: true
+                                rma: true,
+                                outbound: true
                             };
                             return acc;
                         }, {}),
                         main_permissions: {
                             inventory: true,
-                            inventory_ram: true
+                            inventory_ram: true,
+                            outbound: true,
+                            inbound: true
                         }
                     };
                 }
@@ -67,20 +72,47 @@ const getGroups = async (req, res) => {
                     return acc;
                 }, {
                     inventory: false,
-                    inventory_ram: false
+                    inventory_ram: false,
+                    outbound: false,
+                    inbound: false
                 });
+
+                // Convert store permissions
+                const storePermissions = {};
+                groupPermissions.forEach(p => {
+                    if (p.store_id) {
+                        try {
+                            // 確保 features 是一個對象
+                            const features = typeof p.features === 'string' 
+                                ? JSON.parse(p.features) 
+                                : p.features || {};
+                            
+                            console.log('Processing features for store', p.store_id, ':', features);
+                            
+                            storePermissions[p.store_id] = {
+                                inventory: features.inventory === true,
+                                orders: features.orders === true,
+                                rma: features.rma === true,
+                                outbound: features.outbound === true
+                            };
+                        } catch (error) {
+                            console.error(`Error parsing features for store ${p.store_id}:`, error);
+                            storePermissions[p.store_id] = {
+                                inventory: false,
+                                orders: false,
+                                rma: false,
+                                outbound: false
+                            };
+                        }
+                    }
+                });
+
+                console.log('Processed store permissions:', storePermissions);
 
                 return {
                     ...group,
-                    permitted_stores: groupPermissions.map(p => p.store_id),
-                    store_permissions: groupPermissions.reduce((acc, p) => {
-                        acc[p.store_id] = {
-                            inventory: true,
-                            orders: true,
-                            rma: true
-                        };
-                        return acc;
-                    }, {}),
+                    permitted_stores: [...new Set(groupPermissions.map(p => p.store_id).filter(Boolean))],
+                    store_permissions: storePermissions,
                     main_permissions: mainPermissions
                 };
             });
@@ -151,22 +183,47 @@ const createGroup = async (req, res) => {
             const group = groupResult.rows[0];
 
             // 添加商店權限
-            if (store_permissions && Object.keys(store_permissions).length > 0) {
-                const values = store_permissions.map(p => `(${group.id}, ${p})`).join(',');
+            if (store_permissions && store_permissions.length > 0) {
+                const insertValues = store_permissions.map((p, index) => {
+                    return `($${index * 3 + 1}, $${index * 3 + 2}, $${index * 3 + 3}::jsonb)`;
+                }).join(',');
+                
+                const flatParams = store_permissions.reduce((acc, p) => {
+                    // 提取權限數據
+                    const features = {
+                        inventory: p.inventory === '1',
+                        orders: p.orders === '1',
+                        rma: p.rma === '1',
+                        outbound: p.outbound === '1'
+                    };
+                    return [...acc, group.id, p.store_id, JSON.stringify(features)];
+                }, []);
+
                 await client.query(`
-                    INSERT INTO group_store_permissions (group_id, store_id)
-                    VALUES ${values}
-                `);
+                    INSERT INTO group_store_permissions (group_id, store_id, features)
+                    VALUES ${insertValues}
+                `, flatParams);
             }
 
             await client.query('COMMIT');
             
             // 獲取完整的群組數據
-            const finalGroup = await getGroupWithPermissions(client, group.id);
+            const finalGroupResult = await client.query(`
+                SELECT g.id, g.name, g.description,
+                    ARRAY_AGG(DISTINCT gsp.store_id) as permitted_stores,
+                    jsonb_object_agg(
+                        gsp.store_id::text, 
+                        gsp.features
+                    ) FILTER (WHERE gsp.store_id IS NOT NULL) as store_permissions
+                FROM groups g
+                LEFT JOIN group_store_permissions gsp ON g.id = gsp.group_id
+                WHERE g.id = $1
+                GROUP BY g.id, g.name, g.description
+            `, [group.id]);
             
             res.json({
                 success: true,
-                group: finalGroup
+                group: finalGroupResult.rows[0] || null
             });
         } catch (error) {
             await client.query('ROLLBACK');
@@ -188,13 +245,12 @@ const createGroup = async (req, res) => {
 const updateGroup = async (req, res) => {
     try {
         const { id } = req.params;
-        const { name, description, store_permissions } = req.body;
+        const { name, description } = req.body;
 
         // 驗證群組數據
         const validationError = validateGroupData({ 
             name, 
-            description, 
-            store_permissions 
+            description
         });
         if (validationError) {
             return res.status(400).json({
@@ -227,36 +283,38 @@ const updateGroup = async (req, res) => {
                 throw new Error('Group not found');
             }
 
-            // 更新商店權限
-            // 先刪除現有的商店權限
-            await client.query('DELETE FROM group_store_permissions WHERE group_id = $1', [id]);
-            
-            // 添加新的商店權限
-            if (store_permissions && Object.keys(store_permissions).length > 0) {
-                const values = store_permissions.map(p => `(${id}, ${p})`).join(',');
-                await client.query(`
-                    INSERT INTO group_store_permissions (group_id, store_id)
-                    VALUES ${values}
-                `);
-            }
-
             await client.query('COMMIT');
             
-            // 獲取更新後的群組信息
-            const finalGroupResult = await client.query(`
-                SELECT g.id, g.name, g.description,
-                    ARRAY_AGG(DISTINCT gsp.store_id) as permitted_stores,
-                    json_object_agg(gsp.store_id, gsp.features) as store_permissions
-                FROM groups g
-                LEFT JOIN group_store_permissions gsp ON g.id = gsp.group_id
-                WHERE g.id = $1
-                GROUP BY g.id, g.name, g.description
-            `, [id]);
-            
-            res.json({
+            // 獲取完整的群組信息
+            const [mainPermissions, storePermissions] = await Promise.all([
+                client.query(
+                    'SELECT permission_type, permission_value FROM group_permissions WHERE group_id = $1',
+                    [id]
+                ),
+                client.query(
+                    'SELECT store_id, features FROM group_store_permissions WHERE group_id = $1',
+                    [id]
+                )
+            ]);
+
+            const response = {
                 success: true,
-                group: finalGroupResult.rows[0] || null
-            });
+                group: {
+                    ...groupResult.rows[0],
+                    main_permissions: mainPermissions.rows.reduce((acc, p) => {
+                        acc[p.permission_type] = p.permission_value;
+                        return acc;
+                    }, {}),
+                    permitted_stores: storePermissions.rows.map(p => p.store_id),
+                    store_permissions: storePermissions.rows.reduce((acc, p) => {
+                        acc[p.store_id] = p.features;
+                        return acc;
+                    }, {})
+                }
+            };
+
+            console.log('Sending response:', response);
+            res.json(response);
         } catch (error) {
             await client.query('ROLLBACK');
             throw error;
@@ -339,7 +397,22 @@ const getGroupPermissions = async (req, res) => {
 const updateGroupPermissions = async (req, res) => {
     try {
         const { id } = req.params;
-        const { permissions } = req.body;
+        const { main_permissions, permitted_stores, store_permissions } = req.body;
+
+        console.log('Received update request:', {
+            groupId: id,
+            main_permissions,
+            permitted_stores,
+            store_permissions
+        });
+
+        // 檢查 main_permissions 是否存在
+        if (!main_permissions) {
+            return res.status(400).json({
+                success: false,
+                error: 'Main permissions data is required'
+            });
+        }
 
         // 檢查群組是否存在
         const groupResult = await pool.query('SELECT name FROM groups WHERE id = $1', [id]);
@@ -361,36 +434,166 @@ const updateGroupPermissions = async (req, res) => {
 
         // 開始事務
         const client = await pool.connect();
+        let finalStorePermissions = []; // 移到外層作用域
+
         try {
             await client.query('BEGIN');
 
             // 刪除現有權限
             await client.query('DELETE FROM group_permissions WHERE group_id = $1', [id]);
+            await client.query('DELETE FROM group_store_permissions WHERE group_id = $1', [id]);
 
-            // 添加新權限
-            for (const [permType, permValue] of Object.entries(permissions)) {
-                await client.query(
-                    'INSERT INTO group_permissions (group_id, permission_type, permission_value) VALUES ($1, $2, $3)',
-                    [id, permType, permValue]
+            // 添加新的主要權限
+            const permissionEntries = Object.entries(main_permissions);
+            if (permissionEntries.length > 0) {
+                const insertValues = permissionEntries.map((_, index) => {
+                    return `($1, $${index * 2 + 2}, $${index * 2 + 3})`;
+                }).join(',');
+
+                const flatParams = [id];
+                permissionEntries.forEach(([permType, permValue]) => {
+                    flatParams.push(permType, permValue);
+                });
+
+                await client.query(`
+                    INSERT INTO group_permissions (group_id, permission_type, permission_value)
+                    VALUES ${insertValues}
+                `, flatParams);
+            }
+
+            // 添加新的商店權限
+            if (store_permissions && store_permissions.length > 0) {
+                // 驗證 store_id 是否存在於 permitted_stores 中
+                const validStorePermissions = store_permissions.filter(permission => 
+                    permitted_stores.includes(Number(permission.store_id))
                 );
+
+                if (validStorePermissions.length > 0) {
+                    // 先檢查所有商店是否存在
+                    const storeIds = validStorePermissions.map(p => Number(p.store_id));
+                    const storesResult = await client.query(
+                        'SELECT id FROM stores WHERE id = ANY($1::int[])',
+                        [storeIds]
+                    );
+
+                    const validStoreIds = storesResult.rows.map(row => row.id);
+                    finalStorePermissions = validStorePermissions.filter(permission =>
+                        validStoreIds.includes(Number(permission.store_id))
+                    );
+
+                    if (finalStorePermissions.length > 0) {
+                        const storeValues = finalStorePermissions.map((_, index) => {
+                            return `($1, $${index * 2 + 2}, $${index * 2 + 3}::jsonb)`;
+                        }).join(',');
+
+                        const flatParams = [id];
+                        finalStorePermissions.forEach(permission => {
+                            const features = {
+                                inventory: permission.inventory === '1',
+                                orders: permission.orders === '1',
+                                rma: permission.rma === '1',
+                                outbound: permission.outbound === '1'
+                            };
+                            flatParams.push(Number(permission.store_id), JSON.stringify(features));
+                        });
+
+                        console.log('Inserting store permissions:', {
+                            storeValues,
+                            flatParams,
+                            finalStorePermissions
+                        });
+
+                        await client.query(`
+                            INSERT INTO group_store_permissions (group_id, store_id, features)
+                            VALUES ${storeValues}
+                        `, flatParams);
+
+                        // 驗證插入是否成功
+                        const insertedPermissions = await client.query(`
+                            SELECT store_id, features
+                            FROM group_store_permissions
+                            WHERE group_id = $1 AND store_id = ANY($2::int[])
+                        `, [id, storeIds]);
+
+                        console.log('Inserted permissions:', insertedPermissions.rows);
+                    }
+                }
             }
 
             await client.query('COMMIT');
             
             // 獲取更新後的權限
-            const updatedPermissions = await client.query(
-                'SELECT permission_type, permission_value FROM group_permissions WHERE group_id = $1',
-                [id]
-            );
-            
-            res.json({
+            const [mainPermissionsResult, storePermissionsResult] = await Promise.all([
+                client.query(
+                    'SELECT permission_type, permission_value FROM group_permissions WHERE group_id = $1',
+                    [id]
+                ),
+                client.query(`
+                    SELECT gsp.store_id, gsp.features
+                    FROM group_store_permissions gsp
+                    WHERE gsp.group_id = $1
+                    ORDER BY gsp.store_id
+                `, [id])
+            ]);
+
+            // 轉換 store_permissions 為前端期望的格式
+            const processedStorePermissions = {};
+            storePermissionsResult.rows.forEach(row => {
+                const features = typeof row.features === 'string' 
+                    ? JSON.parse(row.features) 
+                    : row.features;
+                
+                processedStorePermissions[row.store_id] = {
+                    inventory: features.inventory === true,
+                    orders: features.orders === true,
+                    rma: features.rma === true,
+                    outbound: features.outbound === true
+                };
+
+                console.log(`Processed permissions for store ${row.store_id}:`, {
+                    raw: row.features,
+                    processed: processedStorePermissions[row.store_id]
+                });
+            });
+
+            // 確保所有 permitted_stores 都有對應的權限
+            permitted_stores.forEach(storeId => {
+                if (!processedStorePermissions[storeId]) {
+                    processedStorePermissions[storeId] = {
+                        inventory: false,
+                        orders: false,
+                        rma: false,
+                        outbound: false
+                    };
+                }
+            });
+
+            // 驗證更新是否成功
+            const verifyResult = await client.query(`
+                SELECT COUNT(*) as count
+                FROM group_store_permissions
+                WHERE group_id = $1
+            `, [id]);
+
+            console.log('Verification result:', {
+                expectedCount: finalStorePermissions.length,
+                actualCount: verifyResult.rows[0].count,
+                processedPermissions: processedStorePermissions
+            });
+
+            const response = {
                 success: true,
                 message: 'Permissions updated successfully',
-                permissions: updatedPermissions.rows.reduce((acc, p) => {
+                main_permissions: mainPermissionsResult.rows.reduce((acc, p) => {
                     acc[p.permission_type] = p.permission_value;
                     return acc;
-                }, {})
-            });
+                }, {}),
+                permitted_stores: permitted_stores,
+                store_permissions: processedStorePermissions
+            };
+
+            console.log('Sending response:', JSON.stringify(response, null, 2));
+            res.json(response);
         } catch (error) {
             await client.query('ROLLBACK');
             throw error;

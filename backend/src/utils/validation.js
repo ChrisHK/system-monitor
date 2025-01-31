@@ -19,16 +19,19 @@ const validateGroupData = (data) => {
         return 'Group name can only contain letters, numbers, underscores and hyphens';
     }
 
-    // 檢查 permitted_stores 或 store_permissions
-    if ((!permitted_stores || !Array.isArray(permitted_stores) || permitted_stores.length === 0) &&
-        (!store_permissions || Object.keys(store_permissions).length === 0)) {
-        return 'At least one store must be selected';
-    }
+    // 如果提供了 store_permissions 或 permitted_stores，則進行驗證
+    if (store_permissions || permitted_stores) {
+        // 檢查 permitted_stores 或 store_permissions
+        if ((!permitted_stores || !Array.isArray(permitted_stores) || permitted_stores.length === 0) &&
+            (!store_permissions || Object.keys(store_permissions).length === 0)) {
+            return 'At least one store must be selected';
+        }
 
-    // 如果有 permitted_stores，檢查每個 store ID 是否為有效的數字
-    if (permitted_stores && Array.isArray(permitted_stores) && 
-        !permitted_stores.every(id => Number.isInteger(id) && id > 0)) {
-        return 'Invalid store ID format';
+        // 如果有 permitted_stores，檢查每個 store ID 是否為有效的數字
+        if (permitted_stores && Array.isArray(permitted_stores) && 
+            !permitted_stores.every(id => Number.isInteger(id) && id > 0)) {
+            return 'Invalid store ID format';
+        }
     }
 
     return null;

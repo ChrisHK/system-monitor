@@ -1,4 +1,4 @@
-import { storeApi } from './api';
+import { storeService } from '../api';
 
 // Cache configuration
 const CACHE_EXPIRY = 5 * 60 * 1000; // 5 minutes
@@ -29,7 +29,6 @@ class StoreDataService {
         try {
             // Return existing promise if already loading
             if (this.loadingStates.has(loadingKey)) {
-                console.log('Store items already loading, returning existing promise');
                 const existingPromise = this.loadingPromises.get(loadingKey);
                 if (existingPromise) {
                     return await existingPromise;
@@ -38,7 +37,6 @@ class StoreDataService {
 
             // Check cache first
             if (this.isCacheValid(storeId, 'items')) {
-                console.log('Returning cached store items');
                 return {
                     success: true,
                     items: this.cache.storeItems.get(storeId)
@@ -49,10 +47,7 @@ class StoreDataService {
             this.loadingStates.add(loadingKey);
             const promise = (async () => {
                 try {
-                    console.log(`Fetching items for store ${storeId} from API...`);
-                    console.log('API Base URL:', process.env.REACT_APP_API_URL);
-                    const response = await storeApi.getStoreItems(storeId.toString());
-                    console.log('Store items API response:', response);
+                    const response = await storeService.getStoreItems(storeId.toString());
 
                     if (!response?.success) {
                         throw new Error(response?.error || 'Failed to fetch store items');
@@ -66,8 +61,6 @@ class StoreDataService {
                         store_id: storeId.toString(),
                         received_at: item.received_at || new Date().toISOString()
                     }));
-
-                    console.log(`Processed ${validItems.length} items for store ${storeId}`);
 
                     // Update cache
                     this.cache.storeItems.set(storeId, validItems);
@@ -96,31 +89,21 @@ class StoreDataService {
             }
         } catch (error) {
             console.error('Error fetching store items:', error);
-            return {
-                success: false,
-                error: error.message || 'Failed to fetch store items',
-                items: []
-            };
+            throw new Error(error.message || 'Failed to fetch store items');
         }
     }
 
     // Get store details with caching
     async getStoreDetails(storeId) {
-        const loadingKey = `store-${storeId}-details`;
-        
         try {
             if (this.isCacheValid(storeId, 'details')) {
-                console.log('Returning cached store details');
                 return {
                     success: true,
                     store: this.cache.storeDetails.get(storeId)
                 };
             }
 
-            console.log(`Fetching details for store ${storeId} from API...`);
-            console.log('API Base URL:', process.env.REACT_APP_API_URL);
-            const response = await storeApi.getStore(storeId.toString());
-            console.log('Store details API response:', response);
+            const response = await storeService.getStore(storeId.toString());
 
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to fetch store details');
@@ -129,8 +112,8 @@ class StoreDataService {
             // Extract store details from the response
             const store = {
                 id: storeId.toString(),
-                name: `Store ${storeId}`,  // Default name if not provided
-                items: response.items || []
+                name: response.store?.name || `Store ${storeId}`,
+                ...response.store
             };
 
             // Cache the store details
@@ -143,29 +126,26 @@ class StoreDataService {
             };
         } catch (error) {
             console.error('Error fetching store details:', error);
-            return {
-                success: false,
-                error: error.message || 'Failed to fetch store details'
-            };
+            throw new Error(error.message || 'Failed to fetch store details');
         }
     }
 
     // Delete store item
     async deleteStoreItem(storeId, itemId) {
         try {
-            const response = await storeApi.deleteStoreItem(storeId, itemId);
-            if (response?.success) {
-                // Invalidate store items cache
-                this.cache.storeItems.delete(storeId);
-                this.cache.lastUpdate.items.delete(storeId);
+            const response = await storeService.deleteStoreItem(storeId, itemId);
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to delete store item');
             }
+
+            // Invalidate store items cache
+            this.cache.storeItems.delete(storeId);
+            this.cache.lastUpdate.items.delete(storeId);
+            
             return response;
         } catch (error) {
             console.error('Error deleting store item:', error);
-            return {
-                success: false,
-                error: error.message || 'Failed to delete store item'
-            };
+            throw new Error(error.message || 'Failed to delete store item');
         }
     }
 
@@ -180,7 +160,6 @@ class StoreDataService {
 
     // Clear store cache
     clearStoreCache(storeId) {
-        console.log(`Clearing cache for store ${storeId}`);
         this.cache.storeItems.delete(storeId);
         this.cache.storeDetails.delete(storeId);
         this.cache.lastUpdate.items.delete(storeId);
@@ -198,4 +177,4 @@ class StoreDataService {
     }
 }
 
-export const storeDataService = new StoreDataService(); 
+export default new StoreDataService(); 

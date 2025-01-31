@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Select, message, Space, Tag } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, message, Space, Tag, Alert, Spin } from 'antd';
 import { EditOutlined, PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { userApi, groupApi, storeApi } from '../../services/api';
+import { userService, storeService } from '../../api';
 
 const { Option } = Select;
 
@@ -26,72 +26,95 @@ const UserManagement = () => {
     const [form] = Form.useForm();
     const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
     const [userToDelete, setUserToDelete] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
 
     const fetchGroups = async () => {
         try {
-            const response = await groupApi.getGroups();
-            if (response?.success) {
-                setGroups(response.groups);
+            setLoading(true);
+            setError('');
+            const response = await userService.getGroups();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load groups');
             }
+            
+            setGroups(response.groups);
         } catch (error) {
             console.error('Error fetching groups:', error);
-            message.error('Failed to load groups');
+            setError(error.message || 'Failed to load groups');
+            throw error; // Re-throw to handle in the caller
+        } finally {
+            setLoading(false);
         }
     };
 
     const fetchStores = async () => {
         try {
-            const response = await storeApi.getStores();
-            if (response?.success) {
-                setStores(response.stores);
+            setLoading(true);
+            setError('');
+            const response = await storeService.getStores();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load stores');
             }
+            
+            setStores(response.stores);
         } catch (error) {
             console.error('Error fetching stores:', error);
-            message.error('Failed to load stores');
+            setError(error.message || 'Failed to load stores');
+            throw error; // Re-throw to handle in the caller
+        } finally {
+            setLoading(false);
         }
     };
 
     const fetchUsers = async () => {
         try {
-            const response = await userApi.getUsers();
-            if (response?.success) {
-                // Find admin user from backend
-                const backendAdmin = response.users.find(user => user.username === 'admin');
+            setLoading(true);
+            setError('');
+            const response = await userService.getUsers();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load users');
+            }
+
+            // Find admin user from backend
+            const backendAdmin = response.users.find(user => user.username === 'admin');
+            
+            if (backendAdmin) {
+                // Update admin user with backend data while preserving is_system flag
+                const adminUser = {
+                    ...backendAdmin,
+                    is_system: true,
+                    role: 'admin',  // Ensure admin role
+                    group_name: backendAdmin.group_name || 'admin'  // Use backend group name or fallback
+                };
                 
-                if (backendAdmin) {
-                    // Update admin user with backend data while preserving is_system flag
-                    const adminUser = {
-                        ...backendAdmin,
-                        is_system: true,
-                        role: 'admin',  // Ensure admin role
-                        group_name: backendAdmin.group_name || 'admin'  // Use backend group name or fallback
-                    };
-                    
-                    // Get all other users from backend
-                    const otherUsers = response.users.filter(user => user.username !== 'admin');
-                    
-                    // Set all users with admin first
-                    setUsers([adminUser, ...otherUsers]);
-                } else {
-                    // If no admin in backend, use default admin user
-                    const adminGroup = groups.find(g => g.name === 'admin');
-                    const defaultAdmin = {
-                        ...DEFAULT_USERS[0],
-                        group_id: adminGroup?.id || 1,
-                        group_name: 'admin',
-                        permitted_stores: adminGroup?.permitted_stores || []
-                    };
-                    
-                    // Get all other users from backend
-                    const otherUsers = response.users;
-                    
-                    // Set all users with default admin first
-                    setUsers([defaultAdmin, ...otherUsers]);
-                }
+                // Get all other users from backend
+                const otherUsers = response.users.filter(user => user.username !== 'admin');
+                
+                // Set all users with admin first
+                setUsers([adminUser, ...otherUsers]);
+            } else {
+                // If no admin in backend, use default admin user
+                const adminGroup = groups.find(g => g.name === 'admin');
+                const defaultAdmin = {
+                    ...DEFAULT_USERS[0],
+                    group_id: adminGroup?.id || 1,
+                    group_name: 'admin',
+                    permitted_stores: adminGroup?.permitted_stores || []
+                };
+                
+                // Get all other users from backend
+                const otherUsers = response.users;
+                
+                // Set all users with default admin first
+                setUsers([defaultAdmin, ...otherUsers]);
             }
         } catch (error) {
             console.error('Error fetching users:', error);
-            message.error('Failed to load users');
+            setError(error.message || 'Failed to load users');
             // Fallback to admin user only with current groups data
             const adminGroup = groups.find(g => g.name === 'admin');
             const defaultAdmin = {
@@ -101,21 +124,33 @@ const UserManagement = () => {
                 permitted_stores: adminGroup?.permitted_stores || []
             };
             setUsers([defaultAdmin]);
+        } finally {
+            setLoading(false);
         }
     };
 
     // Fetch groups, stores, and users
     useEffect(() => {
         const initData = async () => {
-            await fetchGroups();   // Get groups first
-            await fetchStores();   // Then get stores
-            await fetchUsers();    // Finally get users
+            try {
+                setLoading(true);
+                setError('');
+                await fetchGroups();   // Get groups first
+                await fetchStores();   // Then get stores
+                await fetchUsers();    // Finally get users
+            } catch (error) {
+                console.error('Error initializing data:', error);
+                setError(error.message || 'Failed to initialize data');
+            } finally {
+                setLoading(false);
+            }
         };
         initData();
     }, []);
 
     const handleAdd = () => {
         setEditingUser(null);
+        setError('');
         form.resetFields();
         setIsModalVisible(true);
     };
@@ -126,6 +161,7 @@ const UserManagement = () => {
             return;
         }
         setEditingUser(user);
+        setError('');
         form.setFieldsValue({
             username: user.username,
             role: user.role,
@@ -136,6 +172,9 @@ const UserManagement = () => {
 
     const handleSubmit = async (values) => {
         try {
+            setLoading(true);
+            setError('');
+            
             // Get the selected group's role
             const selectedGroup = groups.find(g => g.id === values.group_id);
             if (!selectedGroup) {
@@ -150,20 +189,24 @@ const UserManagement = () => {
 
             let response;
             if (editingUser) {
-                response = await userApi.updateUser(editingUser.id, userData);
+                response = await userService.updateUser(editingUser.id, userData);
             } else {
-                response = await userApi.createUser(userData);
+                response = await userService.createUser(userData);
             }
 
-            if (response?.success) {
-                message.success(`User ${editingUser ? 'updated' : 'created'} successfully`);
-                setIsModalVisible(false);
-                form.resetFields();
-                fetchUsers();
+            if (!response?.success) {
+                throw new Error(response?.error || `Failed to ${editingUser ? 'update' : 'create'} user`);
             }
+
+            message.success(`User ${editingUser ? 'updated' : 'created'} successfully`);
+            setIsModalVisible(false);
+            form.resetFields();
+            await fetchUsers();
         } catch (error) {
             console.error('Error saving user:', error);
-            message.error(error.response?.data?.error || `Failed to ${editingUser ? 'update' : 'create'} user`);
+            setError(error.message || `Failed to ${editingUser ? 'update' : 'create'} user`);
+        } finally {
+            setLoading(false);
         }
     };
 
@@ -178,15 +221,22 @@ const UserManagement = () => {
 
     const confirmDelete = async () => {
         try {
-            const response = await userApi.deleteUser(userToDelete.id);
-            if (response?.success) {
-                message.success('User deleted successfully');
-                await fetchUsers();
+            setLoading(true);
+            setError('');
+            
+            const response = await userService.deleteUser(userToDelete.id);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to delete user');
             }
+            
+            message.success('User deleted successfully');
+            await fetchUsers();
         } catch (error) {
             console.error('Error deleting user:', error);
-            message.error(error.response?.data?.error || 'Failed to delete user');
+            setError(error.message || 'Failed to delete user');
         } finally {
+            setLoading(false);
             setDeleteConfirmVisible(false);
             setUserToDelete(null);
         }
@@ -248,11 +298,13 @@ const UserManagement = () => {
                                 <div key={storeId} style={{ marginBottom: 8 }}>
                                     <strong>{store.name}:</strong>
                                     <br />
-                                    <Space>
-                                        {features.inventory && <Tag color="blue">Inventory</Tag>}
-                                        {features.orders && <Tag color="green">Orders</Tag>}
-                                        {features.rma && <Tag color="orange">RMA</Tag>}
-                                    </Space>
+                                    {Object.entries(features).map(([feature, hasAccess]) => 
+                                        hasAccess ? (
+                                            <Tag key={feature} color="green" style={{ margin: '4px' }}>
+                                                {feature}
+                                            </Tag>
+                                        ) : null
+                                    )}
                                 </div>
                             );
                         })}
@@ -266,17 +318,19 @@ const UserManagement = () => {
             render: (_, record) => (
                 <Space>
                     <Button
+                        type="link"
                         icon={<EditOutlined />}
                         onClick={() => handleEdit(record)}
-                        disabled={record.username === 'admin'}
+                        disabled={loading || record.is_system}
                     >
                         Edit
                     </Button>
                     <Button
+                        type="link"
                         danger
                         icon={<DeleteOutlined />}
                         onClick={() => handleDelete(record)}
-                        disabled={record.username === 'admin'}
+                        disabled={loading || record.is_system}
                     >
                         Delete
                     </Button>
@@ -286,32 +340,56 @@ const UserManagement = () => {
     ];
 
     return (
-        <div>
-            <div style={{ marginBottom: 16 }}>
-                <Button 
-                    type="primary" 
+        <div style={{ padding: '24px' }}>
+            <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <h2>User Management</h2>
+                <Button
+                    type="primary"
                     icon={<PlusOutlined />}
                     onClick={handleAdd}
+                    disabled={loading}
                 >
                     Add User
                 </Button>
             </div>
 
-            <Table 
-                columns={columns} 
+            {error && (
+                <Alert
+                    message="Error"
+                    description={error}
+                    type="error"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                />
+            )}
+
+            <Table
+                columns={columns}
                 dataSource={users}
                 rowKey="id"
+                loading={loading}
             />
 
             <Modal
-                title={editingUser ? "Edit User" : "Add User"}
+                title={editingUser ? 'Edit User' : 'Add User'}
                 open={isModalVisible}
                 onOk={() => form.submit()}
                 onCancel={() => {
                     setIsModalVisible(false);
+                    setError('');
                     form.resetFields();
                 }}
+                confirmLoading={loading}
             >
+                {error && (
+                    <Alert
+                        message={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                    />
+                )}
+                
                 <Form
                     form={form}
                     layout="vertical"
@@ -320,33 +398,17 @@ const UserManagement = () => {
                     <Form.Item
                         name="username"
                         label="Username"
-                        rules={[
-                            { required: true, message: 'Please input username' },
-                            { min: 3, message: 'Username must be at least 3 characters' }
-                        ]}
+                        rules={[{ required: true, message: 'Please input username!' }]}
                     >
-                        <Input />
+                        <Input disabled={loading} />
                     </Form.Item>
-
-                    {!editingUser && (
-                        <Form.Item
-                            name="password"
-                            label="Password"
-                            rules={[
-                                { required: true, message: 'Please input password' },
-                                { min: 6, message: 'Password must be at least 6 characters' }
-                            ]}
-                        >
-                            <Input.Password />
-                        </Form.Item>
-                    )}
 
                     <Form.Item
                         name="group_id"
                         label="Group"
-                        rules={[{ required: true, message: 'Please select a group' }]}
+                        rules={[{ required: true, message: 'Please select group!' }]}
                     >
-                        <Select>
+                        <Select disabled={loading}>
                             {groups.map(group => (
                                 <Option key={group.id} value={group.id}>
                                     {group.name}
@@ -354,22 +416,39 @@ const UserManagement = () => {
                             ))}
                         </Select>
                     </Form.Item>
+
+                    {!editingUser && (
+                        <Form.Item
+                            name="password"
+                            label="Password"
+                            rules={[{ required: true, message: 'Please input password!' }]}
+                        >
+                            <Input.Password disabled={loading} />
+                        </Form.Item>
+                    )}
                 </Form>
             </Modal>
 
             <Modal
-                title="Confirm Delete"
+                title="Delete User"
                 open={deleteConfirmVisible}
                 onOk={confirmDelete}
                 onCancel={() => {
                     setDeleteConfirmVisible(false);
                     setUserToDelete(null);
+                    setError('');
                 }}
-                okText="Yes, delete"
-                cancelText="No, cancel"
-                okButtonProps={{ danger: true }}
+                confirmLoading={loading}
             >
-                <p>Are you sure you want to delete the user "{userToDelete?.username}"?</p>
+                {error && (
+                    <Alert
+                        message={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                    />
+                )}
+                <p>Are you sure you want to delete user "{userToDelete?.username}"?</p>
                 <p>This action cannot be undone.</p>
             </Modal>
         </div>

@@ -17,8 +17,7 @@ import {
     RollbackOutlined,
     DatabaseOutlined
 } from '@ant-design/icons';
-import { storeApi, groupApi } from '../services/api';
-import api from '../services/api';
+import { storeService, userService } from '../api';
 import './Sidebar.css';
 import { Link } from 'react-router-dom';
 
@@ -100,21 +99,20 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
         return 0;
     }, [user?.group_name, getCachedNotificationCount]);
 
-    // 獲取用戶組權限和商店列表
     const fetchUserDataAndStores = useCallback(async () => {
-        if (!user?.id || isLoading || !canFetch()) return;
+        if (!user?.id || isLoading) return;
         
         setIsLoading(true);
         try {
             // 1. 獲取用戶詳細信息
-            const userResponse = await api.get('/users/me');
+            const userResponse = await userService.getCurrentUser();
             if (!userResponse?.success) {
                 throw new Error('Failed to fetch user details');
             }
             const userData = userResponse.user;
 
             // 2. 獲取群組信息
-            const groupsResponse = await groupApi.getGroups();
+            const groupsResponse = await userService.getGroups();
             if (!groupsResponse?.success) {
                 throw new Error('Failed to fetch groups');
             }
@@ -126,29 +124,51 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                 if (adminGroup) {
                     userGroupPermissions = {
                         success: true,
-                        permissions: adminGroup.permitted_stores,
-                        store_permissions: adminGroup.store_permissions,
+                        permissions: adminGroup.permitted_stores || [],
+                        store_permissions: adminGroup.store_permissions || {},
                         main_permissions: {
                             inventory: true,
-                            inventory_ram: true
+                            inventory_ram: true,
+                            outbound: true,
+                            inbound: true
                         }
                     };
                 }
             } else if (userData.group_id) {
                 const userGroup = groupsResponse.groups.find(g => g.id === userData.group_id);
                 if (userGroup) {
+                    // 確保 store_permissions 的格式正確
+                    const processedStorePermissions = {};
+                    Object.entries(userGroup.store_permissions || {}).forEach(([storeId, permissions]) => {
+                        // 確保 storeId 是數字
+                        const numericStoreId = parseInt(storeId, 10);
+                        if (!isNaN(numericStoreId)) {
+                            processedStorePermissions[numericStoreId] = {
+                                inventory: permissions.inventory === true || permissions.inventory === '1',
+                                orders: permissions.orders === true || permissions.orders === '1',
+                                rma: permissions.rma === true || permissions.rma === '1',
+                                outbound: permissions.outbound === true || permissions.outbound === '1'
+                            };
+                        }
+                    });
+
                     userGroupPermissions = {
                         success: true,
-                        permissions: userGroup.permitted_stores,
-                        store_permissions: userGroup.store_permissions,
-                        main_permissions: userGroup.main_permissions || {}
+                        permissions: userGroup.permitted_stores || [],
+                        store_permissions: processedStorePermissions,
+                        main_permissions: {
+                            inventory: userGroup.main_permissions?.inventory === true || userGroup.main_permissions?.inventory === '1',
+                            inventory_ram: userGroup.main_permissions?.inventory_ram === true || userGroup.main_permissions?.inventory_ram === '1',
+                            outbound: userGroup.main_permissions?.outbound === true || userGroup.main_permissions?.outbound === '1',
+                            inbound: userGroup.main_permissions?.inbound === true || userGroup.main_permissions?.inbound === '1'
+                        }
                     };
                 }
             }
             setGroupPermissions(userGroupPermissions);
 
             // 4. 獲取商店列表
-            const storesResponse = await storeApi.getStores();
+            const storesResponse = await storeService.getStores();
             if (!storesResponse?.success) {
                 throw new Error('Failed to fetch stores');
             }
@@ -156,8 +176,10 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             // 5. 根據權限過濾商店
             let filteredStores = storesResponse.stores;
             if (userData.role !== 'admin' && userGroupPermissions?.permissions) {
+                // 使用 store_permissions 來過濾商店
+                const permittedStoreIds = Object.keys(userGroupPermissions.store_permissions).map(id => parseInt(id, 10));
                 filteredStores = storesResponse.stores.filter(store => 
-                    userGroupPermissions.permissions.includes(store.id)
+                    permittedStoreIds.includes(store.id)
                 );
             }
             setStores(filteredStores);
@@ -170,14 +192,14 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
         } finally {
             setIsLoading(false);
         }
-    }, [user?.id, isLoading, fetchNotificationCounts, canFetch]);
+    }, [user?.id, isLoading, fetchNotificationCounts]);
 
-    // 只在用戶ID變化時獲取數據
+    // 初始化權限
     useEffect(() => {
-        if (user?.id) {
+        if (user?.id && !groupPermissions) {
             fetchUserDataAndStores();
         }
-    }, [user?.id]);
+    }, [user?.id, groupPermissions, fetchUserDataAndStores]);
 
     // 定期更新通知計數
     useEffect(() => {
@@ -193,14 +215,13 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
     }, [user?.id, fetchNotificationCounts]);
 
     const handleLogout = useCallback(() => {
-        console.log('Logging out...');
         logout();
         navigate('/login');
     }, [logout, navigate]);
 
     const handleAddStore = async (values) => {
         try {
-            const response = await storeApi.addStore(values);
+            const response = await storeService.createStore(values);
             if (response?.success) {
                 message.success('Store added successfully');
                 form.resetFields();
@@ -297,7 +318,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
         const hasStorePermissions = user?.group_name === 'admin' || 
             (groupPermissions?.store_permissions && 
              Object.values(groupPermissions.store_permissions).some(perm => 
-                perm.inventory || perm.orders || perm.rma
+                perm.inventory === true || perm.orders === true || perm.rma === true || perm.outbound === true
              ));
 
         // Show Branches menu if user has permissions
@@ -322,7 +343,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                 const menuItems = [];
 
                 // Add menu items based on permissions
-                if (user?.group_name === 'admin' || storePermissions.inventory) {
+                if (user?.group_name === 'admin' || storePermissions.inventory === true) {
                     const notificationCount = getCachedNotificationCount('inventory', store.id);
                     menuItems.push({
                         key: `/stores/${store.id}`,
@@ -336,7 +357,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                     });
                 }
 
-                if (user?.group_name === 'admin' || storePermissions.orders) {
+                if (user?.group_name === 'admin' || storePermissions.orders === true) {
                     const notificationCount = getCachedNotificationCount('order', store.id);
                     menuItems.push({
                         key: `/stores/${store.id}/orders`,
@@ -350,7 +371,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                     });
                 }
 
-                if (user?.group_name === 'admin' || storePermissions.rma) {
+                if (user?.group_name === 'admin' || storePermissions.rma === true) {
                     const notificationCount = getCachedNotificationCount('rma', store.id);
                     menuItems.push({
                         key: `/stores/${store.id}/rma`,
@@ -370,17 +391,17 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                     let totalNotifications = 0;
                     
                     // Only count notifications for sections the user has permission to see
-                    if (user?.group_name === 'admin' || storePermissions.inventory) {
+                    if (user?.group_name === 'admin' || storePermissions.inventory === true) {
                         const inventoryCount = getCachedNotificationCount('inventory', store.id);
                         totalNotifications += inventoryCount || 0;
                     }
                     
-                    if (user?.group_name === 'admin' || storePermissions.orders) {
+                    if (user?.group_name === 'admin' || storePermissions.orders === true) {
                         const orderCount = getCachedNotificationCount('order', store.id);
                         totalNotifications += orderCount || 0;
                     }
                     
-                    if (user?.group_name === 'admin' || storePermissions.rma) {
+                    if (user?.group_name === 'admin' || storePermissions.rma === true) {
                         const rmaCount = getCachedNotificationCount('rma', store.id);
                         totalNotifications += rmaCount || 0;
                     }
@@ -424,7 +445,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
         });
 
         return menuItems;
-    }, [stores, groupPermissions, user?.group_name, navigate, handleLogout, getCachedNotificationCount, handleNavigateAndClearNotification]);
+    }, [user?.group_name, groupPermissions, stores, getCachedNotificationCount, navigate, handleLogout, handleNavigateAndClearNotification]);
 
     const handleMenuClick = (e) => {
         if (e.key === 'logout') {
