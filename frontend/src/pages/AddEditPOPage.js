@@ -27,6 +27,7 @@ import poService from '../services/poService';
 import { PlusOutlined, MenuOutlined } from '@ant-design/icons';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import styled from 'styled-components';
+import { useLocation } from 'react-router-dom';
 
 const StyledDatePicker = styled(DatePicker)`
     input {
@@ -178,6 +179,7 @@ const AddEditPOPage = () => {
     const isEditing = !!id;
     const [form] = Form.useForm();
     const [itemForm] = Form.useForm();
+    const location = useLocation();
     
     // State
     const [loading, setLoading] = useState(false);
@@ -247,7 +249,14 @@ const AddEditPOPage = () => {
     useEffect(() => {
         if (!isEditing) {
             try {
-                // 嘗試從 localStorage 加載數據
+                // 檢查是否有導入的數據
+                const { state } = location;
+                if (state?.importedItems) {
+                    setItems(state.importedItems);
+                    return;
+                }
+
+                // 如果沒有導入的數據，嘗試從 localStorage 加載
                 const savedItems = localStorage.getItem('tempItemList');
                 if (savedItems) {
                     const parsedItems = JSON.parse(savedItems);
@@ -268,7 +277,7 @@ const AddEditPOPage = () => {
                 console.error('Error loading saved data:', error);
             }
         }
-    }, [isEditing, form]);
+    }, [isEditing, form, location]);
 
     // 初始化數據
     useEffect(() => {
@@ -585,7 +594,7 @@ const AddEditPOPage = () => {
                     order_date: values.date.format('YYYY-MM-DD'),
                     supplier: values.supplier?.trim() || 'none',
                     notes: values.note?.trim() || '',
-                    status: 'draft'
+                    status: 'verified'
                 },
                 items: items.map(item => ({
                     serialnumber: item.serialnumber,
@@ -608,8 +617,10 @@ const AddEditPOPage = () => {
             localStorage.removeItem('tempPOData');
             localStorage.removeItem('tempItemList');
 
-            // Navigate back to PO list
-            navigate('/inbound/purchase-order');
+            // Navigate back to PO list with Order List tab active
+            navigate('/inbound/purchase-order', { 
+                state: { activeTab: 'order-list' }
+            });
         } catch (error) {
             if (error.response?.data?.errors) {
                 message.error(error.response.data.errors.join('\n'));
@@ -812,7 +823,11 @@ const AddEditPOPage = () => {
                                 return (
                                     <Table.Summary.Row>
                                         <Table.Summary.Cell index={0} colSpan={selectedCategories.length + 1}>
-                                            <strong>Total Cost</strong>
+                                            <Space>
+                                                <strong>Total Items: {pageData.length}</strong>
+                                                <Divider type="vertical" />
+                                                <strong>Total Cost</strong>
+                                            </Space>
                                         </Table.Summary.Cell>
                                         <Table.Summary.Cell index={selectedCategories.length + 1}>
                                             <strong>${total.toFixed(2)}</strong>

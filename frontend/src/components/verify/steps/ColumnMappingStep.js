@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
-import { Table, Select, Button, Space, Tooltip, Tag, Alert, message } from 'antd';
-import { QuestionCircleOutlined } from '@ant-design/icons';
+import React, { useEffect, useState } from 'react';
+import { Table, Select, Button, Space, Tooltip, Tag, Alert, message, Drawer } from 'antd';
+import { QuestionCircleOutlined, EyeOutlined } from '@ant-design/icons';
 
 const { Option } = Select;
 
@@ -10,6 +10,10 @@ const ColumnMappingStep = ({
     categories,
     sheetData
 }) => {
+    const [previewVisible, setPreviewVisible] = useState(false);
+    const [previewColumn, setPreviewColumn] = useState(null);
+    const [previewData, setPreviewData] = useState([]);
+
     // 自動匹配列
     useEffect(() => {
         if (columnMapping.length > 0) {
@@ -103,6 +107,17 @@ const ColumnMappingStep = ({
         return [...basicFields, ...categoryFields];
     };
 
+    // 處理預覽
+    const handlePreview = (columnName) => {
+        const preview = sheetData.slice(0, 5).map((row, index) => ({
+            key: index,
+            value: row[columnName]
+        }));
+        setPreviewData(preview);
+        setPreviewColumn(columnName);
+        setPreviewVisible(true);
+    };
+
     // 表格列定義
     const columns = [
         {
@@ -113,19 +128,11 @@ const ColumnMappingStep = ({
             render: (text) => (
                 <Space>
                     {text}
-                    <Tooltip title="Preview first 3 values">
-                        <Button 
-                            type="link" 
-                            icon={<QuestionCircleOutlined />}
-                            onClick={() => {
-                                const preview = sheetData
-                                    .slice(0, 3)
-                                    .map(row => row[text])
-                                    .join(', ');
-                                message.info(`Preview: ${preview}`);
-                            }}
-                        />
-                    </Tooltip>
+                    <Button 
+                        type="link" 
+                        icon={<EyeOutlined />}
+                        onClick={() => handlePreview(text)}
+                    />
                 </Space>
             )
         },
@@ -197,6 +204,23 @@ const ColumnMappingStep = ({
         }
     ];
 
+    // 預覽表格列定義
+    const previewColumns = [
+        {
+            title: 'Row',
+            dataIndex: 'key',
+            key: 'key',
+            width: '20%',
+            render: (text) => `Row ${text + 1}`
+        },
+        {
+            title: 'Value',
+            dataIndex: 'value',
+            key: 'value',
+            width: '80%'
+        }
+    ];
+
     return (
         <div>
             <Alert
@@ -213,6 +237,29 @@ const ColumnMappingStep = ({
                 pagination={false}
                 size="middle"
             />
+
+            <Drawer
+                title={`Preview: ${previewColumn || ''}`}
+                placement="right"
+                onClose={() => setPreviewVisible(false)}
+                open={previewVisible}
+                width={400}
+            >
+                <Table
+                    dataSource={previewData}
+                    columns={previewColumns}
+                    pagination={false}
+                    size="small"
+                />
+                <div style={{ marginTop: 16 }}>
+                    <Alert
+                        message="Note"
+                        description="Showing first 5 rows of data"
+                        type="info"
+                        showIcon
+                    />
+                </div>
+            </Drawer>
         </div>
     );
 };

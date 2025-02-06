@@ -240,18 +240,27 @@ const PurchaseOrderPage = () => {
         setVerifyModalVisible(true);
     };
 
-    // Add handleVerifyComplete function
-    const handleVerifyComplete = async (processedData) => {
-        try {
-            // TODO: Create PO with processed data
-            message.success('Purchase order created successfully');
-            setVerifyModalVisible(false);
-            setVerifyingRecord(null);
-            // Refresh the list
-            fetchPOList();
-        } catch (error) {
-            message.error('Failed to create purchase order');
-        }
+    // 處理驗證完成
+    const handleVerifyComplete = (processedItems) => {
+        // 更新當前記錄的狀態為 verified
+        const updatedData = orderListData.map(item => {
+            if (item.id === verifyingRecord.id) {
+                return {
+                    ...item,
+                    status: 'verified'
+                };
+            }
+            return item;
+        });
+        
+        // 保存更新後的數據到 localStorage
+        setOrderListData(updatedData);
+        saveToLocalStorage(updatedData);
+        
+        // 導航到添加頁面
+        navigate('/inbound/purchase-order/add', {
+            state: { importedItems: processedItems }
+        });
     };
 
     // 優化數據加載
@@ -259,11 +268,31 @@ const PurchaseOrderPage = () => {
         try {
             setLoading(true);
             const response = await poService.getAllPOs();
-            if (response?.data?.data) {  // 確保訪問正確的數據路徑
-                setInboundPoData(response.data.data);
+            if (response?.data?.data) {
+                // 獲取每個 PO 的詳細信息以獲取正確的 items 數量
+                const poList = response.data.data;
+                const detailedPoList = await Promise.all(
+                    poList.map(async (po) => {
+                        try {
+                            const detailResponse = await poService.getPOById(po.id);
+                            if (detailResponse?.data?.success) {
+                                return {
+                                    ...po,
+                                    total_items: detailResponse.data.data.items?.length || 0
+                                };
+                            }
+                            return po;
+                        } catch (error) {
+                            console.error(`Error fetching details for PO ${po.id}:`, error);
+                            return po;
+                        }
+                    })
+                );
+
+                setInboundPoData(detailedPoList);
                 // 緩存數據
                 localStorage.setItem('po_list_cache', JSON.stringify({
-                    data: response.data.data,
+                    data: detailedPoList,
                     timestamp: Date.now()
                 }));
             } else {
@@ -357,10 +386,10 @@ const PurchaseOrderPage = () => {
             key: 'status',
             render: (status) => (
                 <span style={{ 
-                    color: status === 'pending' ? '#faad14' : 
-                           status === 'verified' ? '#52c41a' : '#1890ff' 
+                    color: status === 'verified' ? '#52c41a' : 
+                           status === 'pending' ? '#faad14' : '#1890ff' 
                 }}>
-                    {status}
+                    {status === 'pending' ? 'Verified' : status}
                 </span>
             ),
         },
@@ -443,25 +472,15 @@ const PurchaseOrderPage = () => {
             onFilter: (value, record) => record.supplier === value,
         },
         {
-            title: 'Status',
-            dataIndex: 'status',
-            key: 'status',
-            render: (status) => (
-                <Tag color={
-                    status === 'draft' ? 'default' :
-                    status === 'pending' ? 'processing' :
-                    status === 'completed' ? 'success' :
-                    'default'
-                }>
-                    {status.toUpperCase()}
+            title: 'Total Items',
+            dataIndex: 'total_items',
+            key: 'total_items',
+            render: (_, record) => (
+                <Tag color="blue">
+                    {record.total_items || record.items?.length || 0}
                 </Tag>
             ),
-            filters: [
-                { text: 'Draft', value: 'draft' },
-                { text: 'Pending', value: 'pending' },
-                { text: 'Completed', value: 'completed' },
-            ],
-            onFilter: (value, record) => record.status === value,
+            width: 100
         },
         {
             title: 'Total Amount',

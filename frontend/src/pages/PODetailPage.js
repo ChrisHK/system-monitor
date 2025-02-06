@@ -162,8 +162,11 @@ const PODetailPage = () => {
                                     valueStyle={{ color: '#cf1322' }}
                                 />
                             </Descriptions.Item>
-                            <Descriptions.Item label="Note" span={2}>
+                            <Descriptions.Item label="Note">
                                 {poData.order.notes || '-'}
+                            </Descriptions.Item>
+                            <Descriptions.Item label="Total Items">
+                                {poData.items?.length || 0}
                             </Descriptions.Item>
                         </Descriptions>
 

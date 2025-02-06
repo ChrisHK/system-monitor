@@ -11,12 +11,13 @@ const VerifyDialog = ({
     onCancel, 
     onComplete,
     sheetData,
-    categories 
+    categories
 }) => {
     const [currentStep, setCurrentStep] = useState(0);
     const [columnMapping, setColumnMapping] = useState([]);
     const [loading, setLoading] = useState(false);
     const [processedData, setProcessedData] = useState(null);
+    const [tagMatches, setTagMatches] = useState({});
 
     // 初始化時獲取Excel的列
     useEffect(() => {
@@ -46,6 +47,11 @@ const VerifyDialog = ({
         setColumnMapping(newMapping);
     };
 
+    // 處理標籤匹配更新
+    const handleTagMatchesUpdate = (newMatches) => {
+        setTagMatches(newMatches);
+    };
+
     // 處理下一步
     const handleNext = () => {
         if (currentStep === 0) {
@@ -60,6 +66,21 @@ const VerifyDialog = ({
                 message.error('Please map all required fields (Serial Number and Cost)');
                 return;
             }
+        } else if (currentStep === 1) {
+            // 驗證是否所有分類都已匹配
+            const categoryColumns = columnMapping.filter(
+                col => col.type === 'category' && col.status === 'matched'
+            );
+            
+            const hasUnmatched = categoryColumns.some(col => {
+                const categoryId = col.targetField.split('_')[1];
+                const matches = tagMatches[categoryId] || [];
+                return matches.some(match => match.status === 'unmatched');
+            });
+
+            if (hasUnmatched) {
+                message.warning('Some tags are not matched. Continue anyway?');
+            }
         }
         setCurrentStep(currentStep + 1);
     };
@@ -67,6 +88,50 @@ const VerifyDialog = ({
     // 處理上一步
     const handlePrev = () => {
         setCurrentStep(currentStep - 1);
+    };
+
+    // 處理完成
+    const handleComplete = () => {
+        // 生成處理後的數據
+        const processedItems = sheetData.map(row => {
+            const item = {};
+
+            // 處理基本字段
+            columnMapping.forEach(mapping => {
+                if (mapping.status === 'matched') {
+                    if (mapping.type === 'basic') {
+                        item[mapping.targetField] = row[mapping.excelColumn];
+                    }
+                }
+            });
+
+            // 處理分類標籤
+            item.categories = [];
+            columnMapping
+                .filter(mapping => mapping.type === 'category' && mapping.status === 'matched')
+                .forEach(mapping => {
+                    const categoryId = mapping.targetField.split('_')[1];
+                    const value = row[mapping.excelColumn];
+                    if (value && tagMatches[categoryId]) {
+                        const match = tagMatches[categoryId].find(m => m.value === value);
+                        if (match?.tagId) {
+                            item.categories.push({
+                                category_id: parseInt(categoryId),
+                                tag_id: match.tagId
+                            });
+                        }
+                    }
+                });
+
+            return item;
+        });
+
+        // 保存到 localStorage 以便在 AddEditPOPage 中使用
+        localStorage.setItem('importedItems', JSON.stringify(processedItems));
+        
+        // 關閉對話框並導航到添加頁面
+        onCancel();
+        onComplete(processedItems);
     };
 
     // 渲染步驟內容
@@ -82,9 +147,25 @@ const VerifyDialog = ({
                     />
                 );
             case 1:
-                return <TagMatchingStep />;
+                return (
+                    <TagMatchingStep
+                        columnMapping={columnMapping}
+                        categories={categories}
+                        sheetData={sheetData}
+                        tagMatches={tagMatches}
+                        onTagMatchesUpdate={handleTagMatchesUpdate}
+                    />
+                );
             case 2:
-                return <DataPreviewStep />;
+                return (
+                    <DataPreviewStep
+                        processedData={processedData}
+                        columnMapping={columnMapping}
+                        categories={categories}
+                        sheetData={sheetData}
+                        tagMatches={tagMatches}
+                    />
+                );
             default:
                 return null;
         }
@@ -106,10 +187,10 @@ const VerifyDialog = ({
                 ) : (
                     <Button 
                         type="primary" 
-                        onClick={onComplete}
+                        onClick={handleComplete}
                         loading={loading}
                     >
-                        Create PO
+                        Confirm
                     </Button>
                 )}
             </div>
