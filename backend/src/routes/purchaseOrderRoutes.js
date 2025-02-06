@@ -2,6 +2,39 @@ const express = require('express');
 const router = express.Router();
 const { auth } = require('../middleware/auth');
 const purchaseOrderController = require('../controllers/purchaseOrderController');
+const { pool } = require('../db');
+
+// Get latest PO number
+router.get('/latest-number', auth, async (req, res) => {
+    const { date } = req.query;
+    try {
+        const result = await pool.query(`
+            SELECT po_number 
+            FROM purchase_orders 
+            WHERE po_number LIKE $1 
+            ORDER BY po_number DESC 
+            LIMIT 1
+        `, [`${date}%`]);
+
+        const latestNumber = result.rows.length > 0 
+            ? parseInt(result.rows[0].po_number.slice(-3))
+            : 0;
+
+        res.json({
+            success: true,
+            number: latestNumber
+        });
+    } catch (error) {
+        console.error('Error getting latest PO number:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                message: 'Failed to get latest PO number',
+                details: error.message
+            }
+        });
+    }
+});
 
 // Get all purchase orders with filters
 router.get('/', auth, purchaseOrderController.getPurchaseOrders);

@@ -1,10 +1,11 @@
-const db = require('../config/database');
+const { pool } = require('../config/database');
 const ExcelJS = require('exceljs');
 const { validatePurchaseOrder } = require('../utils/validation');
 const { handleError } = require('../utils/errorHandler');
 
 // Get all purchase orders with filters
 const getPurchaseOrders = async (req, res) => {
+    const client = await pool.connect();
     try {
         const { 
             search, 
@@ -17,56 +18,66 @@ const getPurchaseOrders = async (req, res) => {
             sortOrder = 'DESC'
         } = req.query;
 
-        let query = `
-            SELECT 
-                po.*,
-                u.username as created_by_username
-            FROM purchase_orders po
-            LEFT JOIN users u ON po.created_by = u.id
-            WHERE 1=1
-        `;
+        // 構建基本查詢條件
+        let conditions = ['1=1'];
         const values = [];
         let valueIndex = 1;
 
         if (search) {
-            query += ` AND (po.po_name ILIKE $${valueIndex} OR po.po_note ILIKE $${valueIndex})`;
+            conditions.push(`(po.po_number ILIKE $${valueIndex} OR po.notes ILIKE $${valueIndex})`);
             values.push(`%${search}%`);
             valueIndex++;
         }
 
         if (startDate) {
-            query += ` AND po.po_date >= $${valueIndex}`;
+            conditions.push(`po.order_date >= $${valueIndex}`);
             values.push(startDate);
             valueIndex++;
         }
 
         if (endDate) {
-            query += ` AND po.po_date <= $${valueIndex}`;
+            conditions.push(`po.order_date <= $${valueIndex}`);
             values.push(endDate);
             valueIndex++;
         }
 
         if (status) {
-            query += ` AND po.po_status = $${valueIndex}`;
+            conditions.push(`po.status = $${valueIndex}`);
             values.push(status);
             valueIndex++;
         }
 
-        // Add sorting
-        query += ` ORDER BY po.${sortField} ${sortOrder}`;
+        // 構建 WHERE 子句
+        const whereClause = conditions.join(' AND ');
 
-        // Add pagination
+        // 獲取總數
+        const countQuery = `
+            SELECT COUNT(*) as total
+            FROM purchase_orders po
+            WHERE ${whereClause}
+        `;
+        
+        const countResult = await client.query(countQuery, values);
+        const totalCount = parseInt(countResult.rows[0].total);
+
+        // 構建主查詢
+        const query = `
+            SELECT 
+                po.*,
+                u.username as created_by_username
+            FROM purchase_orders po
+            LEFT JOIN users u ON po.created_by = u.id
+            WHERE ${whereClause}
+            ORDER BY po.${sortField} ${sortOrder}
+            LIMIT $${valueIndex} OFFSET $${valueIndex + 1}
+        `;
+
+        // 添加分頁參數
         const offset = (page - 1) * pageSize;
-        query += ` LIMIT $${valueIndex} OFFSET $${valueIndex + 1}`;
         values.push(pageSize, offset);
 
-        // Get total count
-        const countQuery = query.replace(/SELECT.*FROM/, 'SELECT COUNT(*) FROM').split('ORDER BY')[0];
-        const countResult = await db.query(countQuery, values.slice(0, -2));
-        const totalCount = parseInt(countResult.rows[0].count);
-
-        // Get paginated results
-        const result = await db.query(query, values);
+        // 執行主查詢
+        const result = await client.query(query, values);
 
         res.json({
             success: true,
@@ -78,15 +89,20 @@ const getPurchaseOrders = async (req, res) => {
             }
         });
     } catch (error) {
+        console.error('Error in getPurchaseOrders:', error);
         handleError(res, error);
+    } finally {
+        client.release();
     }
 };
 
 // Get a specific purchase order by ID
 const getPurchaseOrderById = async (req, res) => {
+    const client = await pool.connect();
     try {
         const { id } = req.params;
 
+        // Get PO data
         const orderQuery = `
             SELECT 
                 po.*,
@@ -96,13 +112,51 @@ const getPurchaseOrderById = async (req, res) => {
             WHERE po.id = $1
         `;
 
+        // Get PO items with their categories and tags
         const itemsQuery = `
-            SELECT * FROM purchase_order_items
-            WHERE po_id = $1
-            ORDER BY id
+            SELECT 
+                poi.*,
+                COALESCE(
+                    json_agg(
+                        CASE WHEN pic.category_id IS NOT NULL THEN
+                            json_build_object(
+                                'category_id', pic.category_id,
+                                'tag_id', pic.tag_id,
+                                'tag_name', t.name
+                            )
+                        ELSE NULL END
+                    ) FILTER (WHERE pic.category_id IS NOT NULL),
+                    '[]'
+                ) as categories
+            FROM purchase_order_items poi
+            LEFT JOIN po_item_categories pic ON poi.id = pic.po_item_id
+            LEFT JOIN tags t ON t.id = pic.tag_id
+            WHERE poi.po_id = $1
+            GROUP BY poi.id
+            ORDER BY poi.id
         `;
 
-        const orderResult = await db.query(orderQuery, [id]);
+        // Get all active categories in the correct order
+        const categoriesQuery = `
+            SELECT DISTINCT tc.id, tc.name,
+                CASE tc.name
+                    WHEN 'Brand' THEN 1
+                    WHEN 'Model' THEN 2
+                    WHEN 'CPU' THEN 3
+                    WHEN 'Memory' THEN 4
+                    WHEN 'Storage' THEN 5
+                    WHEN 'Graphics Card' THEN 6
+                    WHEN 'Touch Screen' THEN 7
+                    WHEN 'Condition' THEN 8
+                    WHEN 'Damages' THEN 9
+                    ELSE 10
+                END as sort_order
+            FROM tag_categories tc
+            WHERE tc.is_active = true
+            ORDER BY sort_order
+        `;
+
+        const orderResult = await client.query(orderQuery, [id]);
         if (orderResult.rows.length === 0) {
             return res.status(404).json({
                 success: false,
@@ -110,74 +164,97 @@ const getPurchaseOrderById = async (req, res) => {
             });
         }
 
-        const itemsResult = await db.query(itemsQuery, [id]);
+        const itemsResult = await client.query(itemsQuery, [id]);
+        const categoriesResult = await client.query(categoriesQuery);
 
         res.json({
             success: true,
             data: {
                 order: orderResult.rows[0],
-                items: itemsResult.rows
+                items: itemsResult.rows.map(item => ({
+                    ...item,
+                    categories: item.categories.filter(Boolean)
+                })),
+                categories: categoriesResult.rows
             }
         });
     } catch (error) {
         handleError(res, error);
+    } finally {
+        client.release();
     }
 };
 
 // Create a new purchase order
 const createPurchaseOrder = async (req, res) => {
+    const client = await pool.connect();
     try {
-        const { order, items } = req.body;
-        const validation = validatePurchaseOrder(order, items);
+        const data = req.body;
         
-        if (!validation.isValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors: validation.errors
-            });
-        }
-
         // Start transaction
-        await db.query('BEGIN');
+        await client.query('BEGIN');
+
+        // Calculate total amount
+        const totalAmount = data.items.reduce((sum, item) => sum + Number(item.cost), 0);
 
         // Insert order
-        const orderResult = await db.query(`
+        const orderResult = await client.query(`
             INSERT INTO purchase_orders (
-                po_name, po_date, po_status, po_amount, po_note, created_by
-            ) VALUES ($1, $2, $3, $4, $5, $6)
+                po_number, order_date, supplier, status, total_amount, notes, created_by
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
         `, [
-            order.poName,
-            order.poDate,
-            order.poStatus || 'pending',
-            order.poAmount,
-            order.poNote,
-            req.user.id
+            data.order.po_number,
+            data.order.order_date,
+            data.order.supplier,
+            data.order.status || 'draft',
+            totalAmount,
+            data.order.notes || '',
+            req.user?.id || null
         ]);
 
         const poId = orderResult.rows[0].id;
 
-        // Insert items
-        for (const item of items) {
-            await db.query(`
+        // Insert items and their categories
+        for (const item of data.items) {
+            // Insert the item first
+            const itemResult = await client.query(`
                 INSERT INTO purchase_order_items (
-                    po_id, item_no, description, quantity, unit_price, 
-                    total_amount, supplier, remark
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    po_id, serialnumber, cost, so, note
+                ) VALUES ($1, $2, $3, $4, $5)
+                RETURNING id
             `, [
                 poId,
-                item.itemNo,
-                item.description,
-                item.quantity,
-                item.unitPrice,
-                item.totalAmount,
-                item.supplier,
-                item.remark
+                item.serialnumber,
+                Number(item.cost),
+                item.so || '',
+                item.note || ''
             ]);
+
+            const itemId = itemResult.rows[0].id;
+
+            // Insert category relationships if they exist
+            if (Array.isArray(item.categories)) {
+                // Delete any existing category relationships first
+                await client.query(`
+                    DELETE FROM po_item_categories 
+                    WHERE po_item_id = $1
+                `, [itemId]);
+
+                // Insert new category relationships
+                for (const cat of item.categories) {
+                    if (cat.category_id && cat.tag_id) {
+                        await client.query(`
+                            INSERT INTO po_item_categories (
+                                po_item_id, category_id, tag_id
+                            ) VALUES ($1, $2, $3)
+                        `, [itemId, cat.category_id, cat.tag_id]);
+                    }
+                }
+            }
         }
 
-        await db.query('COMMIT');
+        await client.query('COMMIT');
 
         res.json({
             success: true,
@@ -185,84 +262,122 @@ const createPurchaseOrder = async (req, res) => {
             data: { id: poId }
         });
     } catch (error) {
-        await db.query('ROLLBACK');
-        handleError(res, error);
+        await client.query('ROLLBACK');
+        res.status(500).json({
+            success: false,
+            error: {
+                message: error.message,
+                code: error.code || 'INTERNAL_ERROR'
+            }
+        });
+    } finally {
+        client.release();
     }
 };
 
 // Update a purchase order
 const updatePurchaseOrder = async (req, res) => {
+    const client = await pool.connect();
     try {
         const { id } = req.params;
         const { order, items } = req.body;
-        const validation = validatePurchaseOrder(order, items);
         
-        if (!validation.isValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Validation failed',
-                errors: validation.errors
-            });
-        }
+        console.log('Updating PO:', { id, order, items });
 
         // Start transaction
-        await db.query('BEGIN');
+        await client.query('BEGIN');
+
+        // Calculate total amount
+        const totalAmount = items.reduce((sum, item) => sum + Number(item.cost), 0);
 
         // Update order
-        await db.query(`
+        const orderResult = await client.query(`
             UPDATE purchase_orders 
-            SET po_name = $1, po_date = $2, po_status = $3, 
-                po_amount = $4, po_note = $5
-            WHERE id = $6
+            SET po_number = $1, 
+                order_date = $2, 
+                supplier = $3, 
+                status = $4, 
+                total_amount = $5, 
+                notes = $6,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $7
+            RETURNING id
         `, [
-            order.poName,
-            order.poDate,
-            order.poStatus,
-            order.poAmount,
-            order.poNote,
+            order.po_number,
+            order.order_date,
+            order.supplier,
+            order.status,
+            totalAmount,
+            order.notes,
             id
         ]);
 
-        // Delete existing items
-        await db.query('DELETE FROM purchase_order_items WHERE po_id = $1', [id]);
+        if (orderResult.rows.length === 0) {
+            throw new Error('Purchase order not found');
+        }
+
+        // Delete existing items and their category relationships
+        await client.query('DELETE FROM po_item_categories WHERE po_item_id IN (SELECT id FROM purchase_order_items WHERE po_id = $1)', [id]);
+        await client.query('DELETE FROM purchase_order_items WHERE po_id = $1', [id]);
 
         // Insert new items
         for (const item of items) {
-            await db.query(`
+            // Insert the item first
+            const itemResult = await client.query(`
                 INSERT INTO purchase_order_items (
-                    po_id, item_no, description, quantity, unit_price, 
-                    total_amount, supplier, remark
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    po_id, serialnumber, cost, so, note
+                ) VALUES ($1, $2, $3, $4, $5)
+                RETURNING id
             `, [
                 id,
-                item.itemNo,
-                item.description,
-                item.quantity,
-                item.unitPrice,
-                item.totalAmount,
-                item.supplier,
-                item.remark
+                item.serialnumber,
+                item.cost,
+                item.so || '',
+                item.note || ''
             ]);
+
+            const itemId = itemResult.rows[0].id;
+
+            // Insert category relationships if they exist
+            if (item.categories && Array.isArray(item.categories)) {
+                for (const cat of item.categories) {
+                    await client.query(`
+                        INSERT INTO po_item_categories (
+                            po_item_id, category_id, tag_id
+                        ) VALUES ($1, $2, $3)
+                    `, [itemId, cat.category_id, cat.tag_id]);
+                }
+            }
         }
 
-        await db.query('COMMIT');
+        await client.query('COMMIT');
 
         res.json({
             success: true,
             message: 'Purchase order updated successfully'
         });
     } catch (error) {
-        await db.query('ROLLBACK');
-        handleError(res, error);
+        await client.query('ROLLBACK');
+        console.error('Error updating purchase order:', error);
+        res.status(500).json({
+            success: false,
+            error: {
+                message: error.message,
+                code: error.code || 'INTERNAL_ERROR'
+            }
+        });
+    } finally {
+        client.release();
     }
 };
 
 // Delete a purchase order
 const deletePurchaseOrder = async (req, res) => {
+    const client = await pool.connect();
     try {
         const { id } = req.params;
 
-        const result = await db.query(
+        const result = await client.query(
             'DELETE FROM purchase_orders WHERE id = $1 RETURNING id',
             [id]
         );
@@ -280,6 +395,8 @@ const deletePurchaseOrder = async (req, res) => {
         });
     } catch (error) {
         handleError(res, error);
+    } finally {
+        client.release();
     }
 };
 

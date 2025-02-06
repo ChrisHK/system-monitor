@@ -10,6 +10,10 @@ import StoreSalesPage from './pages/StoreSalesPage';
 import StoreRmaPage from './pages/StoreRmaPage';
 import StoreOrdersPage from './pages/StoreOrdersPage';
 import InventoryRmaPage from './pages/InventoryRmaPage';
+import PurchaseOrderPage from './pages/PurchaseOrderPage';
+import AddEditPOPage from './pages/AddEditPOPage';
+import PODetailPage from './pages/PODetailPage';
+import TagManagementPage from './pages/TagManagementPage';
 import { useAuth } from './contexts/AuthContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
@@ -56,6 +60,41 @@ const App = () => {
                             <PrivateRoute>
                                 <Layout>
                                     <InventoryRmaPage />
+                                </Layout>
+                            </PrivateRoute>
+                        } />
+                        <Route path="/inbound/purchase-order" element={
+                            <PrivateRoute>
+                                <Layout>
+                                    <PurchaseOrderPage />
+                                </Layout>
+                            </PrivateRoute>
+                        } />
+                        <Route path="/inbound/purchase-order/add" element={
+                            <PrivateRoute>
+                                <Layout>
+                                    <AddEditPOPage />
+                                </Layout>
+                            </PrivateRoute>
+                        } />
+                        <Route path="/inbound/purchase-order/edit/:id" element={
+                            <PrivateRoute>
+                                <Layout>
+                                    <AddEditPOPage />
+                                </Layout>
+                            </PrivateRoute>
+                        } />
+                        <Route path="/inbound/purchase-order/detail/:id" element={
+                            <PrivateRoute>
+                                <Layout>
+                                    <PODetailPage />
+                                </Layout>
+                            </PrivateRoute>
+                        } />
+                        <Route path="/settings/tags" element={
+                            <PrivateRoute>
+                                <Layout>
+                                    <TagManagementPage />
                                 </Layout>
                             </PrivateRoute>
                         } />

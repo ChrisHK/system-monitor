@@ -1,34 +1,37 @@
-const fs = require('fs');
 const path = require('path');
-const { Pool } = require('pg');
+const fs = require('fs').promises;
 
-// 創建數據庫連接池
-const pool = new Pool({
-    user: 'zero',
-    host: 'localhost',
-    database: 'zerodev',
-    password: 'zero',
-    port: 5432,
-});
-
-async function runMigration() {
+async function runMigrations() {
     try {
-        // 讀取並執行 groups.sql
-        const groupsSqlPath = path.join(__dirname, 'migrations', 'groups.sql');
-        const groupsSql = fs.readFileSync(groupsSqlPath, 'utf8');
-        await pool.query(groupsSql);
-        console.log('Groups migration completed successfully');
-
-        // 讀取並執行 group_store_permissions.sql
-        const permissionsSqlPath = path.join(__dirname, 'migrations', 'group_store_permissions.sql');
-        const permissionsSql = fs.readFileSync(permissionsSqlPath, 'utf8');
-        await pool.query(permissionsSql);
-        console.log('Group store permissions migration completed successfully');
+        console.log('Starting database migrations...');
+        
+        // 獲取遷移腳本目錄
+        const migrationsDir = path.join(__dirname, 'migrations');
+        
+        // 讀取所有 .js 文件
+        const files = await fs.readdir(migrationsDir);
+        const jsFiles = files.filter(file => file.endsWith('.js'));
+        
+        // 按文件名排序
+        jsFiles.sort();
+        
+        // 執行每個遷移腳本
+        for (const file of jsFiles) {
+            console.log(`\nExecuting migration: ${file}`);
+            const migrationPath = path.join(migrationsDir, file);
+            require(migrationPath);
+            
+            // 等待一小段時間確保日誌順序正確
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        console.log('\nAll migrations completed');
+        
     } catch (error) {
         console.error('Migration failed:', error);
-    } finally {
-        await pool.end();
+        process.exit(1);
     }
 }
 
-runMigration(); 
+// 執行遷移
+runMigrations(); 

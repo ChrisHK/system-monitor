@@ -263,6 +263,8 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             groupPermissions?.main_permissions?.inventory_ram === true;
         const hasInboundPermission = user?.group_name === 'admin' || 
             groupPermissions?.main_permissions?.inbound === true;
+        const hasPurchaseOrderPermission = user?.group_name === 'admin' || 
+            groupPermissions?.main_permissions?.purchase_order === true;
 
         // Add Inventory menu item only if user has any inventory permissions
         if (hasInventoryPermission || hasInventoryRamPermission) {
@@ -270,7 +272,32 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
 
             // Add Inbound submenu if user has inbound permission
             if (hasInboundPermission) {
-                menuItems.push(getMenuItem('Inbound', '/inbound', <ImportOutlined />));
+                const inboundChildren = [];
+                
+                // Add Items submenu
+                inboundChildren.push({
+                    key: '/inbound',
+                    icon: <UnorderedListOutlined />,
+                    label: 'Items',
+                    onClick: () => navigate('/inbound')
+                });
+
+                // Add Purchase Order submenu if user has permission
+                if (hasPurchaseOrderPermission) {
+                    inboundChildren.push({
+                        key: '/inbound/purchase-order',
+                        icon: <ShoppingCartOutlined />,
+                        label: 'Purchase Order',
+                        onClick: () => navigate('/inbound/purchase-order')
+                    });
+                }
+
+                menuItems.push({
+                    key: 'inbound',
+                    icon: <ImportOutlined />,
+                    label: 'Inbound',
+                    children: inboundChildren
+                });
             }
 
             // Add Items submenu if user has inventory permission

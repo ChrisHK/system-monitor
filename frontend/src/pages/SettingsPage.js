@@ -4,6 +4,7 @@ import { Tabs, Card, Typography } from 'antd';
 import GroupManagement from '../components/settings/GroupManagement';
 import StoreManagement from '../components/settings/StoreManagement';
 import UserManagement from '../components/settings/UserManagement';
+import TagManagementPage from './TagManagementPage';
 
 const { Title } = Typography;
 
@@ -16,6 +17,7 @@ const SettingsPage = () => {
         if (currentPath === '/settings/stores') return 'stores';
         if (currentPath === '/settings/groups') return 'groups';
         if (currentPath === '/settings/users') return 'users';
+        if (currentPath === '/settings/tags') return 'tags';
         return 'stores';
     };
 
@@ -31,6 +33,10 @@ const SettingsPage = () => {
         {
             key: 'users',
             label: 'User Management',
+        },
+        {
+            key: 'tags',
+            label: 'Tag Management',
         }
     ];
 
@@ -53,6 +59,7 @@ const SettingsPage = () => {
                         <Route path="stores" element={<StoreManagement />} />
                         <Route path="groups" element={<GroupManagement />} />
                         <Route path="users" element={<UserManagement />} />
+                        <Route path="tags" element={<TagManagementPage />} />
                     </Routes>
                 </div>
             </Card>

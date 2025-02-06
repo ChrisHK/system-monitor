@@ -39,7 +39,8 @@ const DEFAULT_GROUPS = [
             inventory: true,
             inventory_ram: true,
             outbound: true,
-            inbound: true
+            inbound: true,
+            purchase_order: true
         },
         is_system: true
     }
@@ -155,7 +156,8 @@ const GroupManagement = () => {
                 inventory: false,
                 inventory_ram: false,
                 outbound: false,
-                inbound: false
+                inbound: false,
+                purchase_order: false
             }
         });
         setIsModalVisible(true);
@@ -201,7 +203,8 @@ const GroupManagement = () => {
                 inventory: group.main_permissions?.inventory ?? false,
                 inventory_ram: group.main_permissions?.inventory_ram ?? false,
                 outbound: group.main_permissions?.outbound ?? false,
-                inbound: group.main_permissions?.inbound ?? false
+                inbound: group.main_permissions?.inbound ?? false,
+                purchase_order: group.main_permissions?.purchase_order ?? false
             }
         };
 
@@ -428,6 +431,18 @@ const GroupManagement = () => {
                 valuePropName="checked"
             >
                 <Checkbox>Inbound Access</Checkbox>
+            </Form.Item>
+            <Form.Item
+                name={['main_permissions', 'purchase_order']}
+                valuePropName="checked"
+            >
+                <Checkbox>Purchase Order Access</Checkbox>
+            </Form.Item>
+            <Form.Item
+                name={['main_permissions', 'tag_management']}
+                valuePropName="checked"
+            >
+                <Checkbox>Tag Management Access</Checkbox>
             </Form.Item>
         </>
     );

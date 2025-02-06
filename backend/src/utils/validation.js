@@ -56,8 +56,44 @@ const validateRmaStatus = (currentStatus, newStatus) => {
     return true;
 };
 
+// 驗證採購訂單數據
+const validatePurchaseOrder = (data) => {
+    const errors = [];
+
+    // 驗證訂單基本信息
+    if (!data.po_number) {
+        errors.push('PO number is required');
+    }
+
+    if (!data.order_date) {
+        errors.push('Order date is required');
+    }
+
+    // 驗證訂單項目
+    if (!Array.isArray(data.items)) {
+        errors.push('Items must be an array');
+    } else if (data.items.length === 0) {
+        errors.push('At least one item is required');
+    } else {
+        data.items.forEach((item, index) => {
+            if (!item.serialnumber) {
+                errors.push(`Item ${index + 1}: Serial number is required`);
+            }
+            if (typeof item.cost !== 'number' || item.cost <= 0) {
+                errors.push(`Item ${index + 1}: Cost must be greater than 0`);
+            }
+        });
+    }
+
+    return {
+        isValid: errors.length === 0,
+        errors
+    };
+};
+
 module.exports = {
     validateGroupData,
     validateRmaStatus,
-    RMA_STATUS_FLOW
+    RMA_STATUS_FLOW,
+    validatePurchaseOrder
 }; 
