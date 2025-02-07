@@ -483,6 +483,30 @@ const PurchaseOrderPage = () => {
             width: 100
         },
         {
+            title: 'Matched SN',
+            key: 'matched_sn',
+            width: 200,
+            render: (_, record) => {
+                if (!searchText) return null;
+                const searchLower = searchText.toLowerCase();
+                const matchedSNs = record.items?.filter(item => 
+                    item.serialnumber?.toLowerCase().includes(searchLower)
+                ) || [];
+                
+                if (matchedSNs.length === 0) return null;
+                
+                return (
+                    <Space direction="vertical">
+                        {matchedSNs.map((item, index) => (
+                            <Tag key={index} color="green">
+                                {item.serialnumber}
+                            </Tag>
+                        ))}
+                    </Space>
+                );
+            }
+        },
+        {
             title: 'Total Amount',
             dataIndex: 'total_amount',
             key: 'total_amount',
@@ -530,7 +554,11 @@ const PurchaseOrderPage = () => {
             filteredData = filteredData.filter(po => 
                 po.po_number.toLowerCase().includes(searchLower) ||
                 po.supplier.toLowerCase().includes(searchLower) ||
-                (po.note && po.note.toLowerCase().includes(searchLower))
+                (po.note && po.note.toLowerCase().includes(searchLower)) ||
+                // 搜索 PO items 中的 Serial Number
+                po.items?.some(item => 
+                    item.serialnumber?.toLowerCase().includes(searchLower)
+                )
             );
         }
 
@@ -590,10 +618,10 @@ const PurchaseOrderPage = () => {
                 Add PO
             </Button>
             <Search
-                placeholder="Search PO number, supplier or note"
+                placeholder="Search PO number, supplier, note or serial number"
                 allowClear
                 onSearch={handleSearch}
-                style={{ width: 250 }}
+                style={{ width: 350 }}
             />
             <RangePicker
                 onChange={handleDateRangeChange}

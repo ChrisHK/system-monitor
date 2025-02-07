@@ -24,7 +24,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import moment from 'moment';
 import { useAuth } from '../contexts/AuthContext';
 import poService from '../services/poService';
-import { PlusOutlined, MenuOutlined } from '@ant-design/icons';
+import { PlusOutlined, MenuOutlined, EditOutlined } from '@ant-design/icons';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import styled from 'styled-components';
 import { useLocation } from 'react-router-dom';
@@ -192,6 +192,8 @@ const AddEditPOPage = () => {
     const [categoryTags, setCategoryTags] = useState({});
     const [availableCategories, setAvailableCategories] = useState([]);
     const [selectedCategories, setSelectedCategories] = useState([]);
+    const [editingItem, setEditingItem] = useState(null);
+    const [editModalVisible, setEditModalVisible] = useState(false);
 
     // 從 localStorage 加載保存的分類
     const loadSavedCategories = () => {
@@ -507,22 +509,23 @@ const AddEditPOPage = () => {
         setSelectedCategories(items);
     };
 
-    // Get table columns
+    // 獲取表格列定義
     const getColumns = () => {
         const columns = [
             {
                 title: 'Serial Number',
                 dataIndex: 'serialnumber',
                 key: 'serialnumber',
-                width: 150
+                width: 150,
+                fixed: 'left'
             }
         ];
 
-        // Add dynamic columns for each selected category
+        // 添加分類列
         selectedCategories.forEach(category => {
             columns.push({
                 title: category.name,
-                key: category.name,
+                key: `category_${category.id}`,
                 width: 120,
                 render: (_, record) => {
                     const categoryData = record.categories?.find(cat => 
@@ -535,7 +538,7 @@ const AddEditPOPage = () => {
             });
         });
 
-        // Add remaining static columns
+        // 添加其他基本列
         columns.push(
             {
                 title: 'Cost',
@@ -557,23 +560,97 @@ const AddEditPOPage = () => {
                 width: 150
             },
             {
-                title: 'Action',
-                key: 'action',
-                width: 80,
+                title: 'Actions',
+                key: 'actions',
+                fixed: 'right',
+                width: 100,
                 render: (_, record) => (
-                    <Popconfirm
-                        title="Are you sure to delete this item?"
-                        onConfirm={() => handleDeleteItem(record.id)}
-                        okText="Yes"
-                        cancelText="No"
-                    >
-                        <Button type="link" danger>Delete</Button>
-                    </Popconfirm>
+                    <Space>
+                        <Button
+                            type="link"
+                            icon={<EditOutlined />}
+                            onClick={() => handleEditItem(record)}
+                        >
+                            Edit
+                        </Button>
+                        <Popconfirm
+                            title="Are you sure to delete this item?"
+                            onConfirm={() => handleDeleteItem(record.id)}
+                            okText="Yes"
+                            cancelText="No"
+                        >
+                            <Button type="link" danger>Delete</Button>
+                        </Popconfirm>
+                    </Space>
                 )
             }
         );
 
         return columns;
+    };
+
+    // 處理編輯項目
+    const handleEditItem = (record) => {
+        setEditingItem(record);
+        // 設置表單初始值
+        const formValues = {
+            serialnumber: record.serialnumber,
+            cost: record.cost,
+            so: record.so || '',
+            note: record.note || '',
+        };
+        // 設置分類標籤的初始值
+        record.categories?.forEach(cat => {
+            formValues[`category_${cat.category_id}`] = cat.tag_id;
+        });
+        itemForm.setFieldsValue(formValues);
+        setEditModalVisible(true);
+    };
+
+    // 處理編輯保存
+    const handleEditSave = async () => {
+        try {
+            const values = await itemForm.validateFields();
+            
+            // 處理分類標籤
+            const categories = selectedCategories
+                .map(category => {
+                    const tagId = values[`category_${category.id}`];
+                    if (tagId) {
+                        return {
+                            category_id: category.id,
+                            tag_id: tagId
+                        };
+                    }
+                    return null;
+                })
+                .filter(Boolean);
+
+            // 更新項目數據
+            const updatedItem = {
+                ...editingItem,
+                serialnumber: values.serialnumber,
+                cost: Number(values.cost),
+                so: values.so || '',
+                note: values.note || '',
+                categories
+            };
+
+            // 更新列表
+            setItems(prevItems => 
+                prevItems.map(item => 
+                    item.id === editingItem.id ? updatedItem : item
+                )
+            );
+
+            message.success('Item updated successfully');
+            setEditModalVisible(false);
+            itemForm.resetFields();
+            setEditingItem(null);
+        } catch (error) {
+            console.error('Error updating item:', error);
+            message.error('Failed to update item');
+        }
     };
 
     // 處理表單提交
@@ -617,9 +694,9 @@ const AddEditPOPage = () => {
             localStorage.removeItem('tempPOData');
             localStorage.removeItem('tempItemList');
 
-            // Navigate back to PO list with Order List tab active
+            // Navigate back to PO list with Inbound PO tab active
             navigate('/inbound/purchase-order', { 
-                state: { activeTab: 'order-list' }
+                state: { activeTab: 'inbound-po' }
             });
         } catch (error) {
             if (error.response?.data?.errors) {
@@ -858,6 +935,100 @@ const AddEditPOPage = () => {
                             </Button>
                         </Space>
                     </div>
+
+                    {/* 編輯項目的模態框 */}
+                    <Modal
+                        title={
+                            <Space>
+                                <EditOutlined />
+                                <span>Edit Item</span>
+                            </Space>
+                        }
+                        open={editModalVisible}
+                        onOk={handleEditSave}
+                        onCancel={() => {
+                            setEditModalVisible(false);
+                            itemForm.resetFields();
+                            setEditingItem(null);
+                        }}
+                        width={800}
+                        maskClosable={false}
+                        destroyOnClose
+                    >
+                        <Form
+                            form={itemForm}
+                            layout="vertical"
+                        >
+                            <Row gutter={24}>
+                                <Col span={12}>
+                                    <Form.Item
+                                        name="serialnumber"
+                                        label="Serial Number"
+                                        rules={[{ required: true, message: 'Please input serial number' }]}
+                                    >
+                                        <Input />
+                                    </Form.Item>
+
+                                    <Form.Item
+                                        name="cost"
+                                        label="Cost"
+                                        rules={[{ required: true, message: 'Please input cost' }]}
+                                    >
+                                        <InputNumber
+                                            style={{ width: '100%' }}
+                                            min={0}
+                                            precision={2}
+                                            prefix="$"
+                                        />
+                                    </Form.Item>
+
+                                    <Form.Item
+                                        name="so"
+                                        label="SO"
+                                    >
+                                        <Input />
+                                    </Form.Item>
+
+                                    <Form.Item
+                                        name="note"
+                                        label="Note"
+                                    >
+                                        <Input.TextArea rows={2} />
+                                    </Form.Item>
+                                </Col>
+                                <Col span={12}>
+                                    <Card title="Categories" bordered={false}>
+                                        {selectedCategories.map(category => (
+                                            <Form.Item
+                                                key={category.id}
+                                                name={`category_${category.id}`}
+                                                label={category.name}
+                                            >
+                                                <Select
+                                                    allowClear
+                                                    showSearch
+                                                    placeholder={`Select ${category.name}`}
+                                                    filterOption={false}
+                                                    onSearch={(value) => handleTagSearch(category.id, value)}
+                                                    onSelect={(value) => handleTagSelect(category.id, value)}
+                                                >
+                                                    {categoryTags[category.id]?.map(tag => (
+                                                        <Option 
+                                                            key={tag.id} 
+                                                            value={tag.id}
+                                                            className={tag.isNew ? 'new-tag-option' : ''}
+                                                        >
+                                                            {tag.name}
+                                                        </Option>
+                                                    ))}
+                                                </Select>
+                                            </Form.Item>
+                                        ))}
+                                    </Card>
+                                </Col>
+                            </Row>
+                        </Form>
+                    </Modal>
                 </Space>
             </div>
         </DragDropContext>

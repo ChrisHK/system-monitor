@@ -101,6 +101,26 @@ const poService = {
     
     deletePO: (id) => api.delete(`/purchase-orders/${id}`),
 
+    // 獲取所有 PO items
+    getAllPOItems: async (params = {}) => {
+        try {
+            const queryParams = new URLSearchParams();
+            if (params.search) queryParams.append('search', params.search);
+            if (params.categoryId) queryParams.append('category_id', params.categoryId);
+            if (params.page) queryParams.append('page', String(params.page));
+            if (params.pageSize) queryParams.append('page_size', String(params.pageSize));
+
+            // 使用正確的 API 路徑
+            const url = `/purchase-orders/all-items${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+            console.log('Requesting URL:', url);
+            const response = await api.get(url);
+            return response;
+        } catch (error) {
+            console.error('Error getting PO items:', error);
+            throw error;
+        }
+    },
+
     // Tag Management 相關
     getCategories: () => api.get('/tags/categories'),
     getTags: () => api.get('/tags'),
@@ -113,7 +133,30 @@ const poService = {
     deleteCategory: (id) => api.delete(`/categories/${id}`),
 
     // Tag 相關
-    updateTag: (id, data) => api.put(`/tags/${id}`, data)
+    updateTag: (id, data) => api.put(`/tags/${id}`, data),
+
+    // 更新 PO 項目
+    updatePOItem: async (poId, itemId, data) => {
+        try {
+            // 直接更新單個項目
+            const updateData = {
+                serialnumber: data.serialnumber,
+                cost: Number(data.cost),
+                so: data.so || '',
+                note: data.note || '',
+                categories: data.categories || []
+            };
+
+            // 使用正確的 API 端點
+            return api.put(`/purchase-orders/${poId}`, {
+                item_id: itemId,
+                ...updateData
+            });
+        } catch (error) {
+            console.error('Error updating PO item:', error);
+            throw error;
+        }
+    },
 };
 
 export default poService;

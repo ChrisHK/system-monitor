@@ -655,4 +655,51 @@ router.delete('/:storeId/completed/:orderId', auth, checkGroup(['admin']), catch
     }
 }));
 
+// Admin delete store order
+router.delete('/stores/:storeId/orders/:orderId', auth, checkGroup(['admin']), catchAsync(async (req, res) => {
+  const { storeId, orderId } = req.params;
+  
+  // 檢查訂單是否存在
+  const order = await pool.query(
+    'SELECT * FROM store_orders WHERE store_id = $1 AND id = $2',
+    [storeId, orderId]
+  );
+
+  if (order.rows.length === 0) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'NOT_FOUND',
+        message: 'Order not found'
+      }
+    });
+  }
+
+  // 刪除訂單
+  await pool.query('BEGIN');
+  try {
+    // 先刪除訂單項目
+    await pool.query(
+      'DELETE FROM store_order_items WHERE order_id = $1',
+      [orderId]
+    );
+
+    // 再刪除訂單本身
+    await pool.query(
+      'DELETE FROM store_orders WHERE id = $1',
+      [orderId]
+    );
+
+    await pool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Order deleted successfully'
+    });
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    throw error;
+  }
+}));
+
 module.exports = router; 

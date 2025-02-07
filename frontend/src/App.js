@@ -14,6 +14,8 @@ import PurchaseOrderPage from './pages/PurchaseOrderPage';
 import AddEditPOPage from './pages/AddEditPOPage';
 import PODetailPage from './pages/PODetailPage';
 import TagManagementPage from './pages/TagManagementPage';
+import WelcomePage from './pages/WelcomePage';
+import InboundItemsPage from './pages/InboundItemsPage';
 import { useAuth } from './contexts/AuthContext';
 import { AuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
@@ -45,7 +47,7 @@ const App = () => {
                         <Route path="/" element={
                             <PrivateRoute>
                                 <Layout>
-                                    <InventoryPage />
+                                    <WelcomePage />
                                 </Layout>
                             </PrivateRoute>
                         } />
@@ -137,6 +139,13 @@ const App = () => {
                             <PrivateRoute>
                                 <Layout>
                                     <SettingsPage />
+                                </Layout>
+                            </PrivateRoute>
+                        } />
+                        <Route path="/inbound/items" element={
+                            <PrivateRoute>
+                                <Layout>
+                                    <InboundItemsPage />
                                 </Layout>
                             </PrivateRoute>
                         } />

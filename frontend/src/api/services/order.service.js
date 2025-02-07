@@ -50,9 +50,13 @@ class OrderService {
     return response;
   }
 
-  async deleteOrder(id) {
-    const response = await api.delete(ENDPOINTS.ORDER.BY_ID(id));
-    return response;
+  async deleteOrder(storeId, orderId) {
+    try {
+      const response = await api.delete(`/orders/stores/${storeId}/orders/${orderId}`);
+      return response;
+    } catch (error) {
+      throw this.handleApiError(error);
+    }
   }
 
   async bulkCreateOrders(orders) {

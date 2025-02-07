@@ -274,14 +274,6 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             if (hasInboundPermission) {
                 const inboundChildren = [];
                 
-                // Add Items submenu
-                inboundChildren.push({
-                    key: '/inbound',
-                    icon: <UnorderedListOutlined />,
-                    label: 'Items',
-                    onClick: () => navigate('/inbound')
-                });
-
                 // Add Purchase Order submenu if user has permission
                 if (hasPurchaseOrderPermission) {
                     inboundChildren.push({
@@ -292,12 +284,14 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                     });
                 }
 
-                menuItems.push({
-                    key: 'inbound',
-                    icon: <ImportOutlined />,
-                    label: 'Inbound',
-                    children: inboundChildren
-                });
+                if (inboundChildren.length > 0) {
+                    menuItems.push({
+                        key: 'inbound',
+                        icon: <ImportOutlined />,
+                        label: 'Inbound',
+                        children: inboundChildren
+                    });
+                }
             }
 
             // Add Items submenu if user has inventory permission
