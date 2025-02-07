@@ -17,12 +17,13 @@ import {
     InputNumber,
     Select,
     Row,
-    Col
+    Col,
+    Popconfirm
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import moment from 'moment';
 import poService from '../services/poService';
-import { EditOutlined } from '@ant-design/icons';
+import { EditOutlined, DeleteOutlined } from '@ant-design/icons';
 
 const { TabPane } = Tabs;
 const { Title } = Typography;
@@ -100,10 +101,30 @@ const PODetailPage = () => {
         setEditModalVisible(false);
     };
 
-    const handleSaveAll = () => {
-        // TODO: 實現保存所有更改的邏輯
-        setIsEditMode(false);
-        message.success('Changes saved successfully');
+    const handleSaveAll = async () => {
+        try {
+            setLoading(true);
+            
+            // 準備更新數據
+            const updateData = {
+                order: {
+                    ...poData.order,
+                    total_amount: poData.items.reduce((sum, item) => sum + Number(item.cost), 0)
+                },
+                items: poData.items
+            };
+
+            // 調用 API 更新數據
+            await poService.updatePO(id, updateData);
+            
+            message.success('Changes saved successfully');
+            setIsEditMode(false);
+        } catch (error) {
+            console.error('Error saving changes:', error);
+            message.error('Failed to save changes');
+        } finally {
+            setLoading(false);
+        }
     };
 
     const getStatusColor = (status) => {
@@ -239,6 +260,35 @@ const PODetailPage = () => {
         }
     };
 
+    // 處理刪除項目
+    const handleDeleteItem = async (record) => {
+        try {
+            // 更新本地數據
+            const updatedItems = poData.items.filter(item => item.id !== record.id);
+            
+            // 更新 PO 數據
+            setPOData(prev => ({
+                ...prev,
+                items: updatedItems
+            }));
+
+            // 更新總金額
+            const newTotalAmount = updatedItems.reduce((sum, item) => sum + Number(item.cost), 0);
+            setPOData(prev => ({
+                ...prev,
+                order: {
+                    ...prev.order,
+                    total_amount: newTotalAmount
+                }
+            }));
+
+            message.success('Item deleted successfully');
+        } catch (error) {
+            console.error('Error deleting item:', error);
+            message.error('Failed to delete item');
+        }
+    };
+
     const columns = [
         {
             title: 'Serial Number',
@@ -288,15 +338,27 @@ const PODetailPage = () => {
             title: 'Actions',
             key: 'actions',
             fixed: 'right',
-            width: 120,
+            width: 150,
             render: (_, record) => (
-                <Button
-                    type="link"
-                    icon={<EditOutlined />}
-                    onClick={() => handleEditItem(record)}
-                >
-                    Edit
-                </Button>
+                <Space>
+                    <Button
+                        type="link"
+                        icon={<EditOutlined />}
+                        onClick={() => handleEditItem(record)}
+                    >
+                        Edit
+                    </Button>
+                    <Popconfirm
+                        title="Are you sure to delete this item?"
+                        onConfirm={() => handleDeleteItem(record)}
+                        okText="Yes"
+                        cancelText="No"
+                    >
+                        <Button type="link" danger icon={<DeleteOutlined />}>
+                            Delete
+                        </Button>
+                    </Popconfirm>
+                </Space>
             )
         }] : [])
     ];
