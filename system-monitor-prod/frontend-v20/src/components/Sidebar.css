@@ -1,0 +1,101 @@
+.sidebar-logo {
+    height: 32px;
+    margin: 16px;
+    background: #1890ff;
+    border-radius: 6px;
+}
+
+.ant-layout-sider {
+    background: #fff !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+/* Menu styles */
+.ant-menu {
+    background: #fff !important;
+    border-right: none !important;
+}
+
+.ant-menu-item {
+    color: rgba(0, 0, 0, 0.65) !important;
+    margin: 4px 0 !important;
+}
+
+.ant-menu-submenu-title {
+    color: rgba(0, 0, 0, 0.65) !important;
+}
+
+/* Selected menu item */
+.ant-menu-item-selected {
+    background-color: #e6f7ff !important;
+    color: #1890ff !important;
+}
+
+.ant-menu-item:hover,
+.ant-menu-submenu-title:hover {
+    color: #1890ff !important;
+}
+
+/* Menu icons */
+.ant-menu-item .anticon,
+.ant-menu-submenu-title .anticon {
+    color: rgba(0, 0, 0, 0.65);
+    font-size: 18px;
+    vertical-align: middle;
+    margin-right: 10px;
+}
+
+.ant-menu-item-selected .anticon {
+    color: #1890ff !important;
+}
+
+/* Add Store item special styling */
+.ant-menu-item-add-store {
+    margin-bottom: 8px !important;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.ant-menu-item-add-store .anticon {
+    color: #1890ff !important;
+}
+
+/* Store Modal styles */
+.store-modal .ant-modal-content {
+    border-radius: 8px;
+    box-shadow: 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 6px 16px 0 rgba(0, 0, 0, 0.08);
+}
+
+.store-modal .ant-modal-header {
+    border-radius: 8px 8px 0 0;
+    background: #fff;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.store-modal .ant-form-item-label > label {
+    font-weight: 500;
+    color: rgba(0, 0, 0, 0.85);
+}
+
+/* Sider collapse button */
+.ant-layout-sider-trigger {
+    background: #fff !important;
+    color: rgba(0, 0, 0, 0.65) !important;
+    border-right: 1px solid #f0f0f0;
+}
+
+.ant-layout-sider-trigger:hover {
+    color: #1890ff !important;
+}
+
+/* Responsive styles */
+@media (max-width: 768px) {
+    .ant-layout-sider {
+        position: fixed;
+        height: 100vh;
+        z-index: 999;
+    }
+    
+    .ant-layout-sider-collapsed {
+        transform: translateX(-100%);
+    }
+} 

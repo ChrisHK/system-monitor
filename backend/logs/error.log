@@ -1,0 +1,41 @@
+2025-02-11T18:58:41.464Z ERROR: Initialization failed: password authentication failed for user "zerouniq_admin"
+error: password authentication failed for user "zerouniq_admin"
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg-pool\index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.initialize (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:24:13)
+    at async start (D:\Files\03_IT\Projects\system-monitor-dev\backend\src\sync.js:39:29)
+2025-02-11T19:04:00.423Z ERROR: Sync process failed: relation "sync_config" does not exist
+error: relation "sync_config" does not exist
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg\lib\client.js:535:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.processPendingChanges (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:51:39)
+2025-02-11T19:05:00.833Z ERROR: Sync process failed: relation "sync_config" does not exist
+error: relation "sync_config" does not exist
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg\lib\client.js:535:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.processPendingChanges (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:51:39)
+2025-02-11T19:06:00.189Z ERROR: Sync process failed: relation "sync_config" does not exist
+error: relation "sync_config" does not exist
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg\lib\client.js:535:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.processPendingChanges (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:51:39)
+2025-02-11T19:07:00.618Z ERROR: Sync process failed: relation "sync_config" does not exist
+error: relation "sync_config" does not exist
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg\lib\client.js:535:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.processPendingChanges (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:51:39)
+2025-02-11T19:08:00.779Z ERROR: Sync process failed: relation "sync_config" does not exist
+error: relation "sync_config" does not exist
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg\lib\client.js:535:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.processPendingChanges (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:51:39)
+2025-02-11T19:09:00.109Z ERROR: Sync process failed: relation "sync_config" does not exist
+error: relation "sync_config" does not exist
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg\lib\client.js:535:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.processPendingChanges (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:51:39)
+2025-02-11T19:10:00.450Z ERROR: Sync process failed: relation "sync_config" does not exist
+error: relation "sync_config" does not exist
+    at D:\Files\03_IT\Projects\system-monitor-dev\backend\node_modules\pg\lib\client.js:535:17
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async SyncService.processPendingChanges (D:\Files\03_IT\Projects\system-monitor-dev\backend\services\SyncService.js:51:39)

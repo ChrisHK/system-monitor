@@ -1,0 +1,86 @@
+/* Ant Design High Contrast Mode Overrides */
+@media (forced-colors: active) {
+    /* Button overrides */
+    .ant-btn,
+    .ant-btn-primary,
+    .ant-btn-default,
+    .ant-btn-dashed,
+    .ant-btn-link {
+        forced-color-adjust: none !important;
+        -ms-high-contrast-adjust: none !important;
+        background-color: ButtonFace !important;
+        color: ButtonText !important;
+        border-color: ButtonBorder !important;
+    }
+
+    .ant-btn:hover,
+    .ant-btn-primary:hover {
+        background-color: Highlight !important;
+        color: HighlightText !important;
+    }
+
+    /* Input overrides */
+    .ant-input,
+    .ant-input-password,
+    .ant-input-number,
+    .ant-select-selector {
+        forced-color-adjust: none !important;
+        -ms-high-contrast-adjust: none !important;
+        background-color: Field !important;
+        color: FieldText !important;
+        border-color: FieldBorder !important;
+    }
+
+    /* Card overrides */
+    .ant-card,
+    .ant-modal-content {
+        forced-color-adjust: none !important;
+        -ms-high-contrast-adjust: none !important;
+        background-color: Canvas !important;
+        color: CanvasText !important;
+        border-color: CanvasBorder !important;
+    }
+
+    /* Table overrides */
+    .ant-table {
+        forced-color-adjust: none !important;
+        -ms-high-contrast-adjust: none !important;
+    }
+
+    .ant-table-thead > tr > th {
+        background-color: Canvas !important;
+        color: CanvasText !important;
+        border-color: CanvasBorder !important;
+    }
+
+    .ant-table-tbody > tr > td {
+        background-color: Field !important;
+        color: FieldText !important;
+        border-color: FieldBorder !important;
+    }
+
+    /* Menu overrides */
+    .ant-menu {
+        forced-color-adjust: none !important;
+        -ms-high-contrast-adjust: none !important;
+        background-color: Canvas !important;
+        color: CanvasText !important;
+    }
+
+    .ant-menu-item:hover {
+        background-color: Highlight !important;
+        color: HighlightText !important;
+    }
+
+    /* Form overrides */
+    .ant-form-item-label > label {
+        color: CanvasText !important;
+    }
+
+    /* Message overrides */
+    .ant-message-notice-content {
+        background-color: Canvas !important;
+        color: CanvasText !important;
+        border: 1px solid CanvasBorder !important;
+    }
+} 

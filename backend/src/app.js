@@ -34,6 +34,13 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
+
+// 設置默認的內容類型
+app.use((req, res, next) => {
+    res.type('application/json');
+    next();
+});
+
 app.use(express.json());
 
 // JWT Secret check
@@ -58,10 +65,10 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/tags', tagRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
 
-// Create WebSocket server directly
+// Create WebSocket server
 const wss = new WebSocket.Server({ 
     server,
-    path: '/ws',  // Specify WebSocket path
+    path: '/ws',
     perMessageDeflate: false,
     clientTracking: true
 });
