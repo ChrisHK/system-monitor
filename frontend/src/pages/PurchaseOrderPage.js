@@ -35,6 +35,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import poService from '../services/poService';
 import { debounce } from 'lodash';
 import VerifyDialog from '../components/verify/VerifyDialog';
+import { tagService } from '../api/services';
 
 const { RangePicker } = DatePicker;
 const { Search } = Input;
@@ -268,17 +269,17 @@ const PurchaseOrderPage = () => {
         try {
             setLoading(true);
             const response = await poService.getAllPOs();
-            if (response?.data?.data) {
+            if (response?.success) {
                 // 獲取每個 PO 的詳細信息以獲取正確的 items 數量
-                const poList = response.data.data;
+                const poList = response.data || [];
                 const detailedPoList = await Promise.all(
                     poList.map(async (po) => {
                         try {
                             const detailResponse = await poService.getPOById(po.id);
-                            if (detailResponse?.data?.success) {
+                            if (detailResponse?.success) {
                                 return {
                                     ...po,
-                                    total_items: detailResponse.data.data.items?.length || 0
+                                    total_items: detailResponse.data?.items?.length || 0
                                 };
                             }
                             return po;
@@ -301,32 +302,23 @@ const PurchaseOrderPage = () => {
         } catch (error) {
             console.error('Error fetching PO list:', error);
             message.error('Failed to load purchase orders');
-            
-            // 如果API失敗，嘗試從緩存加載
-            const cached = localStorage.getItem('po_list_cache');
-            if (cached) {
-                try {
-                    const { data, timestamp } = JSON.parse(cached);
-                    // 只使用不超過1小時的緩存
-                    if (Date.now() - timestamp < 3600000) {
-                        setInboundPoData(data);
-                        message.warning('Showing cached data');
-                    }
-                } catch (cacheError) {
-                    console.error('Error parsing cache:', cacheError);
-                }
-            }
+            setInboundPoData([]); // 錯誤時設置為空數組
         } finally {
             setLoading(false);
         }
     }, []);
 
-    // Add fetchCategories function
+    // 在組件掛載時加載數據
+    useEffect(() => {
+        fetchPOList();
+    }, [fetchPOList]);
+
+    // Update fetchCategories function
     const fetchCategories = useCallback(async () => {
         try {
-            const response = await poService.getCategories();
-            if (response?.data?.categories) {
-                setCategories(response.data.categories);
+            const response = await tagService.getCategories();
+            if (response?.success) {
+                setCategories(response.categories || []);
             }
         } catch (error) {
             console.error('Error fetching categories:', error);
@@ -548,46 +540,36 @@ const PurchaseOrderPage = () => {
     const getFilteredData = () => {
         let filteredData = [...inboundPoData];
 
-        // 文本搜索
+        // Apply search filter
         if (searchText) {
             const searchLower = searchText.toLowerCase();
-            filteredData = filteredData.filter(po => 
-                po.po_number.toLowerCase().includes(searchLower) ||
-                po.supplier.toLowerCase().includes(searchLower) ||
-                (po.note && po.note.toLowerCase().includes(searchLower)) ||
-                // 搜索 PO items 中的 Serial Number
-                po.items?.some(item => 
+            filteredData = filteredData.filter(record => {
+                // Search in PO number and supplier
+                const poMatch = record.po_number?.toLowerCase().includes(searchLower);
+                const supplierMatch = record.supplier?.toLowerCase().includes(searchLower);
+                
+                // Search in items' serial numbers
+                const itemMatch = record.items?.some(item => 
                     item.serialnumber?.toLowerCase().includes(searchLower)
-                )
-            );
+                );
+
+                return poMatch || supplierMatch || itemMatch;
+            });
         }
 
-        // 日期範圍過濾
+        // Apply date range filter
         if (dateRange && dateRange[0] && dateRange[1]) {
-            filteredData = filteredData.filter(po => {
-                const poDate = moment(po.order_date);
-                return poDate.isBetween(dateRange[0], dateRange[1], 'day', '[]');
+            const startDate = dateRange[0].startOf('day');
+            const endDate = dateRange[1].endOf('day');
+            filteredData = filteredData.filter(record => {
+                const recordDate = moment(record.order_date);
+                return recordDate.isBetween(startDate, endDate, 'day', '[]');
             });
         }
 
-        // 狀態過濾
+        // Apply status filter
         if (filterStatus) {
-            filteredData = filteredData.filter(po => po.status === filterStatus);
-        }
-
-        // 排序
-        if (sortField && sortOrder) {
-            filteredData.sort((a, b) => {
-                let comparison = 0;
-                if (sortField === 'order_date') {
-                    comparison = moment(a.order_date).unix() - moment(b.order_date).unix();
-                } else if (sortField === 'total_amount') {
-                    comparison = Number(a.total_amount) - Number(b.total_amount);
-                } else {
-                    comparison = String(a[sortField]).localeCompare(String(b[sortField]));
-                }
-                return sortOrder === 'ascend' ? comparison : -comparison;
-            });
+            filteredData = filteredData.filter(record => record.status === filterStatus);
         }
 
         return filteredData;

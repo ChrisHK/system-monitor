@@ -40,11 +40,42 @@ const DEFAULT_GROUPS = [
             inventory_ram: true,
             outbound: true,
             inbound: true,
-            purchase_order: true
+            purchase_order: true,
+            tag_management: true
         },
+        store_permissions: {},
         is_system: true
     }
 ];
+
+const ensureAdminPermissions = (group) => {
+    if (group.name === 'admin') {
+        return {
+            ...group,
+            main_permissions: {
+                inventory: true,
+                inventory_ram: true,
+                outbound: true,
+                inbound: true,
+                purchase_order: true,
+                tag_management: true
+            },
+            // Admin has access to all stores with full permissions
+            store_permissions: Object.fromEntries(
+                (group.permitted_stores || []).map(storeId => [
+                    storeId,
+                    {
+                        inventory: true,
+                        orders: true,
+                        rma: true,
+                        outbound: true
+                    }
+                ])
+            )
+        };
+    }
+    return group;
+};
 
 const GroupManagement = () => {
     const [groups, setGroups] = useState([]);
@@ -66,12 +97,19 @@ const GroupManagement = () => {
                 throw new Error(response?.error || 'Failed to load groups');
             }
             
+            const groupsList = response.data?.groups || response.groups;
+            if (!Array.isArray(groupsList)) {
+                throw new Error('Invalid groups data format');
+            }
+            
+            // Ensure admin group has full permissions
+            const processedGroups = groupsList.map(group => ensureAdminPermissions(group));
+            
             // Merge with default admin group if not present
-            const backendGroups = response.groups || [];
-            const adminGroup = backendGroups.find(g => g.name === 'admin');
+            const adminGroup = processedGroups.find(g => g.name === 'admin');
             const updatedGroups = adminGroup 
-                ? backendGroups 
-                : [...DEFAULT_GROUPS, ...backendGroups];
+                ? processedGroups 
+                : [...DEFAULT_GROUPS, ...processedGroups];
             
             setGroups(updatedGroups);
         } catch (error) {
@@ -95,19 +133,40 @@ const GroupManagement = () => {
                 throw new Error(response?.error || 'Failed to load stores');
             }
             
-            setStores(response.stores);
+            const storesList = response.data?.stores || response.stores;
+            if (!Array.isArray(storesList)) {
+                throw new Error('Invalid stores data format');
+            }
+            
+            setStores(storesList);
         } catch (error) {
             console.error('Error fetching stores:', error);
             setError(error.message);
             message.error('Failed to load stores');
+            setStores([]);
         } finally {
             setLoading(false);
         }
     };
 
+    // Initialize data
     useEffect(() => {
-        fetchGroups();
-        fetchStores();
+        const initData = async () => {
+            try {
+                setLoading(true);
+                setError(null);
+                await Promise.all([
+                    fetchGroups(),
+                    fetchStores()
+                ]);
+            } catch (error) {
+                console.error('Error initializing data:', error);
+                setError(error.message || 'Failed to initialize data');
+            } finally {
+                setLoading(false);
+            }
+        };
+        initData();
     }, []);
 
     // 監聽 permitted_stores 的變化
@@ -216,6 +275,13 @@ const GroupManagement = () => {
         try {
             setLoading(true);
             setError(null);
+
+            // Ensure we're not modifying admin group permissions
+            if (editingGroup?.name === 'admin') {
+                const adminPermissions = ensureAdminPermissions(editingGroup);
+                values.main_permissions = adminPermissions.main_permissions;
+                values.store_permissions = adminPermissions.store_permissions;
+            }
 
             // 1. Update basic group info
             const groupData = {
@@ -349,7 +415,12 @@ const GroupManagement = () => {
     };
 
     const renderStorePermissions = () => {
-        // 使用 selectedStores 而不是從表單獲取值
+        // Add null check for selectedStores and stores
+        if (!selectedStores || !Array.isArray(selectedStores) || !stores || !Array.isArray(stores)) {
+            return null;
+        }
+
+        // Check length after ensuring it's an array
         if (selectedStores.length === 0) {
             return null;
         }

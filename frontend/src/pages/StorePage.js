@@ -124,7 +124,7 @@ const StorePage = () => {
             
             // 並行請求數據
             const [storeResponse, itemsResponse] = await Promise.all([
-                storeService.getStore(storeId),
+                storeService.getStoreById(storeId),
                 storeService.getStoreItems(storeId)
             ]);
 

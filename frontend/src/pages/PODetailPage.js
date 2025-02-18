@@ -18,7 +18,8 @@ import {
     Select,
     Row,
     Col,
-    Popconfirm
+    Popconfirm,
+    Empty
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import moment from 'moment';
@@ -69,13 +70,15 @@ const PODetailPage = () => {
             try {
                 setLoading(true);
                 const response = await poService.getPOById(id);
-                if (response?.data?.success) {
-                    setPOData(response.data.data);
-                    console.log('PO Data:', response.data.data);  // 添加日誌
+                if (response?.success) {
+                    setPOData(response.data);
+                    console.log('PO Data:', response.data);  // Debug log
+                } else {
+                    throw new Error(response?.error || 'Failed to load PO data');
                 }
             } catch (error) {
                 console.error('Error fetching PO data:', error);
-                message.error('Failed to load PO data');
+                message.error(error.message || 'Failed to load PO data');
             } finally {
                 setLoading(false);
             }
@@ -373,106 +376,106 @@ const PODetailPage = () => {
 
     return (
         <div style={{ padding: 24 }}>
-            <Card 
-                title={
-                    <Space size="middle">
-                        <span>Purchase Order Details</span>
-                        <Tag color={getStatusColor(poData?.order?.status)}>
-                            {poData?.order?.status?.toUpperCase()}
-                        </Tag>
-                    </Space>
-                }
-                extra={
-                    <Space>
-                        {!isEditMode ? (
-                            <Button
-                                type="primary"
-                                icon={<EditOutlined />}
-                                onClick={handleEdit}
+            <Spin spinning={loading}>
+                {!poData && !loading ? (
+                    <Card>
+                        <Empty 
+                            description="Purchase order not found" 
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        >
+                            <Button 
+                                type="primary" 
+                                onClick={() => navigate('/inbound/purchase-order')}
                             >
-                                Edit
+                                Back to List
                             </Button>
-                        ) : (
+                        </Empty>
+                    </Card>
+                ) : (
+                    <Card 
+                        title={
+                            <Space size="middle">
+                                <span>Purchase Order Details</span>
+                                {poData?.order?.status && (
+                                    <Tag color={getStatusColor(poData.order.status)}>
+                                        {poData.order.status.toUpperCase()}
+                                    </Tag>
+                                )}
+                            </Space>
+                        }
+                        extra={
+                            <Space>
+                                {!isEditMode ? (
+                                    <Button
+                                        type="primary"
+                                        icon={<EditOutlined />}
+                                        onClick={handleEdit}
+                                    >
+                                        Edit
+                                    </Button>
+                                ) : (
+                                    <>
+                                        <Button
+                                            type="primary"
+                                            onClick={handleSaveAll}
+                                        >
+                                            Save
+                                        </Button>
+                                        <Button onClick={handleCancelEdit}>
+                                            Cancel
+                                        </Button>
+                                    </>
+                                )}
+                                <Button onClick={() => navigate('/inbound/purchase-order', { 
+                                    replace: true,
+                                    state: { activeTab: 'inbound-po' }
+                                })}>
+                                    Back
+                                </Button>
+                            </Space>
+                        }
+                    >
+                        {poData?.order && (
                             <>
-                                <Button
-                                    type="primary"
-                                    onClick={handleSaveAll}
-                                >
-                                    Save
-                                </Button>
-                                <Button onClick={handleCancelEdit}>
-                                    Cancel
-                                </Button>
+                                <Descriptions bordered column={2}>
+                                    <Descriptions.Item label="PO Number">
+                                        {poData.order.po_number}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Date">
+                                        {moment(poData.order.order_date).format('YYYY-MM-DD')}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Supplier">
+                                        {poData.order.supplier}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Total Amount">
+                                        <Statistic 
+                                            value={poData.order.total_amount} 
+                                            precision={2} 
+                                            prefix="$"
+                                            valueStyle={{ color: '#cf1322' }}
+                                        />
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Note">
+                                        {poData.order.notes || '-'}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label="Total Items">
+                                        {poData.items?.length || 0}
+                                    </Descriptions.Item>
+                                </Descriptions>
+                                
+                                <Table
+                                    style={{ marginTop: 24 }}
+                                    columns={columns}
+                                    dataSource={poData.items || []}
+                                    rowKey="id"
+                                    pagination={false}
+                                    scroll={{ x: 'max-content' }}
+                                />
                             </>
                         )}
-                        <Button onClick={() => navigate('/inbound/purchase-order', { 
-                            replace: true,
-                            state: { activeTab: 'inbound-po' }
-                        })}>
-                            Back
-                        </Button>
-                    </Space>
-                }
-            >
-                {poData?.order && (
-                    <>
-                        <Descriptions bordered column={2}>
-                            <Descriptions.Item label="PO Number">
-                                {poData.order.po_number}
-                            </Descriptions.Item>
-                            <Descriptions.Item label="Date">
-                                {moment(poData.order.order_date).format('YYYY-MM-DD')}
-                            </Descriptions.Item>
-                            <Descriptions.Item label="Supplier">
-                                {poData.order.supplier}
-                            </Descriptions.Item>
-                            <Descriptions.Item label="Total Amount">
-                                <Statistic 
-                                    value={poData.order.total_amount} 
-                                    precision={2} 
-                                    prefix="$"
-                                    valueStyle={{ color: '#cf1322' }}
-                                />
-                            </Descriptions.Item>
-                            <Descriptions.Item label="Note">
-                                {poData.order.notes || '-'}
-                            </Descriptions.Item>
-                            <Descriptions.Item label="Total Items">
-                                {poData.items?.length || 0}
-                            </Descriptions.Item>
-                        </Descriptions>
-
-                        <div style={{ marginTop: 24 }}>
-                            <Title level={4}>Order Details</Title>
-                            <Table
-                                dataSource={poData.items}
-                                columns={columns}
-                                pagination={false}
-                                rowKey="id"
-                                scroll={{ x: 'max-content' }}
-                                summary={pageData => {
-                                    const total = pageData.reduce(
-                                        (sum, item) => sum + Number(item.cost),
-                                        0
-                                    );
-                                    const categoryCount = poData?.categories?.length || 0;
-                                    return (
-                                        <Table.Summary.Row>
-                                            <Table.Summary.Cell index={0} colSpan={categoryCount + 1}>
-                                                <strong>Total</strong>
-                                            </Table.Summary.Cell>
-                                            <Table.Summary.Cell index={categoryCount + 1}>
-                                                <strong>$ {total.toFixed(2)}</strong>
-                                            </Table.Summary.Cell>
-                                            <Table.Summary.Cell index={categoryCount + 2} colSpan={2} />
-                                        </Table.Summary.Row>
-                                    );
-                                }}
-                            />
-                        </div>
-                    </>
+                    </Card>
                 )}
-            </Card>
+            </Spin>
 
             {/* 編輯項目的模態框 */}
             <Modal

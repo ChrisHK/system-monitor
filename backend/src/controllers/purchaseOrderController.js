@@ -191,6 +191,31 @@ const createPurchaseOrder = async (req, res) => {
     try {
         const data = req.body;
         
+        // Validate PO number format
+        if (!data.order.po_number.match(/^PO\d{8}\d{3}$/)) {
+            return res.status(400).json({
+                success: false,
+                error: {
+                    message: 'Invalid PO number format. Expected format: PO<YYYYMMDD><###>'
+                }
+            });
+        }
+
+        // Check for duplicate PO number
+        const existingPO = await client.query(
+            'SELECT id FROM purchase_orders WHERE po_number = $1',
+            [data.order.po_number]
+        );
+        
+        if (existingPO.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: {
+                    message: 'PO number already exists'
+                }
+            });
+        }
+        
         // Start transaction
         await client.query('BEGIN');
 
@@ -215,9 +240,8 @@ const createPurchaseOrder = async (req, res) => {
 
         const poId = orderResult.rows[0].id;
 
-        // Insert items and their categories
+        // Insert items
         for (const item of data.items) {
-            // Insert the item first
             const itemResult = await client.query(`
                 INSERT INTO purchase_order_items (
                     po_id, serialnumber, cost, so, note
@@ -226,30 +250,23 @@ const createPurchaseOrder = async (req, res) => {
             `, [
                 poId,
                 item.serialnumber,
-                Number(item.cost),
+                item.cost,
                 item.so || '',
                 item.note || ''
             ]);
 
-            const itemId = itemResult.rows[0].id;
-
-            // Insert category relationships if they exist
-            if (Array.isArray(item.categories)) {
-                // Delete any existing category relationships first
-                await client.query(`
-                    DELETE FROM po_item_categories 
-                    WHERE po_item_id = $1
-                `, [itemId]);
-
-                // Insert new category relationships
+            // Insert item categories if present
+            if (item.categories && item.categories.length > 0) {
                 for (const cat of item.categories) {
-                    if (cat.category_id && cat.tag_id) {
-                        await client.query(`
-                            INSERT INTO po_item_categories (
-                                po_item_id, category_id, tag_id
-                            ) VALUES ($1, $2, $3)
-                        `, [itemId, cat.category_id, cat.tag_id]);
-                    }
+                    await client.query(`
+                        INSERT INTO po_item_categories (
+                            po_item_id, category_id, tag_id
+                        ) VALUES ($1, $2, $3)
+                    `, [
+                        itemResult.rows[0].id,
+                        cat.category_id,
+                        cat.tag_id
+                    ]);
                 }
             }
         }
@@ -263,11 +280,12 @@ const createPurchaseOrder = async (req, res) => {
         });
     } catch (error) {
         await client.query('ROLLBACK');
+        console.error('Error creating purchase order:', error);
         res.status(500).json({
             success: false,
             error: {
                 message: error.message,
-                code: error.code || 'INTERNAL_ERROR'
+                code: error.code
             }
         });
     } finally {

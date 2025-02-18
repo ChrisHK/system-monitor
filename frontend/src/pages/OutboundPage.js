@@ -50,7 +50,12 @@ const OutboundPage = () => {
                 throw new Error(response?.error || 'Failed to load stores');
             }
             
-            setStores(response.stores);
+            const stores = response.data?.stores || response.stores;
+            if (!Array.isArray(stores)) {
+                throw new Error('Invalid stores data format');
+            }
+            
+            setStores(stores);
         } catch (error) {
             console.error('Error fetching stores:', error);
             setError(error.message || 'Failed to load stores');

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, Steps, Button, message } from 'antd';
+import { Modal, Steps, Button, message, Row, Col, Select, Text } from 'antd';
 import ColumnMappingStep from './steps/ColumnMappingStep';
 import TagMatchingStep from './steps/TagMatchingStep';
 import DataPreviewStep from './steps/DataPreviewStep';
@@ -18,6 +18,7 @@ const VerifyDialog = ({
     const [loading, setLoading] = useState(false);
     const [processedData, setProcessedData] = useState(null);
     const [tagMatches, setTagMatches] = useState({});
+    const [mappings, setMappings] = useState({});
 
     // 初始化時獲取Excel的列
     useEffect(() => {
@@ -37,6 +38,25 @@ const VerifyDialog = ({
         }
     }, [sheetData]);
 
+    useEffect(() => {
+        if (visible && categories?.length > 0 && sheetData && sheetData.length > 0) {
+            // 初始化映射
+            const initialMappings = {};
+            // Get headers from the first row's keys
+            const headers = Object.keys(sheetData[0]);
+            headers.forEach(header => {
+                // 嘗試找到最匹配的分類
+                const matchedCategory = categories.find(cat => 
+                    cat.name.toLowerCase() === header.toLowerCase()
+                );
+                if (matchedCategory) {
+                    initialMappings[header] = matchedCategory.id;
+                }
+            });
+            setMappings(initialMappings);
+        }
+    }, [visible, categories, sheetData]);
+
     // 處理步驟變化
     const handleStepChange = (step) => {
         setCurrentStep(step);
@@ -50,6 +70,13 @@ const VerifyDialog = ({
     // 處理標籤匹配更新
     const handleTagMatchesUpdate = (newMatches) => {
         setTagMatches(newMatches);
+    };
+
+    const handleMapping = (header, categoryId) => {
+        setMappings(prev => ({
+            ...prev,
+            [header]: categoryId
+        }));
     };
 
     // 處理下一步

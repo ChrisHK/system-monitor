@@ -148,3 +148,156 @@ Access metrics via built-in endpoints:
 ## 📄 License
 MIT License - See [LICENSE.md](LICENSE.md) for details.
 
+# System Monitor
+
+A comprehensive system monitoring solution with a modern web interface.
+
+## Project Structure
+
+```
+.
+├── backend/                 # Backend Node.js application
+│   ├── config/             # Configuration files
+│   │   ├── default.js      # Default configuration
+│   │   ├── development.js  # Development environment config
+│   │   └── production.js   # Production environment config
+│   ├── src/               # Source code
+│   └── .env.example       # Environment variables example
+│
+├── frontend/               # Frontend React application
+│   ├── config/            # Configuration files
+│   │   ├── default.js     # Default configuration
+│   │   ├── development.js # Development environment config
+│   │   └── production.js  # Production environment config
+│   ├── src/              # Source code
+│   └── .env.example      # Environment variables example
+│
+└── backups/              # Database backups
+```
+
+## Prerequisites
+
+- Node.js >= 16.0.0
+- PostgreSQL >= 12
+- npm or yarn
+
+## Configuration
+
+### Backend Configuration
+
+The backend uses a layered configuration system:
+
+1. Environment Variables (highest priority)
+2. Environment-specific config (development.js/production.js)
+3. Default config (default.js)
+
+Key configuration files:
+- `.env.example`: Template for environment variables
+- `.env`: Local development environment variables
+- `.env.production`: Production environment variables
+
+### Frontend Configuration
+
+Similar to the backend, the frontend uses:
+
+1. Environment Variables (highest priority)
+2. Environment-specific config
+3. Default config
+
+## Development Setup
+
+1. Clone the repository
+```bash
+git clone [repository-url]
+cd system-monitor
+```
+
+2. Install dependencies
+```bash
+# Backend
+cd backend
+npm install
+
+# Frontend
+cd ../frontend
+npm install
+```
+
+3. Set up environment variables
+```bash
+# Backend
+cp backend/.env.example backend/.env
+# Edit .env with your local settings
+
+# Frontend
+cp frontend/.env.example frontend/.env
+# Edit .env with your local settings
+```
+
+4. Start development servers
+```bash
+# Backend
+cd backend
+npm run dev
+
+# Frontend (in another terminal)
+cd frontend
+npm start
+```
+
+## Production Deployment
+
+1. Set up environment variables
+```bash
+# Backend
+cp backend/.env.example backend/.env.production
+# Edit .env.production with production settings
+
+# Frontend
+cp frontend/.env.example frontend/.env.production
+# Edit .env.production with production settings
+```
+
+2. Build and start
+```bash
+# Frontend
+cd frontend
+npm run build
+
+# Backend
+cd ../backend
+npm start
+```
+
+## Available Scripts
+
+### Backend
+- `npm start`: Start production server
+- `npm run dev`: Start development server
+- `npm run sync`: Run data synchronization
+- `npm run migrate`: Run database migrations
+
+### Frontend
+- `npm start`: Start development server
+- `npm run start:prod`: Start production preview
+- `npm run build`: Build for production
+- `npm run build:dev`: Build for development
+
+## Environment Variables
+
+### Backend
+- `NODE_ENV`: Environment (development/production)
+- `PORT`: Server port
+- `DB_*`: Database configuration
+- `JWT_*`: JWT configuration
+- See `.env.example` for all options
+
+### Frontend
+- `REACT_APP_API_URL`: Backend API URL
+- `REACT_APP_WS_URL`: WebSocket URL
+- See `.env.example` for all options
+
+## License
+
+[Your License]
+

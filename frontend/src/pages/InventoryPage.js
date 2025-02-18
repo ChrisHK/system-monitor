@@ -107,7 +107,12 @@ const InventoryPage = () => {
                     throw new Error(response?.error || 'Failed to fetch duplicates');
                 }
                 
-                const duplicatesList = response.duplicates.map(d => d.serialnumber);
+                const duplicates = response.data?.duplicates || response.duplicates;
+                if (!Array.isArray(duplicates)) {
+                    throw new Error('Invalid duplicates data format');
+                }
+                
+                const duplicatesList = duplicates.map(d => d.serialnumber);
                 setDuplicateSerials(new Set(duplicatesList));
             } catch (error) {
                 console.error('Failed to fetch duplicates:', error);
@@ -125,30 +130,23 @@ const InventoryPage = () => {
     }, [isInitialLoad]);
 
     const handleSessionExpired = useCallback(() => {
-        message.error('Session expired. Please login again.');
-        logout();
-        navigate('/login');
-    }, [logout, navigate]);
+        console.log('Session expired, but staying on current page');
+        message.error('Session expired or insufficient permissions');
+        // 移除自動跳轉
+        // logout();
+        // navigate('/login');
+    }, []);
 
     const fetchRecords = useCallback(async (force = false) => {
-        // 檢查參數是否有變化
-        const currentParams = {
+        // Add debug logs
+        console.log('Fetching records with params:', {
             searchText,
             page: pagination.current,
             pageSize: pagination.pageSize,
             storeId: storeId !== 'all' ? parseInt(storeId, 10) : null
-        };
+        });
 
-        // 如果參數沒有變化且不是強制更新，則跳過
-        if (!force && 
-            JSON.stringify(currentParams) === JSON.stringify(lastSearchParams.current)) {
-            return;
-        }
-
-        // 更新最後一次的搜索參數
-        lastSearchParams.current = currentParams;
-
-        if (loading) return;
+        if (loading && !force) return;
         
         try {
             setLoading(true);
@@ -159,14 +157,26 @@ const InventoryPage = () => {
                 limit: pagination.pageSize,
                 ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {})
             };
+
+            console.log('Making API request with params:', searchParams);
             
             const response = searchText ? 
                 await inventoryService.searchRecords('serialnumber', searchText, searchParams) :
                 await inventoryService.getInventoryRecords(searchParams);
             
+            console.log('API response:', response);
+
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to load inventory data');
             }
+
+            // Log the response data
+            console.log('Records received:', {
+                total: response.total,
+                recordsCount: response.records?.length,
+                firstRecord: response.records?.[0],
+                lastRecord: response.records?.[response.records.length - 1]
+            });
 
             // 只在有記錄時檢查位置
             if (response.records?.length > 0) {
@@ -219,14 +229,6 @@ const InventoryPage = () => {
                                     locationColor: 'orange'
                                 };
                             }
-                            // 如果在 inventory 中
-                            if (info.location === 'inventory') {
-                                return {
-                                    ...record,
-                                    location: 'Inventory',
-                                    locationColor: 'green'
-                                };
-                            }
                         }
                         
                         // 默認為 Inventory
@@ -237,12 +239,24 @@ const InventoryPage = () => {
                         };
                     });
 
+                    console.log('Processed records:', {
+                        total: processedRecords.length,
+                        first: processedRecords[0],
+                        last: processedRecords[processedRecords.length - 1]
+                    });
+
                     setRecords(processedRecords);
                     setFilteredRecords(processedRecords);
                 } catch (locationError) {
                     console.warn('Failed to check locations:', locationError);
-                    setRecords(response.records);
-                    setFilteredRecords(response.records);
+                    // 即使位置检查失败，也设置基本记录
+                    const basicRecords = response.records.map(record => ({
+                        ...record,
+                        location: 'Inventory',
+                        locationColor: 'green'
+                    }));
+                    setRecords(basicRecords);
+                    setFilteredRecords(basicRecords);
                 }
             } else {
                 setRecords([]);
@@ -256,16 +270,12 @@ const InventoryPage = () => {
                 total: response.total || 0
             }));
         } catch (error) {
-            console.error('Failed to fetch records:', error);
-            if (error.response?.status === 401) {
-                handleSessionExpired();
-            } else {
-                setError(error.message || 'Failed to load inventory data');
-            }
+            console.error('Error in fetchRecords:', error);
+            setError(error.message || 'Failed to load inventory data');
         } finally {
             setLoading(false);
         }
-    }, [loading, pagination.current, pagination.pageSize, storeId, searchText, handleSessionExpired]);
+    }, [pagination.current, pagination.pageSize, storeId, searchText]);
 
     // 初始加載
     useEffect(() => {
@@ -293,7 +303,12 @@ const InventoryPage = () => {
                     throw new Error(response?.error || 'Failed to load stores');
                 }
                 
-                setStoresList(response.stores.map(store => ({
+                const stores = response.data?.stores || response.stores;
+                if (!Array.isArray(stores)) {
+                    throw new Error('Invalid stores data format');
+                }
+                
+                setStoresList(stores.map(store => ({
                     value: store.id,
                     label: store.name
                 })));
@@ -773,7 +788,7 @@ const InventoryPage = () => {
         if (isFirstMount.current) return;
 
         const timer = setTimeout(() => {
-            fetchRecords();
+            fetchRecords(false);  // 非強制加載
         }, 500);
 
         return () => clearTimeout(timer);

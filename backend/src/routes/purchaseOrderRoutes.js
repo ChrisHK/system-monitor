@@ -3,22 +3,32 @@ const router = express.Router();
 const { auth } = require('../middleware/auth');
 const purchaseOrderController = require('../controllers/purchaseOrderController');
 const { pool } = require('../db');
+const moment = require('moment');
 
 // Get latest PO number
 router.get('/latest-number', auth, async (req, res) => {
     const { date } = req.query;
     try {
+        // Get today's date if not provided
+        const searchDate = date || moment().format('YYYYMMDD');
+        
+        // Search for PO numbers with the format PO<YYYYMMDD><###>
         const result = await pool.query(`
             SELECT po_number 
             FROM purchase_orders 
             WHERE po_number LIKE $1 
             ORDER BY po_number DESC 
             LIMIT 1
-        `, [`${date}%`]);
+        `, [`PO${searchDate}%`]);
 
-        const latestNumber = result.rows.length > 0 
-            ? parseInt(result.rows[0].po_number.slice(-3))
-            : 0;
+        let latestNumber = 0;
+        if (result.rows.length > 0) {
+            // Extract the sequence number from PO number (last 3 digits)
+            const match = result.rows[0].po_number.match(/\d{3}$/);
+            if (match) {
+                latestNumber = parseInt(match[0]);
+            }
+        }
 
         res.json({
             success: true,

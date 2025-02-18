@@ -21,16 +21,20 @@ const TagMatchingStep = ({
         try {
             setLoading(prev => ({ ...prev, [categoryId]: true }));
             const response = await poService.getTagsByCategory(categoryId);
-            if (response?.data?.tags) {
-                const tags = response.data.tags;
+            if (response?.success) {
+                const tags = response.tags || [];
+                const activeTags = tags.filter(tag => tag.is_active);
                 setCategoryTags(prev => ({
                     ...prev,
-                    [categoryId]: tags
+                    [categoryId]: activeTags
                 }));
                 // 自動匹配現有標籤
-                autoMatchTags(categoryId, tags);
+                autoMatchTags(categoryId, activeTags);
+            } else {
+                throw new Error(response?.error || 'Failed to load tags');
             }
         } catch (error) {
+            console.error('Error loading tags:', error);
             message.error(`Failed to load tags for category ${categoryId}`);
         } finally {
             setLoading(prev => ({ ...prev, [categoryId]: false }));
@@ -131,18 +135,24 @@ const TagMatchingStep = ({
 
         if (!exists) {
             // 添加創建新標籤的選項
-            setCategoryTags(prev => ({
-                ...prev,
-                [categoryId]: [
-                    ...(prev[categoryId] || []),
-                    {
-                        id: `new-${searchValue}`,
-                        name: `Add "${searchValue}"`,
-                        isNew: true,
-                        value: searchValue
-                    }
-                ]
-            }));
+            const timestamp = Date.now();
+            setCategoryTags(prev => {
+                const currentTags = prev[categoryId] || [];
+                // Remove any existing "new" options
+                const filteredTags = currentTags.filter(tag => !tag.isNew);
+                return {
+                    ...prev,
+                    [categoryId]: [
+                        ...filteredTags,
+                        {
+                            id: `new-${categoryId}-${timestamp}`,
+                            name: `Add "${searchValue}"`,
+                            isNew: true,
+                            value: searchValue
+                        }
+                    ]
+                };
+            });
         }
     };
 
@@ -159,14 +169,14 @@ const TagMatchingStep = ({
                         category_id: categoryId
                     });
 
-                    if (response?.data?.success) {
+                    if (response?.success) {
                         message.success('Tag created successfully');
                         // 重新加載該分類的標籤
                         await loadCategoryTags(categoryId);
                         // 使用新創建的標籤ID
-                        tagId = response.data.tag.id;
+                        tagId = response.tag.id;
                     } else {
-                        throw new Error('Failed to create tag');
+                        throw new Error(response?.error || 'Failed to create tag');
                     }
                 }
             }
@@ -181,7 +191,8 @@ const TagMatchingStep = ({
                 )
             }));
         } catch (error) {
-            message.error('Failed to create tag');
+            console.error('Error handling tag selection:', error);
+            message.error('Failed to handle tag selection');
         }
     };
 

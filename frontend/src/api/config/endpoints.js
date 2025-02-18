@@ -1,27 +1,74 @@
 export const getApiBaseUrl = () => {
   const currentHostname = window.location.hostname;
-  const apiUrl = process.env.REACT_APP_API_URL;
-  
-  if (currentHostname !== 'localhost' && currentHostname !== '127.0.0.1') {
-    return 'http://192.168.0.10:4000/api';
+  const nodeEnv = process.env.NODE_ENV;
+  const protocol = window.location.protocol;
+  const host = window.location.host;
+
+  // Log all relevant environment variables and settings
+  console.log('API Configuration:', {
+    currentHostname,
+    nodeEnv,
+    protocol,
+    host,
+    REACT_APP_API_URL: process.env.REACT_APP_API_URL,
+    timestamp: new Date().toISOString()
+  });
+
+  // Production environment - always use relative path, ignore environment variables
+  if (nodeEnv === 'production') {
+    const baseUrl = '/api';
+    console.log('Using production API URL (ignoring env vars):', {
+      baseUrl,
+      fullUrl: `${protocol}//${host}${baseUrl}`,
+      envUrl: process.env.REACT_APP_API_URL,
+      message: 'Environment variable ignored in production',
+      timestamp: new Date().toISOString()
+    });
+    return baseUrl;
   }
-  
-  return apiUrl || 'http://localhost:4000/api';
+
+  // Development environment
+  if (nodeEnv === 'development') {
+    // 優先使用環境變量中的 URL
+    const devUrl = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
+    console.log('Using development API URL:', {
+      url: devUrl,
+      source: process.env.REACT_APP_API_URL ? 'env' : 'default',
+      timestamp: new Date().toISOString()
+    });
+    return devUrl;
+  }
+
+  // Fallback - use relative path
+  const fallbackUrl = '/api';
+  console.log('Using fallback API URL:', {
+    url: fallbackUrl,
+    timestamp: new Date().toISOString()
+  });
+  return fallbackUrl;
 };
 
 export const ENDPOINTS = {
   AUTH: {
     LOGIN: '/users/login',
     LOGOUT: '/users/logout',
-    CHECK: '/users/me',
+    REFRESH_TOKEN: '/users/refresh',
+    VALIDATE_TOKEN: '/users/validate',
+    UPDATE_PASSWORD: '/users/password/update',
+    REQUEST_PASSWORD_RESET: '/users/password/reset/request',
+    RESET_PASSWORD: '/users/password/reset',
+    CHECK: '/users/me'
   },
   USER: {
-    BASE: '/users',
-    LIST: '/users',
     CURRENT: '/users/me',
+    LIST: '/users',
     CREATE: '/users',
-    UPDATE: (id) => `/users/${id}`,
-    DELETE: (id) => `/users/${id}`,
+    BY_ID: (id) => `/users/${id}`,
+    UPDATE_PROFILE: '/users/profile',
+    ROLES: '/users/roles',
+    UPDATE_ROLE: (userId) => `/users/${userId}/role`,
+    PERMISSIONS: '/users/permissions',
+    UPDATE_PERMISSIONS: (userId) => `/users/${userId}/permissions`
   },
   GROUP: {
     LIST: '/groups',
@@ -41,21 +88,22 @@ export const ENDPOINTS = {
     BY_ID: (id) => `/records/${id}`,
     CHECK_LOCATION: (serialNumber) => `/records/check-location/${serialNumber}`,
     CLEANUP_DUPLICATES: '/records/cleanup-duplicates',
-    WITH_LOCATIONS: '/records/with-locations',
+    WITH_LOCATIONS: '/records/with-locations'
   },
   OUTBOUND: {
     ITEMS: '/outbound/items',
     ADD_ITEM: '/outbound/items',
-    REMOVE_ITEM: (id) => `/outbound/items/${id}`,
-    SEND_TO_STORE: (storeId) => `/stores/${storeId}/outbound`,
+    REMOVE_ITEM: (itemId) => `/outbound/items/${itemId}`,
+    SEND_TO_STORE: (storeId) => `/outbound/send/${storeId}`,
     CONFIRM: (id) => `/outbound/${id}/confirm`,
     SEARCH: '/outbound/search'
   },
   STORE: {
-    BASE: '/stores',
     LIST: '/stores',
     CREATE: '/stores',
     BY_ID: (id) => `/stores/${id}`,
+    INVENTORY: (storeId) => `/stores/${storeId}/inventory`,
+    SEARCH: '/stores/search',
     UPDATE: (id) => `/stores/${id}`,
     DELETE: (id) => `/stores/${id}`,
     ITEMS: (storeId) => `/stores/${storeId}/items`,
@@ -123,8 +171,36 @@ export const ENDPOINTS = {
     SEARCH: (storeId, serialNumber) => `/sales/${storeId}/search/${serialNumber}`,
   },
   LOCATION: {
-    CHECK: (serialNumber) => `/location/${serialNumber}`,
-    UPDATE: (serialNumber) => `/location/${serialNumber}`,
-    BATCH: '/location/batch',
+    CHECK: (serialNumber) => `/records/check-location/${serialNumber}`,
+    UPDATE: (serialNumber) => `/records/update-location/${serialNumber}`,
+    BATCH: '/records/batch-location-update'
+  },
+  REPORTS: {
+    INVENTORY: '/reports/inventory',
+    OUTBOUND: '/reports/outbound',
+    STORE: (storeId) => `/reports/store/${storeId}`,
+    EXPORT: {
+      INVENTORY: '/reports/export/inventory',
+      STORE: (storeId) => `/reports/export/store/${storeId}`
+    }
+  },
+  TAGS: {
+    LIST: '/tags',
+    CREATE: '/tags',
+    BY_ID: (id) => `/tags/${id}`,
+    UPDATE: (id) => `/tags/${id}`,
+    DELETE: (id) => `/tags/${id}`,
+    CATEGORIES: {
+      LIST: '/tags/categories',
+      CREATE: '/tags/categories',
+      BY_ID: (id) => `/tags/categories/${id}`,
+      UPDATE: (id) => `/tags/categories/${id}`,
+      DELETE: (id) => `/tags/categories/${id}`
+    },
+    ASSIGN: {
+      ADD: (recordId) => `/tags/${recordId}/assign`,
+      REMOVE: (recordId, tagId) => `/tags/${recordId}/remove/${tagId}`,
+      BATCH: '/tags/batch-assign'
+    }
   }
 }; 

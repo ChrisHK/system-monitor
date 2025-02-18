@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../db');
 const cacheService = require('../services/cacheService');
+const { AuthenticationError } = require('./errorTypes');
 
 const authCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -12,7 +13,7 @@ const auth = async (req, res, next) => {
         const token = req.header('Authorization')?.replace('Bearer ', '');
         
         if (!token) {
-            throw new Error('No token provided');
+            throw new AuthenticationError('No token provided');
         }
 
         // 檢查緩存
@@ -22,9 +23,17 @@ const auth = async (req, res, next) => {
             return next();
         }
 
+        let decoded;
         try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            const userId = decoded.id;
+            decoded = jwt.verify(token, process.env.JWT_SECRET, {
+                algorithms: [process.env.JWT_ALGORITHM || 'HS256']
+            });
+            
+            // 確保 id 是數字類型
+            const userId = typeof decoded.id === 'string' ? parseInt(decoded.id, 10) : decoded.id;
+            if (isNaN(userId)) {
+                throw new AuthenticationError('Invalid user ID in token');
+            }
             
             console.log('Token verified for user:', userId);
             
@@ -43,29 +52,54 @@ const auth = async (req, res, next) => {
                 const result = await pool.query(`
                     WITH user_data AS (
                         SELECT 
-                            u.id,
+                            u.id::integer,
                             u.username,
-                            u.group_id as user_group_id,
-                            u.role_id,
+                            u.group_id::integer as user_group_id,
+                            u.role_id::integer,
                             u.is_active,
                             g.name as group_name,
-                            g.id as group_id,
+                            g.permissions,
+                            g.id::integer as group_id,
                             r.name as role_name,
-                            ARRAY_AGG(DISTINCT gsp.store_id) FILTER (WHERE gsp.store_id IS NOT NULL) as permitted_stores,
+                            ARRAY_AGG(DISTINCT gsp.store_id::integer) FILTER (WHERE gsp.store_id IS NOT NULL) as permitted_stores,
                             ARRAY_AGG(DISTINCT gsp.features) FILTER (WHERE gsp.features IS NOT NULL) as store_features,
                             jsonb_build_object(
-                                'inventory', BOOL_OR(CASE WHEN gp.permission_type = 'inventory' THEN gp.permission_value::boolean ELSE false END),
-                                'inventory_ram', BOOL_OR(CASE WHEN gp.permission_type = 'inventory_ram' THEN gp.permission_value::boolean ELSE false END),
-                                'inbound', BOOL_OR(CASE WHEN gp.permission_type = 'inbound' THEN gp.permission_value::boolean ELSE false END),
-                                'outbound', BOOL_OR(CASE WHEN gp.permission_type = 'outbound' THEN gp.permission_value::boolean ELSE false END)
+                                'inventory', CASE WHEN gp_inv.permission_value IS NULL THEN false 
+                                                WHEN gp_inv.permission_value::text = 'true' THEN true 
+                                                ELSE false END,
+                                'inventory_ram', CASE WHEN gp_ram.permission_value IS NULL THEN false 
+                                                    WHEN gp_ram.permission_value::text = 'true' THEN true 
+                                                    ELSE false END,
+                                'inbound', CASE WHEN gp_in.permission_value IS NULL THEN false 
+                                              WHEN gp_in.permission_value::text = 'true' THEN true 
+                                              ELSE false END,
+                                'outbound', CASE WHEN gp_out.permission_value IS NULL THEN false 
+                                               WHEN gp_out.permission_value::text = 'true' THEN true 
+                                               ELSE false END,
+                                'purchase_order', CASE WHEN gp_po.permission_value IS NULL THEN false 
+                                                     WHEN gp_po.permission_value::text = 'true' THEN true 
+                                                     ELSE false END,
+                                'tag_management', CASE WHEN gp_tag.permission_value IS NULL THEN false 
+                                                     WHEN gp_tag.permission_value::text = 'true' THEN true 
+                                                     ELSE false END
                             ) as main_permissions
                         FROM users u
                         LEFT JOIN groups g ON u.group_id = g.id
                         LEFT JOIN roles r ON u.role_id = r.id
                         LEFT JOIN group_store_permissions gsp ON g.id = gsp.group_id
-                        LEFT JOIN group_permissions gp ON g.id = gp.group_id
+                        LEFT JOIN group_permissions gp_inv ON g.id = gp_inv.group_id AND gp_inv.permission_type = 'inventory'
+                        LEFT JOIN group_permissions gp_ram ON g.id = gp_ram.group_id AND gp_ram.permission_type = 'inventory_ram'
+                        LEFT JOIN group_permissions gp_in ON g.id = gp_in.group_id AND gp_in.permission_type = 'inbound'
+                        LEFT JOIN group_permissions gp_out ON g.id = gp_out.group_id AND gp_out.permission_type = 'outbound'
+                        LEFT JOIN group_permissions gp_po ON g.id = gp_po.group_id AND gp_po.permission_type = 'purchase_order'
+                        LEFT JOIN group_permissions gp_tag ON g.id = gp_tag.group_id AND gp_tag.permission_type = 'tag_management'
                         WHERE u.id = $1 AND u.is_active = true
-                        GROUP BY u.id, u.username, u.group_id, u.role_id, u.is_active, g.id, g.name, r.name
+                        GROUP BY 
+                            u.id, u.username, u.group_id, u.role_id, u.is_active, 
+                            g.id, g.name, g.permissions, r.name,
+                            gp_inv.permission_value, gp_ram.permission_value, 
+                            gp_in.permission_value, gp_out.permission_value,
+                            gp_po.permission_value, gp_tag.permission_value
                     )
                     SELECT 
                         ud.id,
@@ -82,10 +116,29 @@ const auth = async (req, res, next) => {
                 `, [userId]);
 
                 if (result.rows.length === 0) {
-                    throw new Error('User not found or inactive');
+                    throw new AuthenticationError('User not found or inactive');
                 }
 
                 userData = result.rows[0];
+                
+                // 確保數據類型正確
+                userData.id = parseInt(userData.id, 10);
+                userData.group_id = parseInt(userData.group_id, 10);
+                userData.role_id = parseInt(userData.role_id, 10);
+                userData.permitted_stores = userData.permitted_stores?.map(id => parseInt(id, 10)) || [];
+
+                // 確保 admin 用戶有所有權限
+                if (userData.group_name === 'admin') {
+                    userData.main_permissions = {
+                        inventory: true,
+                        inventory_ram: true,
+                        inbound: true,
+                        outbound: true,
+                        purchase_order: true,
+                        tag_management: true
+                    };
+                }
+
                 console.log('User data loaded:', {
                     userId: userData.id,
                     username: userData.username,
@@ -151,8 +204,18 @@ const auth = async (req, res, next) => {
             
             next();
         } catch (jwtError) {
-            console.error('JWT verification failed:', jwtError);
-            throw new Error('Invalid token');
+            console.error('JWT verification failed:', {
+                error: jwtError.message,
+                name: jwtError.name,
+                stack: jwtError.stack
+            });
+            
+            if (jwtError.name === 'TokenExpiredError') {
+                throw new AuthenticationError('Token has expired');
+            } else if (jwtError.name === 'JsonWebTokenError') {
+                throw new AuthenticationError('Invalid token');
+            }
+            throw new AuthenticationError('Token verification failed');
         }
     } catch (error) {
         console.error('=== Authentication Error ===', {
@@ -161,10 +224,15 @@ const auth = async (req, res, next) => {
             name: error.name
         });
         
-        res.status(401).json({
+        const statusCode = error instanceof AuthenticationError ? 401 : 500;
+        const errorMessage = error instanceof AuthenticationError 
+            ? error.message 
+            : 'Internal server error during authentication';
+        
+        res.status(statusCode).json({
             success: false,
-            error: 'Please authenticate',
-            detail: error.message
+            error: errorMessage,
+            code: error.name
         });
     }
 };
@@ -188,6 +256,7 @@ const checkGroup = (requiredGroups = [], requireStore = false) => {
             user: {
                 id: user?.id,
                 group: user?.group_name,
+                permissions: user?.permissions,
                 hasGroupId: !!user?.group_id
             },
             required: {
@@ -204,7 +273,7 @@ const checkGroup = (requiredGroups = [], requireStore = false) => {
             });
         }
 
-        const isAdminGroup = user.group_name === 'admin';
+        const isAdminGroup = user.group_name === 'admin' || (user.permissions && user.permissions.includes('admin'));
         const hasGroupPermission = isAdminGroup || requiredGroups.includes(user.group_name);
         const hasStorePermission = !requireStore || 
             isAdminGroup || 
@@ -214,6 +283,7 @@ const checkGroup = (requiredGroups = [], requireStore = false) => {
             isAdminGroup,
             hasGroupPermission,
             hasStorePermission,
+            permissions: user.permissions,
             permittedStores: user.permitted_stores
         });
 

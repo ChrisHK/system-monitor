@@ -4,7 +4,7 @@ import { Tabs, Card } from 'antd';
 import GroupManagement from '../components/settings/GroupManagement';
 import StoreManagement from '../components/settings/StoreManagement';
 import UserManagement from '../components/settings/UserManagement';
-import TagManagementPage from './TagManagementPage';
+import TagManagement from '../components/settings/TagManagement';
 import DataProcessPage from './DataProcessPage';
 
 const SettingsPage = () => {
@@ -60,7 +60,7 @@ const SettingsPage = () => {
                         <Route path="stores" element={<StoreManagement />} />
                         <Route path="groups" element={<GroupManagement />} />
                         <Route path="users" element={<UserManagement />} />
-                        <Route path="tags" element={<TagManagementPage />} />
+                        <Route path="tags" element={<TagManagement />} />
                         <Route path="data-process" element={<DataProcessPage />} />
                     </Routes>
                 </div>

@@ -23,11 +23,12 @@ import {
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import moment from 'moment';
 import { useAuth } from '../contexts/AuthContext';
-import poService from '../services/poService';
+import { poService } from '../api/services';
 import { PlusOutlined, MenuOutlined, EditOutlined } from '@ant-design/icons';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import styled from 'styled-components';
 import { useLocation } from 'react-router-dom';
+import { tagService } from '../api/services';
 
 const StyledDatePicker = styled(DatePicker)`
     input {
@@ -285,65 +286,59 @@ const AddEditPOPage = () => {
     useEffect(() => {
         const fetchInitialData = async () => {
             try {
-                // 如果是新建模式，獲取新的 PO Number
-                if (!isEditing) {
-                    const poNumber = await poService.getLatestPONumber();
-                    form.setFieldsValue({
-                        poNumber,
-                        date: moment(),  // 設置為今天
-                        supplier: '',
-                        note: ''
-                    });
+                // 獲取所有可用分類
+                const categoriesResponse = await tagService.getCategories();
+                if (!categoriesResponse?.success || !Array.isArray(categoriesResponse.categories)) {
+                    console.error('Invalid categories response:', categoriesResponse);
+                    message.error('Failed to load categories');
+                    return;
                 }
 
-                // 從 Tag Management 獲取 categories
-                const categoriesResponse = await poService.getCategories();
-                const categories = categoriesResponse?.data?.categories || [];
+                const categories = categoriesResponse.categories;
+                setAvailableCategories(categories);
                 
-                // 只顯示啟用的分類
-                const activeCategories = categories.filter(cat => cat.is_active);
-                setAvailableCategories(activeCategories);
+                try {
+                    // 加載保存的分類選擇和順序
+                    const savedDataStr = localStorage.getItem('savedPOCategories');
+                    if (!savedDataStr) return;
 
-                // 加載保存的分類選擇和順序
-                const savedData = JSON.parse(localStorage.getItem('savedPOCategories') || '{}');
-                const savedCategoryIds = savedData.categoryIds || [];
-                const savedOrder = savedData.order || [];
+                    const savedData = JSON.parse(savedDataStr);
+                    if (!savedData || !Array.isArray(savedData.categoryIds) || !Array.isArray(savedData.order)) {
+                        console.warn('Invalid saved categories data:', savedData);
+                        return;
+                    }
 
-                // 如果是編輯模式，獲取 PO 數據
-                if (isEditing) {
-                    const poResponse = await poService.getPOById(id);
-                    if (poResponse?.data?.success) {
-                        const { order, items, categories: poCategories } = poResponse.data.data;
-                        
-                        // 設置表單數據
-                        form.setFieldsValue({
-                            poNumber: order.po_number,
-                            date: order.order_date ? moment(order.order_date) : moment(),
-                            supplier: order.supplier || '',
-                            note: order.notes || ''
-                        });
+                    const { categoryIds: savedCategoryIds, order: savedOrder } = savedData;
 
-                        // 設置項目
-                        setItems(items || []);
+                    // 如果有保存的分類順序，使用它
+                    if (savedCategoryIds.length > 0 && savedOrder.length > 0) {
+                        const orderedCategories = savedOrder
+                            .map(saved => categories.find(cat => cat && cat.id === saved.id))
+                            .filter(Boolean);
 
-                        // 設置分類
-                        if (poCategories?.length > 0) {
-                            setSelectedCategories(poCategories);
-                            poCategories.forEach(category => {
-                                handleLoadCategoryTags(category.id);
-                            });
+                        if (orderedCategories.length > 0) {
+                            setSelectedCategories(orderedCategories);
+                            // Load tags sequentially to avoid race conditions
+                            for (const category of orderedCategories) {
+                                if (category && category.id) {
+                                    await handleLoadCategoryTags(category.id);
+                                }
+                            }
                         }
                     }
-                } else if (savedCategoryIds.length > 0) {
-                    // 如果是新建模式且有保存的分類順序
-                    const orderedCategories = savedOrder
-                        .map(saved => activeCategories.find(cat => cat.id === saved.id))
-                        .filter(Boolean);
+                } catch (storageError) {
+                    console.error('Error processing saved categories:', storageError);
+                }
 
-                    setSelectedCategories(orderedCategories);
-                    orderedCategories.forEach(category => {
-                        handleLoadCategoryTags(category.id);
-                    });
+                // 如果是新建模式，獲取新的 PO Number
+                if (!isEditing) {
+                    const response = await poService.getNewPONumber();
+                    if (response?.success) {
+                        form.setFieldsValue({
+                            poNumber: response.poNumber,
+                            date: moment()
+                        });
+                    }
                 }
             } catch (error) {
                 console.error('Error fetching initial data:', error);
@@ -381,12 +376,16 @@ const AddEditPOPage = () => {
     const handleLoadCategoryTags = async (categoryId) => {
         try {
             const response = await poService.getTagsByCategory(categoryId);
-            const tags = response?.data?.tags || [];
-            const activeTags = tags.filter(tag => tag.is_active);
-            setCategoryTags(prev => ({
-                ...prev,
-                [categoryId]: activeTags
-            }));
+            if (response?.success) {
+                const tags = response.tags || [];
+                const activeTags = tags.filter(tag => tag.is_active);
+                setCategoryTags(prev => ({
+                    ...prev,
+                    [categoryId]: activeTags
+                }));
+            } else {
+                throw new Error(response?.error || 'Failed to load tags');
+            }
         } catch (error) {
             console.error('Error loading tags:', error);
             message.error('Failed to load tags');
@@ -533,7 +532,7 @@ const AddEditPOPage = () => {
                     );
                     if (!categoryData) return '-';
                     const tag = categoryTags[category.id]?.find(t => t.id === categoryData.tag_id);
-                    return tag ? <Tag color="blue">{tag.name}</Tag> : '-';
+                    return tag ? <Tag key={`${record.id}_${category.id}`} color="blue">{tag.name}</Tag> : '-';
                 }
             });
         });

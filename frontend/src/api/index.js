@@ -1,108 +1,57 @@
 import axios from 'axios';
+import { getApiBaseUrl } from './config/endpoints';
+import { setupInterceptors } from './config/interceptors';
+import { validateEnvironment, getEnvironmentConfig } from './config/environment';
 
-// Use the environment variable for API URL
-const API_BASE_URL = (() => {
-    // Get the current hostname
-    const currentHostname = window.location.hostname;
-    const apiUrl = process.env.REACT_APP_API_URL;
-    
-    // If accessing from another machine, ensure we use the server's IP
-    if (currentHostname !== 'localhost' && currentHostname !== '127.0.0.1') {
-        return 'http://192.168.0.10:4000/api';
+// Import services
+import authService from './services/auth.service';
+import userService from './services/user.service';
+import inventoryService from './services/inventory.service';
+import storeService from './services/store.service';
+import rmaService from './services/rma.service';
+import orderService from './services/order.service';
+import salesService from './services/sales.service';
+import tagService from './services/tag.service';
+
+// Create and configure API instance
+const api = (() => {
+  const config = getEnvironmentConfig();
+  const baseURL = getApiBaseUrl();
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // In production, always use relative path
+  const finalBaseURL = isProduction ? '/api' : baseURL;
+
+  const instance = axios.create({
+    baseURL: finalBaseURL,
+    timeout: config.apiTimeout,
+    headers: {
+      'Content-Type': 'application/json',
     }
-    
-    return apiUrl || 'http://localhost:4000/api';
+  });
+
+  // Setup interceptors
+  setupInterceptors(instance, config);
+
+  return instance;
 })();
 
-// Create axios instance
-const api = axios.create({
-    baseURL: API_BASE_URL,
-    timeout: 30000,
-    headers: {
-        'Content-Type': 'application/json',
-    }
-});
+// Export the configured API instance
+export default api;
 
-// Request interceptor
-api.interceptors.request.use(
-    (config) => {
-        // Skip token for login and public endpoints
-        if (config.url === '/users/login') {
-            return config;
-        }
+// Export services
+export {
+  authService,
+  userService,
+  inventoryService,
+  storeService,
+  rmaService,
+  orderService,
+  salesService,
+  tagService
+};
 
-        const token = localStorage.getItem('token');
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
-        }
-        
-        if (process.env.NODE_ENV === 'development') {
-            console.log('API Request:', {
-                url: config.url,
-                method: config.method,
-                headers: config.headers
-            });
-        }
-        
-        return config;
-    },
-    (error) => {
-        console.error('API Request Error:', error);
-        return Promise.reject(error);
-    }
-);
-
-// Response interceptor
-api.interceptors.response.use(
-    (response) => {
-        if (process.env.NODE_ENV === 'development') {
-            console.log('API Response:', {
-                url: response.config.url,
-                status: response.status,
-                success: response.data?.success
-            });
-        }
-        return response.data;
-    },
-    (error) => {
-        // Handle authentication errors
-        if (error.response?.status === 401) {
-            localStorage.removeItem('token');
-            localStorage.removeItem('user');
-            // Don't redirect if already on login page
-            if (!window.location.pathname.includes('/login')) {
-                window.location.href = '/login';
-            }
-        }
-        
-        if (process.env.NODE_ENV === 'development') {
-            console.error('API Error:', {
-                url: error.config?.url,
-                status: error.response?.status,
-                message: error.message,
-                data: error.response?.data
-            });
-        }
-
-        return Promise.reject(error);
-    }
-);
-
-// Services
-export { default as authService } from './services/auth.service';
-export { default as userService } from './services/user.service';
-export { default as inventoryService } from './services/inventory.service';
-export { default as storeService } from './services/store.service';
-export { default as rmaService } from './services/rma.service';
-export { default as orderService } from './services/order.service';
-export { default as salesService } from './services/sales.service';
-
-// Utils
-export { ApiError, ERROR_CODES } from './utils/errorHandler';
-export { createQueryString, downloadFile } from './utils/apiUtils';
-
-// Config
-export { api } from './config/axios';
-export { ENDPOINTS } from './config/endpoints';
-
-export default api; 
+// Export configuration and utilities
+export { getApiBaseUrl } from './config/endpoints';
+export { setupInterceptors } from './config/interceptors';
+export { validateEnvironment, getEnvironmentConfig } from './config/environment'; 

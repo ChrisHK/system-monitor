@@ -108,6 +108,14 @@ const checkInventoryPermission = (req, res, next) => {
     // 檢查用戶是否是管理員
     if (req.user.group_name === 'admin') {
         console.log('User is admin, granting access');
+        // 确保 admin 用户有所有权限
+        req.user.main_permissions = {
+            ...req.user.main_permissions,
+            inventory: true,
+            inventory_ram: true,
+            outbound: true,
+            inbound: true
+        };
         return next();
     }
 
@@ -131,9 +139,41 @@ router.get('/', auth, checkInventoryPermission, catchAsync(async (req, res) => {
     const client = await pool.connect();
 
     try {
+        console.log('Fetching records with params:', {
+            page,
+            limit,
+            offset,
+            search,
+            store_id
+        });
+
+        // First check if the table exists
+        const tableCheck = await client.query(`
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'system_records'
+            );
+        `);
+        
+        console.log('Table check result:', tableCheck.rows[0]);
+
+        if (!tableCheck.rows[0].exists) {
+            throw new Error('system_records table does not exist');
+        }
+
         // Get total count of records
-        const countResult = await client.query('SELECT COUNT(*) FROM system_records WHERE is_current = true');
+        const countResult = await client.query(`
+            SELECT COUNT(*) 
+            FROM system_records 
+            WHERE is_current = true
+        `);
         const totalRecords = parseInt(countResult.rows[0].count);
+
+        console.log('Count query result:', {
+            totalRecords,
+            query: countResult.command
+        });
 
         // Build the main query
         const query = `
@@ -158,7 +198,21 @@ router.get('/', auth, checkInventoryPermission, catchAsync(async (req, res) => {
             params.push(`%${search}%`);
         }
 
+        console.log('Executing query:', {
+            query,
+            params
+        });
+
         const result = await client.query(query, params);
+
+        console.log('Records query result:', {
+            totalRecords,
+            returnedRecords: result.rows.length,
+            page,
+            limit,
+            firstRecord: result.rows[0],
+            lastRecord: result.rows[result.rows.length - 1]
+        });
 
         res.json({
             success: true,
@@ -170,6 +224,9 @@ router.get('/', auth, checkInventoryPermission, catchAsync(async (req, res) => {
             currentPage: parseInt(page),
             totalPages: Math.ceil(totalRecords / limit)
         });
+    } catch (error) {
+        console.error('Error fetching records:', error);
+        throw error;
     } finally {
         client.release();
     }

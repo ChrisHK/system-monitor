@@ -1,30 +1,36 @@
-// Server configuration
-export const SERVER_CONFIG = {
-    getBaseUrl: () => {
-        const currentHostname = window.location.hostname;
-        const configuredHost = process.env.REACT_APP_API_HOST;
-        const configuredPort = process.env.REACT_APP_API_PORT || '4000';
-        
-        // Always use the configured host if available
-        if (configuredHost) {
-            return `${configuredHost}:${configuredPort}`;
-        }
-        
-        // Fallback to IP for non-localhost
-        if (currentHostname !== 'localhost' && currentHostname !== '127.0.0.1') {
-            return '192.168.0.10:4000';
-        }
-        
-        return 'localhost:4000';
-    },
-    
-    getApiUrl: () => {
-        const baseUrl = SERVER_CONFIG.getBaseUrl();
-        return `http://${baseUrl}/api`;
-    },
-    
-    getWsUrl: () => {
-        const baseUrl = SERVER_CONFIG.getBaseUrl();
-        return `ws://${baseUrl}/ws`;
-    }
-}; 
+// Get server configuration based on environment
+const getServerConfig = () => {
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  const protocol = window.location.protocol;
+  const host = window.location.host;
+  const isProduction = nodeEnv === 'production';
+
+  // Log configuration
+  console.log('Server Configuration:', {
+    environment: nodeEnv,
+    protocol,
+    host,
+    isProduction,
+    timestamp: new Date().toISOString()
+  });
+
+  // In production, use current host
+  if (isProduction) {
+    return {
+      host,
+      protocol,
+      apiPath: '/api',
+      wsPath: '/ws'
+    };
+  }
+
+  // In development, use environment variables or defaults
+  return {
+    host: process.env.REACT_APP_SERVER_HOST || 'localhost:3000',
+    protocol: process.env.REACT_APP_SERVER_PROTOCOL || 'http:',
+    apiPath: process.env.REACT_APP_API_PATH || '/api',
+    wsPath: process.env.REACT_APP_WS_PATH || '/ws'
+  };
+};
+
+export default getServerConfig; 

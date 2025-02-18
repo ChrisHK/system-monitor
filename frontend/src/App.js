@@ -13,7 +13,6 @@ import InventoryRmaPage from './pages/InventoryRmaPage';
 import PurchaseOrderPage from './pages/PurchaseOrderPage';
 import AddEditPOPage from './pages/AddEditPOPage';
 import PODetailPage from './pages/PODetailPage';
-import TagManagementPage from './pages/TagManagementPage';
 import WelcomePage from './pages/WelcomePage';
 import InboundItemsPage from './pages/InboundItemsPage';
 import { useAuth } from './contexts/AuthContext';
@@ -90,13 +89,6 @@ const App = () => {
                             <PrivateRoute>
                                 <Layout>
                                     <PODetailPage />
-                                </Layout>
-                            </PrivateRoute>
-                        } />
-                        <Route path="/settings/tags" element={
-                            <PrivateRoute>
-                                <Layout>
-                                    <TagManagementPage />
                                 </Layout>
                             </PrivateRoute>
                         } />

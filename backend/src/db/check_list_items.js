@@ -1,20 +1,37 @@
 const { Pool } = require('pg');
 
+// Validate required environment variables
+const requiredEnvVars = ['DB_USER', 'DB_HOST', 'DB_NAME', 'DB_PASSWORD'];
+const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingEnvVars.length > 0) {
+    console.error('Missing required database environment variables:', {
+        missing: missingEnvVars,
+        environment: process.env.NODE_ENV,
+        timestamp: new Date().toISOString()
+    });
+    process.exit(1);
+}
+
 const pool = new Pool({
-    user: process.env.DB_USER || 'zero',
-    host: process.env.DB_HOST || '192.168.0.10',
-    database: process.env.DB_NAME || 'zerodev',
-    password: process.env.DB_PASSWORD || 'zero',
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASSWORD,
     port: parseInt(process.env.DB_PORT || '5432'),
-    // Add connection timeout and pool settings
-    connectionTimeoutMillis: 5000,
-    idleTimeoutMillis: 30000,
-    max: 20
+    // Connection pool settings
+    connectionTimeoutMillis: parseInt(process.env.DB_CONNECTION_TIMEOUT || '5000'),
+    idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '30000'),
+    max: parseInt(process.env.DB_MAX_CONNECTIONS || '20')
 });
 
 // Add pool error handling
 pool.on('error', (err, client) => {
-    console.error('Unexpected error on idle client', err);
+    console.error('Unexpected error on idle client:', {
+        error: err.message,
+        code: err.code,
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Add pool connection testing

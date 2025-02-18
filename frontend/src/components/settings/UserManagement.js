@@ -39,7 +39,12 @@ const UserManagement = () => {
                 throw new Error(response?.error || 'Failed to load groups');
             }
             
-            setGroups(response.groups);
+            const groupsList = response.data?.groups || response.groups;
+            if (!Array.isArray(groupsList)) {
+                throw new Error('Invalid groups data format');
+            }
+            
+            setGroups(groupsList);
         } catch (error) {
             console.error('Error fetching groups:', error);
             setError(error.message || 'Failed to load groups');
@@ -59,7 +64,12 @@ const UserManagement = () => {
                 throw new Error(response?.error || 'Failed to load stores');
             }
             
-            setStores(response.stores);
+            const storesList = response.data?.stores || response.stores;
+            if (!Array.isArray(storesList)) {
+                throw new Error('Invalid stores data format');
+            }
+            
+            setStores(storesList);
         } catch (error) {
             console.error('Error fetching stores:', error);
             setError(error.message || 'Failed to load stores');
@@ -78,9 +88,14 @@ const UserManagement = () => {
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to load users');
             }
+            
+            const usersList = response.data?.users || response.users;
+            if (!Array.isArray(usersList)) {
+                throw new Error('Invalid users data format');
+            }
 
-            // Find admin user from backend
-            const backendAdmin = response.users.find(user => user.username === 'admin');
+            // Find admin user from backend data
+            const backendAdmin = usersList.find(user => user.username === 'admin');
             
             if (backendAdmin) {
                 // Update admin user with backend data while preserving is_system flag
@@ -92,38 +107,44 @@ const UserManagement = () => {
                 };
                 
                 // Get all other users from backend
-                const otherUsers = response.users.filter(user => user.username !== 'admin');
+                const otherUsers = usersList.filter(user => user.username !== 'admin');
                 
                 // Set all users with admin first
                 setUsers([adminUser, ...otherUsers]);
             } else {
                 // If no admin in backend, use default admin user
                 const adminGroup = groups.find(g => g.name === 'admin');
+                if (!adminGroup) {
+                    throw new Error('Admin group not found');
+                }
+                
                 const defaultAdmin = {
                     ...DEFAULT_USERS[0],
-                    group_id: adminGroup?.id || 1,
+                    group_id: adminGroup.id,
                     group_name: 'admin',
-                    permitted_stores: adminGroup?.permitted_stores || []
+                    permitted_stores: adminGroup.permitted_stores || []
                 };
                 
-                // Get all other users from backend
-                const otherUsers = response.users;
-                
                 // Set all users with default admin first
-                setUsers([defaultAdmin, ...otherUsers]);
+                setUsers([defaultAdmin, ...usersList]);
             }
         } catch (error) {
             console.error('Error fetching users:', error);
             setError(error.message || 'Failed to load users');
+            
             // Fallback to admin user only with current groups data
             const adminGroup = groups.find(g => g.name === 'admin');
-            const defaultAdmin = {
-                ...DEFAULT_USERS[0],
-                group_id: adminGroup?.id || 1,
-                group_name: 'admin',
-                permitted_stores: adminGroup?.permitted_stores || []
-            };
-            setUsers([defaultAdmin]);
+            if (adminGroup) {
+                const defaultAdmin = {
+                    ...DEFAULT_USERS[0],
+                    group_id: adminGroup.id,
+                    group_name: 'admin',
+                    permitted_stores: adminGroup.permitted_stores || []
+                };
+                setUsers([defaultAdmin]);
+            } else {
+                setUsers([]);
+            }
         } finally {
             setLoading(false);
         }

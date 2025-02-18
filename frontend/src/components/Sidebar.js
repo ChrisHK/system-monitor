@@ -109,18 +109,25 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             if (!userResponse?.success) {
                 throw new Error('Failed to fetch user details');
             }
-            const userData = userResponse.user;
+            const userData = userResponse.data?.user || userResponse.user;
+            if (!userData) {
+                throw new Error('No user data received');
+            }
 
             // 2. 獲取群組信息
             const groupsResponse = await userService.getGroups();
             if (!groupsResponse?.success) {
                 throw new Error('Failed to fetch groups');
             }
+            const groups = groupsResponse.data?.groups || groupsResponse.groups;
+            if (!groups) {
+                throw new Error('No groups data received');
+            }
 
             // 3. 設置權限
             let userGroupPermissions = null;
-            if (userData.role === 'admin' || userData.group_name === 'admin') {
-                const adminGroup = groupsResponse.groups.find(g => g.name === 'admin');
+            if (userData.group_name === 'admin') {
+                const adminGroup = groups.find(g => g.name === 'admin');
                 if (adminGroup) {
                     userGroupPermissions = {
                         success: true,
@@ -135,7 +142,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                     };
                 }
             } else if (userData.group_id) {
-                const userGroup = groupsResponse.groups.find(g => g.id === userData.group_id);
+                const userGroup = groups.find(g => g.id === userData.group_id);
                 if (userGroup) {
                     // 確保 store_permissions 的格式正確
                     const processedStorePermissions = {};
@@ -174,11 +181,15 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             }
 
             // 5. 根據權限過濾商店
-            let filteredStores = storesResponse.stores;
-            if (userData.role !== 'admin' && userGroupPermissions?.permissions) {
+            let filteredStores = storesResponse.data?.stores || storesResponse.stores;
+            if (!Array.isArray(filteredStores)) {
+                throw new Error('Invalid stores data format');
+            }
+
+            if (userData.group_name !== 'admin' && userGroupPermissions?.permissions) {
                 // 使用 store_permissions 來過濾商店
                 const permittedStoreIds = Object.keys(userGroupPermissions.store_permissions).map(id => parseInt(id, 10));
-                filteredStores = storesResponse.stores.filter(store => 
+                filteredStores = filteredStores.filter(store => 
                     permittedStoreIds.includes(store.id)
                 );
             }
