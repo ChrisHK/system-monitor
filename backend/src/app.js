@@ -19,6 +19,7 @@ const inventoryRoutes = require('./routes/inventoryRoutes');
 const tagRoutes = require('./routes/tagRoutes');
 const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
+const dataProcessRoutes = require('./routes/dataProcessRoutes');
 
 console.log('Environment:', {
     NODE_ENV: config.nodeEnv,
@@ -76,6 +77,7 @@ app.use('/api/inventory', inventoryRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/tags', tagRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/data-process', dataProcessRoutes);
 
 // Create WebSocket server
 const wss = new WebSocket.Server({ 
@@ -148,7 +150,7 @@ app.get('*', (req, res) => {
 });
 
 // Start server
-const HOST = config.nodeEnv === 'production' ? '0.0.0.0' : 'localhost';
+const HOST = '0.0.0.0';  // 綁定到所有網絡接口
 
 server.listen(config.port, HOST, () => {
     console.log(`Server Configuration:`, {

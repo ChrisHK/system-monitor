@@ -1,37 +1,30 @@
-const path = require('path');
+const { Pool } = require('pg');
 const fs = require('fs').promises;
+const path = require('path');
 
-async function runMigrations() {
+const pool = new Pool({
+    user: process.env.DB_USER || 'zero',
+    host: process.env.DB_HOST || '192.168.0.10',
+    database: process.env.DB_NAME || 'zerodb',
+    password: process.env.DB_PASSWORD || 'zero',
+    port: parseInt(process.env.DB_PORT || '5432'),
+});
+
+async function runMigration() {
+    const client = await pool.connect();
     try {
-        console.log('Starting database migrations...');
-        
-        // 獲取遷移腳本目錄
-        const migrationsDir = path.join(__dirname, 'migrations');
-        
-        // 讀取所有 .js 文件
-        const files = await fs.readdir(migrationsDir);
-        const jsFiles = files.filter(file => file.endsWith('.js'));
-        
-        // 按文件名排序
-        jsFiles.sort();
-        
-        // 執行每個遷移腳本
-        for (const file of jsFiles) {
-            console.log(`\nExecuting migration: ${file}`);
-            const migrationPath = path.join(migrationsDir, file);
-            require(migrationPath);
-            
-            // 等待一小段時間確保日誌順序正確
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-        
-        console.log('\nAll migrations completed');
-        
+        const sql = await fs.readFile(
+            path.join(__dirname, 'migrations', '20240219_002_update_system_records.sql'),
+            'utf8'
+        );
+        await client.query(sql);
+        console.log('Migration completed successfully');
     } catch (error) {
         console.error('Migration failed:', error);
-        process.exit(1);
+    } finally {
+        client.release();
+        await pool.end();
     }
 }
 
-// 執行遷移
-runMigrations(); 
+runMigration(); 

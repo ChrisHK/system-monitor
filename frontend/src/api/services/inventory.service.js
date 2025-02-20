@@ -7,24 +7,61 @@ class InventoryService {
     // Define all methods first
     this.getInventoryRecords = async (params) => {
       try {
+        console.log('Fetching inventory records with params:', {
+          params,
+          timestamp: new Date().toISOString()
+        });
         const response = await api.get(ENDPOINTS.INVENTORY.BASE, { params });
+        console.log('Inventory records response:', {
+          success: response.success,
+          total: response.total,
+          recordsCount: response.records?.length,
+          timestamp: new Date().toISOString()
+        });
         return response;
       } catch (error) {
-        console.error('Get inventory records error:', error);
+        console.error('Get inventory records error:', {
+          error: error.message,
+          stack: error.stack,
+          timestamp: new Date().toISOString()
+        });
         throw error;
       }
     };
 
     this.searchRecords = async (field, term, params = {}) => {
       try {
+        console.log('Searching records with params:', {
+          field,
+          term,
+          params,
+          timestamp: new Date().toISOString()
+        });
         const searchParams = {
           ...params,
+          field,
           q: term
         };
+        console.log('Final search params:', {
+          searchParams,
+          timestamp: new Date().toISOString()
+        });
         const response = await api.get(ENDPOINTS.INVENTORY.SEARCH, { params: searchParams });
+        console.log('Search records response:', {
+          success: response.success,
+          total: response.total,
+          recordsCount: response.records?.length,
+          firstRecord: response.records?.[0],
+          lastRecord: response.records?.[response.records.length - 1],
+          timestamp: new Date().toISOString()
+        });
         return response;
       } catch (error) {
-        console.error('Search records error:', error);
+        console.error('Search records error:', {
+          error: error.message,
+          stack: error.stack,
+          timestamp: new Date().toISOString()
+        });
         throw error;
       }
     };

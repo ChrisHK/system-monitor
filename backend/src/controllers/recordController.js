@@ -3,49 +3,52 @@ const pool = require('../config/database');
 // Get records with pagination
 exports.getRecords = async (req, res) => {
     try {
-        const page = parseInt(req.query.page) || 1;
-        console.log(`Getting records for page ${page}`);
-        
-        const limit = 50;
+        const { page = 1, limit = 20 } = req.query;
         const offset = (page - 1) * limit;
 
-        const client = await pool.connect();
-        try {
-            // 獲取總記錄數
-            const countResult = await client.query('SELECT COUNT(*) FROM system_records');
-            const totalRecords = parseInt(countResult.rows[0].count);
-            const totalPages = Math.ceil(totalRecords / limit);
+        console.log('Executing query:', {
+            query: `
+            SELECT 
+                r.*,
+                TO_CHAR(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+            FROM system_records r
+            WHERE r.is_current = true
+            
+            ORDER BY r.created_at DESC, r.id DESC
+            LIMIT $1 OFFSET $2
+        `,
+            params: [limit, offset]
+        });
 
-            // 獲取分頁數據
-            const cursor = Buffer.from(lastRecordDate + '|' + lastId).toString('base64');
-            const result = await client.query(`
-                SELECT * FROM system_records 
-                WHERE created_at > $1 OR (created_at = $1 AND id > $2)
-                ORDER BY created_at, id
-                LIMIT $3
-            `, [lastRecordDate, lastId, limit]);
+        const result = await pool.query(`
+            SELECT 
+                r.*,
+                TO_CHAR(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+            FROM system_records r
+            WHERE r.is_current = true
+            
+            ORDER BY r.created_at DESC, r.id DESC
+            LIMIT $1 OFFSET $2
+        `, [limit, offset]);
 
-            console.log(`Found ${result.rows.length} records`);
+        // Get total count
+        const countResult = await pool.query(
+            'SELECT COUNT(*) FROM system_records WHERE is_current = true'
+        );
 
-            res.json({
-                records: result.rows.map(record => ({
-                    ...record,
-                    created_at: record.formatted_date
-                })),
-                currentPage: page,
-                totalPages: totalPages,
-                totalRecords: totalRecords
-            });
-        } finally {
-            client.release();
-        }
+        const records = result.rows.map(record => ({
+            ...record,
+            created_at: record.formatted_date
+        }));
+
+        res.json({
+            records,
+            totalRecords: parseInt(countResult.rows[0].count),
+            totalPages: Math.ceil(parseInt(countResult.rows[0].count) / limit)
+        });
     } catch (err) {
         console.error('Error fetching records:', err);
-        res.status(500).json({ 
-            error: 'Failed to fetch records',
-            message: err.message,
-            details: process.env.NODE_ENV === 'development' ? err.stack : undefined
-        });
+        res.status(500).json({ error: 'Failed to fetch records' });
     }
 };
 
@@ -79,7 +82,7 @@ exports.searchRecords = async (req, res) => {
             text: `
                 SELECT 
                     *,
-                    TO_CHAR(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei', 'YYYY-MM-DD HH24:MI:SS') as formatted_date 
+                    TO_CHAR(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date 
                 FROM system_records 
                 WHERE LOWER(${field}::text) LIKE LOWER($1)
                 ORDER BY created_at DESC
@@ -118,7 +121,7 @@ exports.searchBySerialNumber = async (req, res) => {
         
         const result = await pool.query(`
             SELECT *,
-            TO_CHAR((created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') + INTERVAL '5 hours', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+            TO_CHAR(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
             FROM system_records 
             WHERE serialnumber = $1
             ORDER BY created_at DESC 

@@ -143,10 +143,15 @@ const InventoryPage = () => {
             searchText,
             page: pagination.current,
             pageSize: pagination.pageSize,
-            storeId: storeId !== 'all' ? parseInt(storeId, 10) : null
+            storeId: storeId !== 'all' ? parseInt(storeId, 10) : null,
+            force,
+            timestamp: new Date().toISOString()
         });
 
-        if (loading && !force) return;
+        if (loading && !force) {
+            console.log('Skipping fetch due to loading state');
+            return;
+        }
         
         try {
             setLoading(true);
@@ -158,15 +163,33 @@ const InventoryPage = () => {
                 ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {})
             };
 
-            console.log('Making API request with params:', searchParams);
+            console.log('Making API request with params:', {
+                ...searchParams,
+                timestamp: new Date().toISOString()
+            });
             
-            const response = searchText ? 
-                await inventoryService.searchRecords('serialnumber', searchText, searchParams) :
-                await inventoryService.getInventoryRecords(searchParams);
+            let response;
+            if (searchText) {
+                console.log('Performing search with text:', {
+                    text: searchText,
+                    timestamp: new Date().toISOString()
+                });
+                response = await inventoryService.searchRecords('serialnumber', searchText, searchParams);
+            } else {
+                console.log('Fetching all inventory records');
+                response = await inventoryService.getInventoryRecords(searchParams);
+            }
             
-            console.log('API response:', response);
+            console.log('API response:', {
+                ...response,
+                timestamp: new Date().toISOString()
+            });
 
             if (!response?.success) {
+                console.error('API request failed:', {
+                    error: response?.error,
+                    timestamp: new Date().toISOString()
+                });
                 throw new Error(response?.error || 'Failed to load inventory data');
             }
 
@@ -175,7 +198,8 @@ const InventoryPage = () => {
                 total: response.total,
                 recordsCount: response.records?.length,
                 firstRecord: response.records?.[0],
-                lastRecord: response.records?.[response.records.length - 1]
+                lastRecord: response.records?.[response.records.length - 1],
+                timestamp: new Date().toISOString()
             });
 
             // 只在有記錄時檢查位置

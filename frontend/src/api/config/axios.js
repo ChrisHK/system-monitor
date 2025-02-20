@@ -53,7 +53,7 @@ const createApiInstance = () => {
     
     // Create a minimal instance that will handle errors properly
     const instance = axios.create({
-      baseURL: '/api',
+      baseURL: '',
       timeout: 30000
     });
     setupInterceptors(instance, { isDevelopment: false, isProduction: true });

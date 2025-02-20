@@ -1,27 +1,44 @@
-const logger = {
-    info: (message, ...args) => {
-        console.log(new Date().toISOString(), 'INFO:', message, ...args);
-    },
-    error: (message, error) => {
-        console.error(new Date().toISOString(), 'ERROR:', message);
-        if (error) {
-            console.error('Error details:', {
-                message: error.message,
-                stack: error.stack,
-                code: error.code,
-                detail: error.detail,
-                hint: error.hint
-            });
-        }
-    },
-    warn: (message, ...args) => {
-        console.warn(new Date().toISOString(), 'WARN:', message, ...args);
-    },
-    debug: (message, ...args) => {
-        if (process.env.NODE_ENV === 'development') {
-            console.debug(new Date().toISOString(), 'DEBUG:', message, ...args);
-        }
-    }
+const winston = require('winston');
+const path = require('path');
+
+// 定義日誌格式
+const logFormat = winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.errors({ stack: true }),
+    winston.format.json()
+);
+
+// 創建日誌目錄
+const logDir = path.join(__dirname, '../../logs');
+
+// 創建 logger 實例
+const createLogger = (module) => {
+    return winston.createLogger({
+        format: logFormat,
+        defaultMeta: { module },
+        transports: [
+            // 錯誤日誌
+            new winston.transports.File({
+                filename: path.join(logDir, 'error.log'),
+                level: 'error'
+            }),
+            // 所有日誌
+            new winston.transports.File({
+                filename: path.join(logDir, 'combined.log')
+            }),
+            // 開發環境下輸出到控制台
+            ...(process.env.NODE_ENV !== 'production' ? [
+                new winston.transports.Console({
+                    format: winston.format.combine(
+                        winston.format.colorize(),
+                        winston.format.simple()
+                    )
+                })
+            ] : [])
+        ]
+    });
 };
 
-module.exports = { logger }; 
+module.exports = {
+    createLogger
+}; 

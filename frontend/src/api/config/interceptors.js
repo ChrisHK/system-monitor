@@ -3,9 +3,9 @@ import { ERROR_CODES } from '../utils/errorHandler';
 import { getEnvironmentConfig } from './environment';
 
 const PUBLIC_ENDPOINTS = [
-  ENDPOINTS.AUTH.LOGIN,
-  ENDPOINTS.AUTH.REQUEST_PASSWORD_RESET,
-  ENDPOINTS.AUTH.RESET_PASSWORD,
+  '/auth/login',
+  '/auth/request-password-reset',
+  '/auth/reset-password',
   '/health'
 ];
 
@@ -87,13 +87,12 @@ export const setupInterceptors = (instance, config) => {
       if (isProduction) {
         const originalUrl = reqConfig.url;
         reqConfig.url = makeRelativeUrl(reqConfig.url || '');
-        reqConfig.baseURL = '/api';
 
         console.log('Request URL transformation:', {
           original: originalUrl,
           transformed: reqConfig.url,
           baseURL: reqConfig.baseURL,
-          fullUrl: `${window.location.protocol}//${window.location.host}${reqConfig.baseURL}${reqConfig.url}`,
+          fullUrl: `${window.location.protocol}//${window.location.host}${reqConfig.url}`,
           isProduction,
           timestamp: new Date().toISOString()
         });
@@ -141,7 +140,7 @@ export const setupInterceptors = (instance, config) => {
       if (!isJsonResponse(response)) {
         const error = {
           code: ERROR_CODES.INVALID_RESPONSE,
-          message: 'Expected JSON response but received HTML',
+          message: 'Expected JSON response but received different content type',
           details: {
             url: response.config.url,
             baseURL: response.config.baseURL,
@@ -156,7 +155,7 @@ export const setupInterceptors = (instance, config) => {
       }
 
       // Handle successful login response
-      if (response.config.url?.includes(ENDPOINTS.AUTH.LOGIN) && response.data?.token) {
+      if (response.config.url?.includes('/auth/login') && response.data?.token) {
         try {
           localStorage.setItem('token', response.data.token);
           if (response.data.user) {
@@ -169,7 +168,7 @@ export const setupInterceptors = (instance, config) => {
             timestamp: new Date().toISOString()
           });
           return Promise.reject({
-            code: ERROR_CODES.UNKNOWN_ERROR,
+            code: ERROR_CODES.STORAGE_ERROR,
             message: 'Failed to store authentication data'
           });
         }

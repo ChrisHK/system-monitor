@@ -14,38 +14,19 @@ export const getApiBaseUrl = () => {
     timestamp: new Date().toISOString()
   });
 
-  // Production environment - always use relative path, ignore environment variables
+  // Production environment - use relative path
   if (nodeEnv === 'production') {
-    const baseUrl = '/api';
-    console.log('Using production API URL (ignoring env vars):', {
-      baseUrl,
-      fullUrl: `${protocol}//${host}${baseUrl}`,
-      envUrl: process.env.REACT_APP_API_URL,
-      message: 'Environment variable ignored in production',
-      timestamp: new Date().toISOString()
-    });
-    return baseUrl;
+    return '/api';
   }
 
-  // Development environment
-  if (nodeEnv === 'development') {
-    // 優先使用環境變量中的 URL
-    const devUrl = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
-    console.log('Using development API URL:', {
-      url: devUrl,
-      source: process.env.REACT_APP_API_URL ? 'env' : 'default',
-      timestamp: new Date().toISOString()
-    });
-    return devUrl;
-  }
-
-  // Fallback - use relative path
-  const fallbackUrl = '/api';
-  console.log('Using fallback API URL:', {
-    url: fallbackUrl,
+  // Development environment - use environment variable or default
+  const devUrl = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+  console.log('Using development API URL:', {
+    url: devUrl,
+    source: process.env.REACT_APP_API_URL ? 'env' : 'default',
     timestamp: new Date().toISOString()
   });
-  return fallbackUrl;
+  return devUrl;
 };
 
 export const ENDPOINTS = {

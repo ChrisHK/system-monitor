@@ -19,11 +19,9 @@ const api = (() => {
   const baseURL = getApiBaseUrl();
   const isProduction = process.env.NODE_ENV === 'production';
 
-  // In production, always use relative path
-  const finalBaseURL = isProduction ? '/api' : baseURL;
-
+  // Create axios instance with environment-specific configuration
   const instance = axios.create({
-    baseURL: finalBaseURL,
+    baseURL: baseURL,  // Use baseURL directly from config
     timeout: config.apiTimeout,
     headers: {
       'Content-Type': 'application/json',

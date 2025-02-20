@@ -53,9 +53,46 @@ router.post('/cleanup-duplicates', auth, checkMainPermission('inventory'), catch
 
 // Search records
 router.get('/search', auth, catchAsync(async (req, res) => {
-    const { q } = req.query;
+    const { q, field } = req.query;
     if (!q) {
         throw new ValidationError('Search query is required');
+    }
+
+    console.log('Search request:', {
+        query: q,
+        field,
+        timestamp: new Date().toISOString()
+    });
+
+    // 檢查所有相關記錄
+    const allRecords = await pool.query(
+        'SELECT * FROM system_records WHERE serialnumber = $1',
+        [q]
+    );
+
+    console.log('All matching records:', {
+        count: allRecords.rows.length,
+        records: allRecords.rows,
+        timestamp: new Date().toISOString()
+    });
+
+    // 首先直接查詢完全匹配
+    const exactMatch = await pool.query(
+        'SELECT * FROM system_records WHERE serialnumber = $1 AND is_current = true',
+        [q]
+    );
+
+    console.log('Exact match results:', {
+        count: exactMatch.rows.length,
+        records: exactMatch.rows,
+        timestamp: new Date().toISOString()
+    });
+
+    if (exactMatch.rows.length > 0) {
+        return res.json({
+            success: true,
+            records: exactMatch.rows
+        });
     }
 
     // Format search terms for System SKU matching
@@ -67,7 +104,7 @@ router.get('/search', auth, catchAsync(async (req, res) => {
         SELECT *
         FROM system_records
         WHERE 
-            is_current = true 
+            is_current = true
             AND (
                 serialnumber ILIKE $1
                 OR model ILIKE $1
@@ -87,7 +124,20 @@ router.get('/search', auth, catchAsync(async (req, res) => {
     `;
 
     const params = [`%${q}%`, ...searchTerms];
+    console.log('Executing search query:', {
+        query,
+        params,
+        timestamp: new Date().toISOString()
+    });
+
     const result = await pool.query(query, params);
+
+    console.log('Search results:', {
+        count: result.rows.length,
+        firstRecord: result.rows[0],
+        lastRecord: result.rows[result.rows.length - 1],
+        timestamp: new Date().toISOString()
+    });
 
     res.json({
         success: true,
@@ -179,7 +229,7 @@ router.get('/', auth, checkInventoryPermission, catchAsync(async (req, res) => {
         const query = `
             SELECT 
                 r.*,
-                TO_CHAR(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Taipei', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+                TO_CHAR(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
             FROM system_records r
             WHERE r.is_current = true
             ${search ? `AND (
@@ -487,6 +537,32 @@ router.get('/with-locations', catchAsync(async (req, res) => {
     } finally {
         client.release();
     }
+}));
+
+// Debug route - get all records for a serial number
+router.get('/debug/:serialnumber', auth, catchAsync(async (req, res) => {
+    const { serialnumber } = req.params;
+    
+    console.log('Debug query for serial number:', {
+        serialnumber,
+        timestamp: new Date().toISOString()
+    });
+
+    const result = await pool.query(
+        'SELECT * FROM system_records WHERE serialnumber = $1 ORDER BY created_at DESC',
+        [serialnumber]
+    );
+
+    console.log('Debug query results:', {
+        count: result.rows.length,
+        records: result.rows,
+        timestamp: new Date().toISOString()
+    });
+
+    res.json({
+        success: true,
+        records: result.rows
+    });
 }));
 
 module.exports = router; 
