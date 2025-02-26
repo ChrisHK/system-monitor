@@ -85,8 +85,6 @@ def calculate_checksum(items):
     checksum = hashlib.sha256(json_string.encode('utf-8')).hexdigest()
     
     print("\nDebug: Calculated checksum:", checksum)
-    print("Debug: Expected checksum:  d652fb5fb7401eb2c29935761df72dbbafaf78ea4268d9ef2875c1e8195a55b8")
-    print("Debug: Match:", checksum == "d652fb5fb7401eb2c29935761df72dbbafaf78ea4268d9ef2875c1e8195a55b8")
     
     return checksum
 
@@ -310,11 +308,89 @@ class APIConnection:
                 if not status_response.ok:
                     raise Exception("Server is not healthy")
                 
-                # 確保所有數值都是浮點數
+                # 處理數值轉換
                 for item in data['items']:
-                    item['ram_gb'] = float(item['ram_gb'])
-                    for disk in item['disks']:
-                        disk['size_gb'] = float(disk['size_gb'])
+                    # RAM 轉換
+                    try:
+                        item['ram_gb'] = float(str(item['ram_gb']).replace('GB', ''))
+                    except (ValueError, TypeError):
+                        item['ram_gb'] = 0
+                    
+                    # 確保所有必要字段都存在
+                    if 'disks_gb' not in item:
+                        item['disks_gb'] = 0
+                    
+                    if 'design_capacity' not in item:
+                        item['design_capacity'] = 0
+                    
+                    if 'full_charge_capacity' not in item:
+                        item['full_charge_capacity'] = 0
+                    
+                    if 'cycle_count' not in item:
+                        item['cycle_count'] = 0
+                    
+                    if 'battery_health' not in item:
+                        item['battery_health'] = 0
+                    
+                    if 'outbound_status' not in item:
+                        item['outbound_status'] = 'pending'
+                    
+                    if 'sync_status' not in item:
+                        item['sync_status'] = ''
+                    
+                    if 'sync_version' not in item:
+                        item['sync_version'] = '1.0'
+                    
+                    if 'data_source' not in item:
+                        item['data_source'] = 'api'
+                    
+                    if 'validation_status' not in item:
+                        item['validation_status'] = 'pending'
+                    
+                    if 'validation_message' not in item:
+                        item['validation_message'] = ''
+                    
+                    # 處理時間戳
+                    current_time = datetime.now(timezone.utc).isoformat()
+                    if 'created_at' not in item:
+                        item['created_at'] = current_time
+                    
+                    if 'started_at' not in item:
+                        item['started_at'] = current_time
+                    
+                    if 'last_updated_at' not in item:
+                        item['last_updated_at'] = current_time
+                    
+                    # 磁盤容量轉換
+                    if 'disks' in item and isinstance(item['disks'], list):
+                        # 將磁盤列表轉換為字符串格式
+                        disks_str = []
+                        total_size_gb = 0
+                        
+                        for disk in item['disks']:
+                            try:
+                                disk_type = disk.get('type', '')
+                                size_gb = disk.get('size_gb', 0)
+                                model = disk.get('model', '')
+                                
+                                # 計算總容量
+                                if isinstance(size_gb, (int, float)):
+                                    total_size_gb += size_gb
+                                elif isinstance(size_gb, str):
+                                    size_str = size_gb.upper()
+                                    if 'TB' in size_str:
+                                        total_size_gb += float(size_str.replace('TB', '')) * 1024
+                                    else:
+                                        total_size_gb += float(size_str.replace('GB', ''))
+                                
+                                # 格式化為字符串
+                                disks_str.append(f"{disk_type}:{size_gb}:{model}")
+                            except Exception as e:
+                                print(f"Error processing disk: {e}")
+                        
+                        # 更新磁盤字符串和總容量
+                        item['disks'] = ','.join(disks_str)
+                        item['disks_gb'] = total_size_gb
                 
                 # 打印請求數據
                 print("\nSending request with body:")
@@ -428,9 +504,23 @@ class ChecksumCalculator:
                 'graphicscard': str(item.get('graphicscard', '')),  # text
                 'touchscreen': str(item.get('touchscreen', 'false'))[:100],  # varchar(100)
                 'ram_gb': float(item.get('ram_gb', 0)),  # numeric
-                'disks': disks,  # 保持為數組格式
+                'disks': str(item.get('disks', '')),  # text
+                'design_capacity': int(item.get('design_capacity', 0)),  # bigint
+                'full_charge_capacity': int(item.get('full_charge_capacity', 0)),  # bigint
+                'cycle_count': int(item.get('cycle_count', 0)),  # bigint
+                'battery_health': float(item.get('battery_health', 0)),  # numeric
                 'created_at': datetime.now(timezone.utc).isoformat(),  # timestamp
-                'is_current': bool(item.get('is_current', True))  # boolean
+                'is_current': bool(item.get('is_current', True)),  # boolean
+                'outbound_status': str(item.get('outbound_status', ''))[:20],  # varchar(20)
+                'sync_status': str(item.get('sync_status', ''))[:20],  # varchar(20)
+                'last_sync_time': datetime.now(timezone.utc).isoformat() if item.get('last_sync_time') else None,  # timestamp
+                'sync_version': str(item.get('sync_version', '1.0'))[:255],  # varchar(255)
+                'started_at': datetime.now(timezone.utc).isoformat(),  # timestamp with time zone
+                'disks_gb': float(item.get('disks_gb', 0)),  # numeric
+                'last_updated_at': datetime.now(timezone.utc).isoformat(),  # timestamp with time zone
+                'data_source': str(item.get('data_source', 'api'))[:255],  # varchar(255)
+                'validation_status': str(item.get('validation_status', 'pending'))[:255],  # varchar(255)
+                'validation_message': str(item.get('validation_message', ''))  # text
             }
             normalized_items.append(normalized_item)
         return normalized_items
@@ -438,7 +528,8 @@ class ChecksumCalculator:
 def main():
     # 初始化連接
     api = APIConnection(
-        base_url="http://192.168.0.10:3000",
+        base_url="https://erp.zerounique.com",
+        #base_url="http://192.168.0.10:3000",
         username="admin",
         password="admin123"
     )
@@ -450,26 +541,28 @@ def main():
     
     # 準備測試數據
     items = [{
-        "serialnumber": "TEST123",
-        "computername": "LAPTOP-TEST123",
-        "manufacturer": "Dell",
-        "model": "Latitude 5420",
-        "systemsku": "1234567",
-        "operatingsystem": "Windows 10 Pro",
-        "cpu": "Intel Core i5-1135G7",
+        "serialnumber": "PC10ADA1",
+        "computername": "DESKTOP-BVOJOGI",
+        "manufacturer": "LENOVO",
+        "model": "20L8S21300",
+        "systemsku": "LENOVO_MT_20L8_BU_Think_FM_ThinkPad T480s",
+        "operatingsystem": "Microsoft Windows 11 Pro 10.0.26100",
+        "cpu": "Intel(R) Core(TM) i5-8250U CPU @ 1.60GHz (4C/8T)",
         "resolution": "1920x1080",
-        "graphicscard": "Intel Iris Xe Graphics",
-        "touchscreen": "false",
+        "graphicscard": "Intel(R) UHD Graphics 620 [1920x1080]",
+        "touchscreen": "Not Detected",
         "ram_gb": 16.0,
-        "disks": [
-            {
-                "size_gb": 512.0,
-                "type": "SSD",
-                "model": "Samsung EVO"
-            }
-        ],
-        "outbound_status": "available",
-        "is_current": True
+        "disks": "256GB",
+        "design_capacity": 57000.0,
+        "full_charge_capacity": 43290.0,
+        "cycle_count": 375.0,
+        "battery_health": 75.95,
+        "created_at": "2025-02-25T10:42:00",
+        "is_current": True,
+        "outbound_status": "pending",
+        "sync_status": "pending",
+        "data_source": "csv_sync",
+        "validation_status": "pending"
     }]
     
     # 準備請求數據
@@ -478,6 +571,61 @@ def main():
     # 發送數據
     result = api.send_data(request_data)
     print(f"\nAPI Response: {json.dumps(result, indent=2)}")
+    
+    if result.get('success') and result.get('batchId'):
+        max_retries = 6  # 最多重試 6 次
+        retry_interval = 10  # 每次等待 10 秒
+        
+        for attempt in range(max_retries):
+            print(f"\nAttempt {attempt + 1} of {max_retries}")
+            print(f"Waiting {retry_interval} seconds for processing...")
+            time.sleep(retry_interval)
+            
+            # 檢查處理狀態
+            try:
+                # 使用 check_logs 方法
+                logs = api.check_logs()
+                
+                if logs:
+                    # 找到對應的批次記錄
+                    batch_log = next(
+                        (log for log in logs.get('logs', []) 
+                         if log.get('batch_id') == result['batchId']), 
+                        None
+                    )
+                    
+                    if batch_log:
+                        print("\nProcessing Status:")
+                        print(json.dumps(batch_log, indent=2))
+                        
+                        # 檢查同步狀態
+                        if batch_log.get('status') == 'completed':
+                            sync_response = api.session.post(
+                                f"{api.base_url}/api/data-process/sync-status",
+                                json={"serialnumbers": ["PC10ADA1"]},
+                                timeout=api.timeout
+                            )
+                            
+                            if sync_response.ok:
+                                sync_data = sync_response.json()
+                                print("\nSync Status:")
+                                print(json.dumps(sync_data, indent=2))
+                                break  # 成功獲取同步狀態後退出
+                            else:
+                                print(f"\nFailed to get sync status: {sync_response.status_code}")
+                        else:
+                            print(f"\nProcessing not completed yet, status: {batch_log.get('status', 'unknown')}")
+                    else:
+                        print(f"\nNo log found for batch ID: {result['batchId']}")
+                else:
+                    print("\nNo processing logs available")
+                    
+            except Exception as e:
+                print(f"\nError checking status: {str(e)}")
+            
+            # 如果是最後一次嘗試，顯示警告
+            if attempt == max_retries - 1:
+                print("\nWarning: Maximum retries reached, processing might still be ongoing")
 
 if __name__ == "__main__":
     main() 

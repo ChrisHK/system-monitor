@@ -10,10 +10,9 @@ exports.getRecords = async (req, res) => {
             query: `
             SELECT 
                 r.*,
-                TO_CHAR(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+                TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI:SS') as formatted_date
             FROM system_records r
             WHERE r.is_current = true
-            
             ORDER BY r.created_at DESC, r.id DESC
             LIMIT $1 OFFSET $2
         `,
@@ -23,10 +22,9 @@ exports.getRecords = async (req, res) => {
         const result = await pool.query(`
             SELECT 
                 r.*,
-                TO_CHAR(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+                TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI:SS') as formatted_date
             FROM system_records r
             WHERE r.is_current = true
-            
             ORDER BY r.created_at DESC, r.id DESC
             LIMIT $1 OFFSET $2
         `, [limit, offset]);
@@ -82,7 +80,7 @@ exports.searchRecords = async (req, res) => {
             text: `
                 SELECT 
                     *,
-                    TO_CHAR(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date 
+                    TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') as formatted_date 
                 FROM system_records 
                 WHERE LOWER(${field}::text) LIKE LOWER($1)
                 ORDER BY created_at DESC
@@ -121,7 +119,7 @@ exports.searchBySerialNumber = async (req, res) => {
         
         const result = await pool.query(`
             SELECT *,
-            TO_CHAR(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+            TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') as formatted_date
             FROM system_records 
             WHERE serialnumber = $1
             ORDER BY created_at DESC 
@@ -145,7 +143,9 @@ exports.searchBySerialNumber = async (req, res) => {
 
 // Get duplicate serials
 exports.getDuplicateSerials = async (req, res) => {
+    const client = await pool.connect();
     try {
+        // 1. 查找重複記錄
         const query = `
             SELECT serialnumber, COUNT(*) as count, 
                    array_agg(json_build_object(
@@ -158,23 +158,82 @@ exports.getDuplicateSerials = async (req, res) => {
                    ) ORDER BY created_at DESC) as records
             FROM system_records
             WHERE serialnumber IS NOT NULL
+            AND is_current = true
             GROUP BY serialnumber
             HAVING COUNT(*) > 1
             ORDER BY count DESC, serialnumber
         `;
 
-        const result = await pool.query(query);
+        const result = await client.query(query);
         
-        res.json({
-            success: true,
-            duplicates: result.rows
-        });
+        // 2. 如果發現重複記錄，自動執行清理
+        if (result.rows.length > 0) {
+            console.log(`Found ${result.rows.length} duplicate serial numbers, starting cleanup...`);
+            
+            await client.query('BEGIN');
+
+            // 3. 找出每個序列號最新的記錄並更新其他記錄
+            const updateResult = await client.query(`
+                WITH latest_records AS (
+                    SELECT id, serialnumber,
+                        ROW_NUMBER() OVER (PARTITION BY serialnumber ORDER BY created_at DESC) as rn
+                    FROM system_records
+                    WHERE is_current = true
+                    AND serialnumber IN (
+                        SELECT serialnumber
+                        FROM system_records
+                        WHERE is_current = true
+                        GROUP BY serialnumber
+                        HAVING COUNT(*) > 1
+                    )
+                )
+                UPDATE system_records
+                SET is_current = false
+                WHERE id NOT IN (
+                    SELECT id 
+                    FROM latest_records 
+                    WHERE rn = 1
+                )
+                AND is_current = true
+                AND serialnumber IN (
+                    SELECT serialnumber
+                    FROM latest_records
+                )
+                RETURNING id
+            `);
+
+            await client.query('COMMIT');
+
+            // 4. 返回清理結果
+            res.json({
+                success: true,
+                duplicates: result.rows,
+                cleanup: {
+                    performed: true,
+                    recordsUpdated: updateResult.rowCount,
+                    timestamp: new Date().toISOString()
+                }
+            });
+        } else {
+            res.json({
+                success: true,
+                duplicates: [],
+                cleanup: {
+                    performed: false,
+                    message: 'No duplicates found'
+                }
+            });
+        }
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('Error fetching duplicate serials:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to fetch duplicate serials'
+            error: 'Failed to fetch duplicate serials',
+            details: error.message
         });
+    } finally {
+        client.release();
     }
 };
 

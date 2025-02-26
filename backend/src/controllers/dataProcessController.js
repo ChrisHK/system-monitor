@@ -3,329 +3,331 @@ const { createLogger } = require('../utils/logger');
 const ChecksumCalculator = require('../utils/checksumCalculator');
 const logger = createLogger('data-processing');
 
+// 添加處理狀態常量
+const PROCESSING_STATUS = {
+    PROCESSING: 'processing',
+    COMPLETED: 'completed',
+    COMPLETED_WITH_ERRORS: 'completed_with_errors',
+    FAILED: 'failed'
+};
+
+// 處理時間戳和時區
+const ensureTimestamp = (timestamp) => {
+    if (!timestamp) {
+        return new Date().toISOString();
+    }
+    try {
+        // 解析 ISO 格式的時間戳
+        const date = new Date(timestamp);
+        if (isNaN(date.getTime())) {
+            throw new Error('Invalid timestamp');
+        }
+        // 如果時間戳沒有時區信息，假定為 UTC
+        return date.toISOString();
+    } catch (error) {
+        logger.warn('Invalid timestamp format, using current time:', {
+            original: timestamp,
+            error: error.message
+        });
+        return new Date().toISOString();
+    }
+};
+
+// 確保數值為有效的數字
+const ensureNumeric = (value, defaultValue = 0) => {
+    if (value === null || value === undefined) {
+        return defaultValue;
+    }
+    const num = parseFloat(value);
+    return isNaN(num) ? defaultValue : num;
+};
+
+// 處理磁盤數據的輔助函數
+const formatDisks = (disksData) => {
+    try {
+        // 如果是 null 或 undefined，返回 null
+        if (disksData === null || disksData === undefined) {
+            return null;
+        }
+
+        // 如果是字符串，直接返回
+        if (typeof disksData === 'string') {
+            return disksData;
+        }
+
+        // 如果是數字，轉換為字符串
+        if (typeof disksData === 'number') {
+            return String(disksData);
+        }
+
+        // 如果是數組，轉換為字符串
+        if (Array.isArray(disksData)) {
+            return String(disksData);
+        }
+
+        // 其他情況返回原始值的字符串形式
+        return String(disksData);
+    } catch (error) {
+        logger.error('Error formatting disks:', {
+            error: error.message,
+            disksData
+        });
+        return null;
+    }
+};
+
+// 計算總磁盤容量
+const calculateTotalDisksGB = (disksData) => {
+    try {
+        // 如果是數字，直接返回
+        if (typeof disksData === 'number') {
+            return disksData;
+        }
+
+        // 如果提供了 disks_gb，優先使用
+        if (disksData && typeof disksData === 'object' && 'disks_gb' in disksData) {
+            return parseFloat(disksData.disks_gb) || 0;
+        }
+
+        // 其他情況返回 0
+        return 0;
+    } catch (error) {
+        logger.error('Error calculating total disks GB:', {
+            error: error.message,
+            disksData
+        });
+        return 0;
+    }
+};
+
 // Process inventory data
 const processInventoryData = async (req, res) => {
-    let client = null;
-    let logId = null;
-    let transactionActive = false;
-    
+    const client = await pool.connect();
+    let currentTransaction = false;
+    let processingLogId = null;
+
     try {
-        const { items, metadata, source, timestamp, batch_id } = req.body;
-        
-        // 記錄請求數據
-        logger.info('Processing inventory data:', {
-            batch_id,
-            source,
-            itemCount: items.length,
-            checksum: metadata.checksum,
-            timestamp: new Date().toISOString()
-        });
+        const { source, batch_id, items, metadata } = req.body;
 
-        client = await pool.connect();
+        // 1. 驗證輸入數據
+        if (!Array.isArray(items) || items.length === 0) {
+            throw new Error('Invalid items data');
+        }
 
-        // 開始新事務
+        // 2. 創建處理日誌
+        const logResult = await client.query(`
+            INSERT INTO processing_logs (
+                batch_id,
+                source,
+                status,
+                total_items,
+                started_at
+            ) VALUES ($1, $2, $3::processing_status, $4, NOW())
+            RETURNING id
+        `, [batch_id, source, 'processing', items.length]);
+
+        processingLogId = logResult.rows[0].id;
+
+        // 3. 開始事務
         await client.query('BEGIN');
-        transactionActive = true;
+        currentTransaction = true;
 
-        // 創建處理日誌條目
-        const logEntry = await client.query(
-            `INSERT INTO processing_logs 
-            (batch_id, source, total_items, status, started_at) 
-            VALUES ($1, $2, $3, $4, $5) 
-            RETURNING id`,
-            [batch_id, source, items.length, 'processing', timestamp]
-        );
+        // 4. 設置事務隔離級別和超時
+        await client.query('SET TRANSACTION ISOLATION LEVEL READ COMMITTED');
+        await client.query('SET statement_timeout = 300000'); // 5 minutes
 
-        logId = logEntry.rows[0].id;
+        // 5. 處理每個項目
         let processedCount = 0;
         let errorCount = 0;
         const errors = [];
 
-        // 處理每個項目
         for (const item of items) {
             try {
-                // 規範化項目數據
-                const normalizedItem = ChecksumCalculator.normalizeItem(item);
+                // 使用簡單的 INSERT,自動獲取下一個 ID
+                const result = await client.query(`
+                    WITH next_id AS (
+                        SELECT COALESCE(MAX(id), 0) + 1 as next_id 
+                        FROM system_records
+                    )
+                    INSERT INTO system_records (
+                        id, serialnumber, computername, manufacturer, model,
+                        systemsku, operatingsystem, cpu, resolution,
+                        graphicscard, touchscreen, ram_gb, disks,
+                        design_capacity, full_charge_capacity, cycle_count,
+                        battery_health, is_current, created_at, data_source,
+                        outbound_status, sync_status, validation_status
+                    ) 
+                    SELECT 
+                        next_id, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15, $16, true, COALESCE($17, NOW()), $18,
+                        $19, $20, $21
+                    FROM next_id
+                    RETURNING id, serialnumber
+                `, [
+                    item.serialnumber,
+                    item.computername || '',
+                    item.manufacturer || '',
+                    item.model || '',
+                    item.systemsku || '',
+                    item.operatingsystem || '',
+                    item.cpu || '',
+                    item.resolution || '',
+                    item.graphicscard || '',
+                    item.touchscreen || false,
+                    parseFloat(item.ram_gb) || 0,
+                    item.disks || '',
+                    parseInt(item.design_capacity) || 0,
+                    parseInt(item.full_charge_capacity) || 0,
+                    parseInt(item.cycle_count) || 0,
+                    parseFloat(item.battery_health) || 0,
+                    item.created_at,
+                    item.data_source || source,
+                    item.outbound_status || 'pending',
+                    item.sync_status || 'pending',
+                    item.validation_status || 'pending'
+                ]);
 
-                console.log('Processing item:', {
-                    original: item,
-                    normalized: normalizedItem,
-                    timestamp: new Date().toISOString()
-                });
-
-                // 檢查項目是否存在
-                const existingItem = await client.query(
-                    'SELECT id FROM system_records WHERE serialnumber = $1 FOR UPDATE',
-                    [normalizedItem.serialnumber]
-                );
-
-                console.log('Existing item check:', {
-                    serialnumber: normalizedItem.serialnumber,
-                    exists: existingItem.rows.length > 0,
-                    timestamp: new Date().toISOString()
-                });
-
-                // 先將所有相同序號的記錄設置為非當前
-                const updateResult = await client.query(
-                    `UPDATE system_records 
-                    SET is_current = false 
-                    WHERE serialnumber = $1
-                    RETURNING *`,
-                    [normalizedItem.serialnumber]
-                );
-
-                console.log('Update old records result:', {
-                    serialnumber: normalizedItem.serialnumber,
-                    updatedCount: updateResult.rowCount,
-                    timestamp: new Date().toISOString()
-                });
-
-                if (existingItem.rows.length > 0) {
-                    // 更新現有項目並設置為當前
-                    const updateResult = await client.query(
-                        `UPDATE system_records 
-                        SET 
-                            computername = $1,
-                            manufacturer = $2,
-                            model = $3,
-                            ram_gb = $4,
-                            disks = $5,
-                            systemsku = $6,
-                            operatingsystem = $7,
-                            cpu = $8,
-                            resolution = $9,
-                            graphicscard = $10,
-                            touchscreen = $11,
-                            battery_health = $12,
-                            cycle_count = $13,
-                            design_capacity = $14,
-                            full_charge_capacity = $15,
-                            is_current = true
-                        WHERE id = $16
-                        RETURNING *`,
-                        [
-                            item.computername,
-                            item.manufacturer,
-                            item.model,
-                            item.ram_gb,
-                            JSON.stringify(item.disks),
-                            item.systemsku,
-                            item.operatingsystem,
-                            item.cpu,
-                            item.resolution,
-                            item.graphicscard,
-                            item.touchscreen,
-                            item.battery_health,
-                            item.cycle_count,
-                            item.design_capacity,
-                            item.full_charge_capacity,
-                            existingItem.rows[0].id
-                        ]
-                    );
-
-                    console.log('Update result:', {
-                        serialnumber: normalizedItem.serialnumber,
-                        success: updateResult.rows.length > 0,
-                        record: updateResult.rows[0],
-                        timestamp: new Date().toISOString()
-                    });
-                } else {
-                    // 插入新項目並設置為當前
-                    const insertResult = await client.query(
-                        `INSERT INTO system_records (
-                            serialnumber, computername, manufacturer, model,
-                            ram_gb, disks, systemsku, operatingsystem,
-                            cpu, resolution, graphicscard, touchscreen,
-                            battery_health, cycle_count, design_capacity,
-                            full_charge_capacity, is_current
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-                        RETURNING *`,
-                        [
-                            normalizedItem.serialnumber,
-                            item.computername,
-                            item.manufacturer,
-                            item.model,
-                            item.ram_gb,
-                            JSON.stringify(item.disks),
-                            item.systemsku,
-                            item.operatingsystem,
-                            item.cpu,
-                            item.resolution,
-                            item.graphicscard,
-                            item.touchscreen,
-                            item.battery_health,
-                            item.cycle_count,
-                            item.design_capacity,
-                            item.full_charge_capacity,
-                            true
-                        ]
-                    );
-
-                    console.log('Insert result:', {
-                        serialnumber: normalizedItem.serialnumber,
-                        success: insertResult.rows.length > 0,
-                        record: insertResult.rows[0],
-                        timestamp: new Date().toISOString()
+                if (result.rows.length > 0) {
+                    processedCount++;
+                    console.log('Processed record:', {
+                        id: result.rows[0].id,
+                        serialnumber: result.rows[0].serialnumber,
+                        operation: 'insert'
                     });
                 }
-
-                processedCount++;
             } catch (itemError) {
                 errorCount++;
-                errors.push({
-                    serialnumber: item.serialnumber,
-                    error: itemError.message
-                });
-                logger.error('Error processing item:', {
+                const errorDetail = {
                     serialnumber: item.serialnumber,
                     error: itemError.message,
-                    stack: itemError.stack,
-                    timestamp: new Date().toISOString()
-                });
+                    code: itemError.code,
+                    detail: itemError.detail
+                };
+                errors.push(errorDetail);
+                console.error('Error processing item:', errorDetail);
             }
         }
 
-        // 更新處理日誌
-        await client.query(
-            `UPDATE processing_logs 
+        // 6. 提交事務
+        await client.query('COMMIT');
+        currentTransaction = false;
+
+        // 7. 更新處理日誌
+        const status = errorCount > 0 ? 'completed_with_errors' : 'completed';
+        await client.query(`
+            UPDATE processing_logs 
             SET 
-                status = $1,
+                status = $1::processing_status,
                 processed_count = $2,
                 error_count = $3,
                 errors = $4,
                 completed_at = NOW()
-            WHERE id = $5`,
-            [
-                errorCount === items.length ? 'failed' : 
-                errorCount > 0 ? 'completed_with_errors' : 'completed',
-                processedCount,
-                errorCount,
-                JSON.stringify(errors),
-                logId
-            ]
-        );
+            WHERE id = $5
+        `, [status, processedCount, errorCount, JSON.stringify(errors), processingLogId]);
 
-        await client.query('COMMIT');
-        transactionActive = false;
-
+        // 8. 返回結果
         res.json({
             success: true,
-            batch_id,
-            processed: processedCount,
-            errors: errorCount,
-            details: errors
+            status: status,
+            details: {
+                batch_id,
+                processed: processedCount,
+                errors: errorCount,
+                processingLogId,
+                error_details: errors
+            }
         });
 
     } catch (error) {
-        logger.error('Processing failed:', {
+        console.error('Error in processInventoryData:', {
             error: error.message,
             stack: error.stack,
-            batchId: req.body?.batch_id,
-            timestamp: new Date().toISOString()
+            processingLogId
         });
 
-        try {
-            if (client && transactionActive) {
+        if (currentTransaction) {
+            try {
                 await client.query('ROLLBACK');
-                transactionActive = false;
+            } catch (rollbackError) {
+                console.error('Error during rollback:', rollbackError);
             }
+            currentTransaction = false;
+        }
 
-            // 如果有 logId，在新事務中更新日誌狀態
-            if (logId && client) {
-                await client.query('BEGIN');
-                transactionActive = true;
-                
-                await client.query(
-                    `UPDATE processing_logs 
+        // 更新錯誤狀態
+        if (processingLogId) {
+            try {
+                await client.query(`
+                    UPDATE processing_logs 
                     SET 
-                        status = 'failed',
-                        error_message = $1,
+                        status = $1::processing_status,
+                        error_message = $2,
+                        error_count = 1,
+                        errors = $3,
                         completed_at = NOW()
-                    WHERE id = $2`,
-                    [error.message, logId]
-                );
-                
-                await client.query('COMMIT');
-                transactionActive = false;
-            }
-        } catch (updateError) {
-            logger.error('Failed to update log status:', {
-                error: updateError.message,
-                originalError: error.message,
-                timestamp: new Date().toISOString()
-            });
-            
-            if (client && transactionActive) {
-                try {
-                    await client.query('ROLLBACK');
-                } catch (rollbackError) {
-                    logger.error('Rollback failed:', rollbackError);
-                }
+                    WHERE id = $4
+                `, ['failed', error.message, JSON.stringify([{
+                    error: error.message,
+                    code: error.code,
+                    detail: error.detail
+                }]), processingLogId]);
+            } catch (updateError) {
+                console.error('Error updating processing log:', updateError);
             }
         }
 
         res.status(500).json({
             success: false,
-            error: 'Processing failed',
-            details: error.message
+            error: 'Failed to process inventory data',
+            details: {
+                message: error.message,
+                code: error.code,
+                processingLogId
+            }
         });
     } finally {
-        if (client) {
-            try {
-                if (transactionActive) {
-                    await client.query('ROLLBACK');
-                }
-            } catch (finalError) {
-                logger.error('Final rollback failed:', finalError);
-            }
-            client.release();
+        try {
+            await client.query('RESET statement_timeout');
+        } catch (resetError) {
+            console.error('Error resetting timeout:', resetError);
         }
+        client.release();
     }
 };
 
 // Get processing logs
 const getLogs = async (req, res) => {
+    const client = await pool.connect();
     try {
-        const { page = 1, limit = 20, status } = req.query;
-        const offset = (page - 1) * limit;
-
-        let query = `
+        const result = await client.query(`
             SELECT 
-                id, batch_id, source, status,
-                total_items, processed_count, error_count,
-                started_at, completed_at, error_message,
+                id,
+                batch_id,
+                source,
+                status::text,
+                total_items,
+                processed_count,
+                error_count,
+                started_at,
+                completed_at,
+                error_message,
                 errors
-            FROM processing_logs
-        `;
-
-        const params = [];
-        if (status) {
-            query += ` WHERE status = $1`;
-            params.push(status);
-        }
-
-        query += ` ORDER BY started_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-        params.push(limit, offset);
-
-        const result = await pool.query(query, params);
-
-        // Get total count
-        const countQuery = 'SELECT COUNT(*) FROM processing_logs' + (status ? ' WHERE status = $1' : '');
-        const countResult = await pool.query(countQuery, status ? [status] : []);
+            FROM processing_logs 
+            ORDER BY started_at DESC
+        `);
 
         res.json({
             success: true,
-            logs: result.rows,
-            total: parseInt(countResult.rows[0].count),
-            page: parseInt(page),
-            totalPages: Math.ceil(parseInt(countResult.rows[0].count) / limit)
+            logs: result.rows
         });
     } catch (error) {
-        logger.error('Error fetching logs:', error);
+        console.error('Error getting logs:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to fetch logs'
+            error: 'Failed to get logs'
         });
+    } finally {
+        client.release();
     }
 };
 
@@ -514,10 +516,62 @@ const deleteLog = async (req, res) => {
     }
 };
 
+// Get sync status
+const getSyncStatus = async (req, res) => {
+    try {
+        const { serialnumbers } = req.body;
+        
+        if (!Array.isArray(serialnumbers)) {
+            return res.status(400).json({
+                success: false,
+                error: 'serialnumbers must be an array'
+            });
+        }
+
+        const result = await pool.query(
+            `SELECT 
+                serialnumber,
+                sync_status,
+                sync_version,
+                last_sync_time,
+                is_current
+            FROM system_records 
+            WHERE serialnumber = ANY($1)
+            ORDER BY serialnumber, created_at DESC`,
+            [serialnumbers]
+        );
+
+        // 組織返回數據
+        const statusMap = {};
+        for (const record of result.rows) {
+            if (!statusMap[record.serialnumber] || record.is_current) {
+                statusMap[record.serialnumber] = {
+                    sync_status: record.sync_status,
+                    sync_version: record.sync_version,
+                    last_sync_time: record.last_sync_time
+                };
+            }
+        }
+
+        res.json({
+            success: true,
+            statuses: statusMap
+        });
+    } catch (error) {
+        logger.error('Error getting sync status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to get sync status'
+        });
+    }
+};
+
 module.exports = {
+    PROCESSING_STATUS,
     processInventoryData,
     getLogs,
     getProcessingStatus,
     clearLogs,
-    deleteLog
+    deleteLog,
+    getSyncStatus
 }; 

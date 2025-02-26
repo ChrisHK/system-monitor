@@ -276,29 +276,30 @@ const GroupManagement = () => {
             setLoading(true);
             setError(null);
 
-            // Ensure we're not modifying admin group permissions
-            if (editingGroup?.name === 'admin') {
-                const adminPermissions = ensureAdminPermissions(editingGroup);
-                values.main_permissions = adminPermissions.main_permissions;
-                values.store_permissions = adminPermissions.store_permissions;
-            }
-
-            // 1. Update basic group info
+            // 1. 更新群組基本信息
             const groupData = {
                 name: values.name,
                 description: values.description
             };
 
-            const updateResponse = await userService.updateGroup(editingGroup.id, groupData);
-            if (!updateResponse?.success) {
-                throw new Error(updateResponse?.error || 'Failed to update group');
+            let response;
+            if (editingGroup) {
+                response = await userService.updateGroup(editingGroup.id, groupData);
+            } else {
+                response = await userService.createGroup(groupData);
             }
 
-            // 2. Process and update permissions
-            const storePermissions = values.store_permissions || {};
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to save group');
+            }
 
-            // 確保只處理被選中的商店
+            const groupId = editingGroup ? editingGroup.id : response.group.id;
+
+            // 2. 處理權限
+            const storePermissions = values.store_permissions || {};
             const validStorePermissions = [];
+
+            // 確保所有選中的商店都有權限設置
             (values.permitted_stores || []).forEach(storeId => {
                 const storePrefix = `store_${storeId}_`;
                 const currentPermissions = {
@@ -308,41 +309,64 @@ const GroupManagement = () => {
                     outbound: storePermissions[`${storePrefix}outbound`] === true
                 };
 
-                validStorePermissions.push({
-                    store_id: String(storeId),
-                    inventory: currentPermissions.inventory ? '1' : '0',
-                    orders: currentPermissions.orders ? '1' : '0',
-                    rma: currentPermissions.rma ? '1' : '0',
-                    outbound: currentPermissions.outbound ? '1' : '0'
-                });
+                // 只有當至少有一個權限為 true 時才添加到列表中
+                if (Object.values(currentPermissions).some(value => value === true)) {
+                    validStorePermissions.push({
+                        store_id: String(storeId),
+                        inventory: currentPermissions.inventory ? '1' : '0',
+                        orders: currentPermissions.orders ? '1' : '0',
+                        rma: currentPermissions.rma ? '1' : '0',
+                        outbound: currentPermissions.outbound ? '1' : '0'
+                    });
+                }
+            });
+
+            // 確保 main_permissions 的值是字符串 '1' 或 '0'
+            const mainPermissions = {};
+            Object.entries(values.main_permissions || {}).forEach(([key, value]) => {
+                mainPermissions[key] = value === true ? '1' : '0';
             });
 
             const permissionsData = {
-                main_permissions: values.main_permissions,
+                main_permissions: mainPermissions,
                 permitted_stores: values.permitted_stores || [],
                 store_permissions: validStorePermissions
             };
             
-            const permissionsResponse = await userService.updateGroupPermissions(editingGroup.id, permissionsData);
+            console.log('Updating permissions with data:', permissionsData);
+            
+            const permissionsResponse = await userService.updateGroupPermissions(groupId, permissionsData);
             
             if (!permissionsResponse?.success) {
                 throw new Error(permissionsResponse?.error || 'Failed to update permissions');
             }
 
-            // 3. Convert the response data to match our local state format
+            // 3. 轉換響應數據以匹配本地狀態格式
             const convertedStorePermissions = {};
-            Object.entries(permissionsResponse.store_permissions || {}).forEach(([storeId, permissions]) => {
-                const storePrefix = `store_${storeId}_`;
-                convertedStorePermissions[`${storePrefix}inventory`] = permissions.inventory === true;
-                convertedStorePermissions[`${storePrefix}orders`] = permissions.orders === true;
-                convertedStorePermissions[`${storePrefix}rma`] = permissions.rma === true;
-                convertedStorePermissions[`${storePrefix}outbound`] = permissions.outbound === true;
-            });
+            if (Array.isArray(permissionsResponse.store_permissions)) {
+                permissionsResponse.store_permissions.forEach(perm => {
+                    if (perm.store_id) {
+                        const storePrefix = `store_${perm.store_id}_`;
+                        convertedStorePermissions[`${storePrefix}inventory`] = perm.inventory === '1';
+                        convertedStorePermissions[`${storePrefix}orders`] = perm.orders === '1';
+                        convertedStorePermissions[`${storePrefix}rma`] = perm.rma === '1';
+                        convertedStorePermissions[`${storePrefix}outbound`] = perm.outbound === '1';
+                    }
+                });
+            } else {
+                Object.entries(permissionsResponse.store_permissions || {}).forEach(([storeId, permissions]) => {
+                    const storePrefix = `store_${storeId}_`;
+                    convertedStorePermissions[`${storePrefix}inventory`] = permissions.inventory === '1' || permissions.inventory === true;
+                    convertedStorePermissions[`${storePrefix}orders`] = permissions.orders === '1' || permissions.orders === true;
+                    convertedStorePermissions[`${storePrefix}rma`] = permissions.rma === '1' || permissions.rma === true;
+                    convertedStorePermissions[`${storePrefix}outbound`] = permissions.outbound === '1' || permissions.outbound === true;
+                });
+            }
 
-            // 4. Update local state
+            // 4. 更新本地狀態
             setGroups(prevGroups => {
                 return prevGroups.map(group => {
-                    if (group.id === editingGroup.id) {
+                    if (group.id === groupId) {
                         return {
                             ...group,
                             ...groupData,
@@ -355,7 +379,7 @@ const GroupManagement = () => {
                 });
             });
 
-            // 5. Update form values to match the response
+            // 5. 更新表單值以匹配響應
             form.setFieldsValue({
                 ...groupData,
                 main_permissions: permissionsResponse.main_permissions,
@@ -363,16 +387,16 @@ const GroupManagement = () => {
                 store_permissions: convertedStorePermissions
             });
 
-            // 6. Update selected stores
+            // 6. 更新選中的商店
             setSelectedStores(permissionsResponse.permitted_stores);
 
             message.success('Group updated successfully');
             setIsModalVisible(false);
-            await fetchGroups(); // Refresh the groups list
+            await fetchGroups(); // 刷新群組列表
         } catch (error) {
-            console.error('Error updating group:', error);
-            setError(error.message);
-            message.error('Failed to update group');
+            console.error('Error saving group:', error);
+            setError(error.message || 'Failed to save group');
+            message.error(error.message || 'Failed to save group');
         } finally {
             setLoading(false);
         }

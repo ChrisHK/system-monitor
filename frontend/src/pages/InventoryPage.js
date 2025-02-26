@@ -24,12 +24,14 @@ import {
     DeleteOutlined,
     EditOutlined,
     SendOutlined,
-    ExclamationCircleOutlined
+    ExclamationCircleOutlined,
+    InfoCircleOutlined
 } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { inventoryService, storeService } from '../api';
 import { useNotification } from '../contexts/NotificationContext';
 import moment from 'moment';
+import { formatDate, formatSystemSku, formatOS, formatDisks } from '../utils/formatters';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -45,7 +47,7 @@ const InventoryPage = () => {
     const [storesLoading, setStoresLoading] = useState(false);
     const [error, setError] = useState('');
     const [records, setRecords] = useState([]);
-    const [duplicateSerials, setDuplicateSerials] = useState(new Set());
+    const [duplicateSerials, setDuplicateSerials] = useState(new Map());
     const [searchText, setSearchText] = useState('');
     const [selectedBranch, setSelectedBranch] = useState('all');
     const [filteredRecords, setFilteredRecords] = useState([]);
@@ -103,6 +105,12 @@ const InventoryPage = () => {
                 setError('');
                 const response = await inventoryService.getDuplicateRecords();
                 
+                console.log('Duplicates response:', {
+                    success: response?.success,
+                    data: response?.data,
+                    timestamp: new Date().toISOString()
+                });
+
                 if (!response?.success) {
                     throw new Error(response?.error || 'Failed to fetch duplicates');
                 }
@@ -112,12 +120,32 @@ const InventoryPage = () => {
                     throw new Error('Invalid duplicates data format');
                 }
                 
-                const duplicatesList = duplicates.map(d => d.serialnumber);
-                setDuplicateSerials(new Set(duplicatesList));
+                // 創建一個 Map 來存儲每個序列號的出現次數和詳細信息
+                const duplicatesMap = new Map();
+                duplicates.forEach(record => {
+                    if (!duplicatesMap.has(record.serialnumber)) {
+                        duplicatesMap.set(record.serialnumber, {
+                            count: 1,
+                            timestamps: [record.created_at]
+                        });
+                    } else {
+                        const info = duplicatesMap.get(record.serialnumber);
+                        info.count++;
+                        info.timestamps.push(record.created_at);
+                    }
+                });
+
+                console.log('Processed duplicates:', {
+                    totalUnique: duplicatesMap.size,
+                    details: Array.from(duplicatesMap.entries()),
+                    timestamp: new Date().toISOString()
+                });
+
+                setDuplicateSerials(duplicatesMap);
             } catch (error) {
                 console.error('Failed to fetch duplicates:', error);
                 setError(error.message || 'Failed to fetch duplicates');
-                setDuplicateSerials(new Set());
+                setDuplicateSerials(new Map());
             } finally {
                 setLoading(false);
             }
@@ -138,163 +166,83 @@ const InventoryPage = () => {
     }, []);
 
     const fetchRecords = useCallback(async (force = false) => {
-        // Add debug logs
-        console.log('Fetching records with params:', {
-            searchText,
-            page: pagination.current,
-            pageSize: pagination.pageSize,
-            storeId: storeId !== 'all' ? parseInt(storeId, 10) : null,
-            force,
-            timestamp: new Date().toISOString()
-        });
-
-        if (loading && !force) {
-            console.log('Skipping fetch due to loading state');
-            return;
-        }
-        
         try {
+            console.log('Starting fetchRecords:', {
+                searchText,
+                pagination: {
+                    current: pagination.current,
+                    pageSize: pagination.pageSize
+                },
+                storeId,
+                force,
+                timestamp: new Date().toISOString()
+            });
+
             setLoading(true);
             setError('');
             
             const searchParams = {
                 page: pagination.current,
                 limit: pagination.pageSize,
-                ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {})
+                ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {}),
+                ...(searchText ? { search: searchText } : {})
             };
 
-            console.log('Making API request with params:', {
-                ...searchParams,
-                timestamp: new Date().toISOString()
-            });
-            
-            let response;
-            if (searchText) {
-                console.log('Performing search with text:', {
-                    text: searchText,
-                    timestamp: new Date().toISOString()
-                });
-                response = await inventoryService.searchRecords('serialnumber', searchText, searchParams);
-            } else {
-                console.log('Fetching all inventory records');
-                response = await inventoryService.getInventoryRecords(searchParams);
-            }
-            
-            console.log('API response:', {
-                ...response,
+            console.log('Search params:', searchParams);
+
+            const response = await inventoryService.getInventoryRecords(searchParams);
+
+            console.log('API Response:', {
+                success: response?.success,
+                total: response?.total,
+                totalAll: response?.totalAll,
+                uniqueSerials: response?.uniqueSerials,
+                recordsCount: response?.records?.length,
                 timestamp: new Date().toISOString()
             });
 
             if (!response?.success) {
-                console.error('API request failed:', {
-                    error: response?.error,
-                    timestamp: new Date().toISOString()
-                });
                 throw new Error(response?.error || 'Failed to load inventory data');
             }
 
-            // Log the response data
-            console.log('Records received:', {
-                total: response.total,
-                recordsCount: response.records?.length,
-                firstRecord: response.records?.[0],
-                lastRecord: response.records?.[response.records.length - 1],
-                timestamp: new Date().toISOString()
-            });
+            // 更新統計數據
+            setTotalRecords(response.totalAll || 0);
+            setTotalItems(response.uniqueSerials || 0);
+            setPagination(prev => ({
+                ...prev,
+                total: response.total || 0
+            }));
 
-            // 只在有記錄時檢查位置
+            // 處理記錄數據
             if (response.records?.length > 0) {
-                try {
-                    // 使用 Set 來去重序號
-                    const uniqueSerials = [...new Set(response.records.map(r => r.serialnumber))];
-                    const locationChecks = await Promise.all(
-                        uniqueSerials.map(async serialNumber => {
-                            try {
-                                const locationResponse = await inventoryService.checkItemLocation(serialNumber);
-                                console.log('Location response for', serialNumber, ':', locationResponse);
-                                return {
-                                    serialnumber: serialNumber,
-                                    locationInfo: locationResponse
-                                };
-                            } catch (error) {
-                                console.warn(`Failed to check location for ${serialNumber}:`, error);
-                                return {
-                                    serialnumber: serialNumber,
-                                    locationInfo: null
-                                };
-                            }
-                        })
-                    );
+                const processedRecords = response.records.map(record => ({
+                    ...record,
+                    key: record.id,
+                    location: 'Inventory',
+                    locationColor: 'green'
+                }));
 
-                    // 創建位置映射
-                    const locationMap = new Map(locationChecks.map(check => [check.serialnumber, check]));
-
-                    // 處理記錄
-                    const processedRecords = response.records.map(record => {
-                        const locationInfo = locationMap.get(record.serialnumber);
-                        console.log('Processing record:', record.serialnumber, 'Location info:', locationInfo);
-                        
-                        if (locationInfo?.locationInfo?.success) {
-                            const info = locationInfo.locationInfo;
-                            
-                            // 如果在商店中
-                            if (info.location === 'store') {
-                                return {
-                                    ...record,
-                                    location: info.storeName || info.store?.name || 'Unknown Store',
-                                    locationColor: 'blue'
-                                };
-                            }
-                            // 如果在 outbound 中
-                            if (info.location === 'outbound') {
-                                return {
-                                    ...record,
-                                    location: 'Outbound',
-                                    locationColor: 'orange'
-                                };
-                            }
-                        }
-                        
-                        // 默認為 Inventory
-                        return {
-                            ...record,
-                            location: 'Inventory',
-                            locationColor: 'green'
-                        };
-                    });
-
-                    console.log('Processed records:', {
-                        total: processedRecords.length,
-                        first: processedRecords[0],
-                        last: processedRecords[processedRecords.length - 1]
-                    });
-
-                    setRecords(processedRecords);
-                    setFilteredRecords(processedRecords);
-                } catch (locationError) {
-                    console.warn('Failed to check locations:', locationError);
-                    // 即使位置检查失败，也设置基本记录
-                    const basicRecords = response.records.map(record => ({
-                        ...record,
-                        location: 'Inventory',
-                        locationColor: 'green'
-                    }));
-                    setRecords(basicRecords);
-                    setFilteredRecords(basicRecords);
-                }
+                setRecords(processedRecords);
+                setFilteredRecords(processedRecords);
             } else {
                 setRecords([]);
                 setFilteredRecords([]);
             }
 
-            setTotalRecords(response.total || 0);
-            setTotalItems(response.totalItems || response.total || 0);
-            setPagination(prev => ({
-                ...prev,
-                total: response.total || 0
-            }));
+            console.log('Records processed:', {
+                totalRecords: response.totalAll,
+                uniqueItems: response.uniqueSerials,
+                duplicateItems: duplicateSerials.size,
+                processedRecords: response.records?.length,
+                timestamp: new Date().toISOString()
+            });
+
         } catch (error) {
-            console.error('Error in fetchRecords:', error);
+            console.error('Error in fetchRecords:', {
+                error: error.message,
+                stack: error.stack,
+                timestamp: new Date().toISOString()
+            });
             setError(error.message || 'Failed to load inventory data');
         } finally {
             setLoading(false);
@@ -320,25 +268,21 @@ const InventoryPage = () => {
         const fetchStores = async () => {
             try {
                 setStoresLoading(true);
-                setError('');
                 const response = await storeService.getStores();
-                
-                if (!response?.success) {
-                    throw new Error(response?.error || 'Failed to load stores');
+                if (response?.success) {
+                    // 將商店列表轉換為 Select 需要的格式
+                    const formattedStores = (response.stores || []).map(store => ({
+                        value: store.id,
+                        label: store.name
+                    }));
+                    setStoresList(formattedStores);
+                } else {
+                    console.error('Failed to fetch stores:', response?.error);
+                    message.error('Failed to load stores list');
                 }
-                
-                const stores = response.data?.stores || response.stores;
-                if (!Array.isArray(stores)) {
-                    throw new Error('Invalid stores data format');
-                }
-                
-                setStoresList(stores.map(store => ({
-                    value: store.id,
-                    label: store.name
-                })));
             } catch (error) {
-                console.error('Failed to fetch stores:', error);
-                setError(error.message || 'Failed to load stores');
+                console.error('Error fetching stores:', error);
+                message.error('Failed to load stores list');
             } finally {
                 setStoresLoading(false);
             }
@@ -364,16 +308,32 @@ const InventoryPage = () => {
         try {
             setOutboundLoading(true);
             setError('');
+            
+            console.log('Fetching outbound items...');
             const response = await inventoryService.getOutboundItems();
             
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to fetch outbound items');
             }
             
-            setOutboundItems(response.items || []);
+            // 確保每個項目都有必要的字段
+            const processedItems = (response.items || []).map(item => ({
+                ...item,
+                key: item.outbound_item_id || item.id,
+                outbound_item_id: item.outbound_item_id || item.id
+            }));
+            
+            console.log('Outbound items fetched:', {
+                count: processedItems.length,
+                items: processedItems,
+                timestamp: new Date().toISOString()
+            });
+            
+            setOutboundItems(processedItems);
         } catch (error) {
             console.error('Failed to fetch outbound items:', error);
             setError(error.message || 'Failed to fetch outbound items');
+            message.error(error.message || 'Failed to fetch outbound items');
         } finally {
             setOutboundLoading(false);
         }
@@ -461,9 +421,10 @@ const InventoryPage = () => {
     }, [outboundModalVisible, fetchOutboundItems]);
 
     // 處理商店選擇變更
-    const handleStoreChange = useCallback((value) => {
+    const handleStoreChange = (value) => {
+        console.log('Selected store:', value);
         setSelectedStore(value);
-    }, []);
+    };
 
     // 處理發送到商店
     const handleSendToStore = useCallback(async (record) => {
@@ -489,24 +450,116 @@ const InventoryPage = () => {
 
     // 處理從 Outbound 移除
     const handleRemoveFromOutbound = useCallback(async (itemId) => {
+        if (!itemId) {
+            message.error('Invalid item ID');
+            return;
+        }
+
         try {
             setOutboundLoading(true);
             setError('');
+            
+            console.log('Removing item from outbound:', {
+                itemId,
+                timestamp: new Date().toISOString()
+            });
+            
             const response = await inventoryService.removeFromOutbound(itemId);
             
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to remove from outbound');
             }
             
+            console.log('Item removed successfully:', {
+                itemId,
+                response,
+                timestamp: new Date().toISOString()
+            });
+            
             message.success('Item removed from outbound successfully');
             await fetchOutboundItems();
         } catch (error) {
             console.error('Failed to remove from outbound:', error);
             setError(error.message || 'Failed to remove from outbound');
+            message.error(error.message || 'Failed to remove from outbound');
         } finally {
             setOutboundLoading(false);
         }
     }, [fetchOutboundItems]);
+
+    // 1. 先定義 handleCleanupDuplicates 函數
+    const handleCleanupDuplicates = useCallback(() => {
+        Modal.confirm({
+            title: 'Clean Up Duplicate Records',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This will archive all duplicate records, keeping only the latest record for each serial number. This action cannot be undone. Are you sure you want to proceed?',
+            okText: 'Yes, Clean Up',
+            okType: 'danger',
+            cancelText: 'No',
+            onOk: async () => {
+                try {
+                    setLoading(true);
+                    const response = await inventoryService.cleanupDuplicates();
+                    
+                    if (response.success) {
+                        message.success('Records cleaned up successfully');
+                        // 顯示詳細信息
+                        Modal.info({
+                            title: 'Cleanup Results',
+                            content: (
+                                <div>
+                                    <p>Total records before: {response.details.totalBefore}</p>
+                                    <p>Total records after: {response.details.totalAfter}</p>
+                                    <p>Records archived: {response.details.archivedCount}</p>
+                                    <p>Timestamp: {moment(response.details.timestamp).format('YYYY-MM-DD HH:mm:ss')}</p>
+                                </div>
+                            )
+                        });
+                        // 重新獲取記錄
+                        fetchRecords();
+                    } else {
+                        throw new Error(response.error || 'Failed to clean up records');
+                    }
+                } catch (error) {
+                    console.error('Cleanup error:', error);
+                    message.error(error.message || 'Failed to clean up records');
+                } finally {
+                    setLoading(false);
+                }
+            }
+        });
+    }, [setLoading, fetchRecords]);
+
+    // 2. 然後定義 toolbarButtons
+    const toolbarButtons = useMemo(() => (
+        <Space>
+            {hasOutboundPermission && (
+                <Button
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={() => setOutboundModalVisible(true)}
+                >
+                    Outbound Management
+                </Button>
+            )}
+            <Button
+                icon={<ReloadOutlined />}
+                onClick={() => {
+                    setPagination(prev => ({ ...prev, current: 1 }));
+                    fetchRecords();
+                }}
+            >
+                Refresh
+            </Button>
+            <Button
+                icon={<DeleteOutlined />}
+                onClick={handleCleanupDuplicates}
+                disabled={loading}
+            >
+                Clean Up Duplicates
+            </Button>
+        </Space>
+    ), [hasOutboundPermission, loading, handleCleanupDuplicates, setPagination, fetchRecords]);
 
     const columns = useMemo(() => [
         {
@@ -527,16 +580,23 @@ const InventoryPage = () => {
             key: 'serialnumber',
             width: 200,
             fixed: 'left',
-            render: (text) => (
-                <Space>
-                    {text}
-                    {duplicateSerials.has(text) && (
-                        <Tooltip title="Duplicate serial number">
-                            <Tag color="red">Duplicate</Tag>
-                        </Tooltip>
-                    )}
-                </Space>
-            )
+            render: (text) => {
+                const duplicateInfo = duplicateSerials.get(text);
+                return (
+                    <Space>
+                        {text}
+                        {duplicateInfo && (
+                            <Tooltip title={`Found ${duplicateInfo.count} records\nLast update: ${
+                                new Date(Math.max(...duplicateInfo.timestamps)).toLocaleString()
+                            }`}>
+                                <Tag color="red">
+                                    {duplicateInfo.count}x
+                                </Tag>
+                            </Tooltip>
+                        )}
+                    </Space>
+                );
+            }
         },
         {
             title: 'Computer Name',
@@ -640,7 +700,7 @@ const InventoryPage = () => {
             dataIndex: 'disks',
             key: 'disks',
             width: 150,
-            render: (text) => text || 'N/A'
+            render: formatDisks
         },
         {
             title: 'Design Capacity',
@@ -680,10 +740,7 @@ const InventoryPage = () => {
             dataIndex: 'created_at',
             key: 'created_at',
             width: 150,
-            render: (text) => {
-                if (!text) return 'N/A';
-                return new Date(text).toLocaleString();
-            }
+            render: formatDate
         },
         {
             title: 'Actions',
@@ -734,39 +791,32 @@ const InventoryPage = () => {
         }
     ], [hasOutboundPermission, user?.group_name, form, handleAddToOutbound, handleDelete]);
 
-    // 添加 Outbound 按鈕到工具欄
-    const toolbarButtons = (
-        <Space>
-            {hasOutboundPermission && (
-                <Button
-                    type="primary"
-                    icon={<SendOutlined />}
-                    onClick={() => setOutboundModalVisible(true)}
-                >
-                    Outbound Management
-                </Button>
-            )}
-            <Button
-                icon={<ReloadOutlined />}
-                onClick={() => {
-                    setPagination(prev => ({ ...prev, current: 1 }));
-                    fetchRecords();
-                }}
-            >
-                Refresh
-            </Button>
-        </Space>
-    );
-
     const handleAddToOutboundBySerial = useCallback(async (serial) => {
+        if (!serial || typeof serial !== 'string' || !serial.trim()) {
+            message.error('Please enter a valid serial number');
+            return;
+        }
+
         try {
-            setLoading(true);
+            setOutboundLoading(true);
             setError('');
-            const response = await inventoryService.addToOutboundBySerial(serial);
+            
+            console.log('Adding item to outbound:', {
+                serial,
+                timestamp: new Date().toISOString()
+            });
+            
+            const response = await inventoryService.addToOutboundBySerial(serial.trim());
             
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to add to outbound');
             }
+            
+            console.log('Item added successfully:', {
+                serial,
+                response,
+                timestamp: new Date().toISOString()
+            });
             
             message.success('Item added to outbound successfully');
             addNotification('outbound', 'add');
@@ -775,16 +825,37 @@ const InventoryPage = () => {
         } catch (error) {
             console.error('Error adding to outbound:', error);
             setError(error.message || 'Failed to add to outbound');
+            message.error(error.message || 'Failed to add to outbound');
         } finally {
-            setLoading(false);
+            setOutboundLoading(false);
         }
     }, [addNotification, fetchRecords, fetchOutboundItems]);
 
     const handleBulkSendToStore = useCallback(async () => {
+        if (!selectedStore) {
+            message.error('Please select a store first');
+            return;
+        }
+
+        if (!outboundItems || outboundItems.length === 0) {
+            message.error('No items to send');
+            return;
+        }
+
         try {
             setOutboundLoading(true);
             setError('');
-            const response = await inventoryService.sendToStoreBulk(selectedStore);
+            
+            // 獲取所有 outbound items 的 ID
+            const outboundIds = outboundItems.map(item => item.outbound_item_id);
+            
+            console.log('Sending items to store:', {
+                storeId: selectedStore,
+                outboundIds,
+                timestamp: new Date().toISOString()
+            });
+
+            const response = await inventoryService.sendToStoreBulk(selectedStore, outboundIds);
             
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to send to store');
@@ -796,10 +867,11 @@ const InventoryPage = () => {
         } catch (error) {
             console.error('Failed to send to store:', error);
             setError(error.message || 'Failed to send to store');
+            message.error(error.message || 'Failed to send to store');
         } finally {
             setOutboundLoading(false);
         }
-    }, [selectedStore, fetchOutboundItems]);
+    }, [selectedStore, outboundItems, fetchOutboundItems]);
 
     // 處理搜索
     const handleSearch = useCallback((value) => {
@@ -858,15 +930,25 @@ const InventoryPage = () => {
                                     title="Total Records"
                                     value={totalRecords}
                                     loading={loading}
+                                    suffix={
+                                        <Tooltip title="Total number of records in the system, including historical records">
+                                            <InfoCircleOutlined style={{ marginLeft: 8 }} />
+                                        </Tooltip>
+                                    }
                                 />
                             </Card>
                         </Col>
                         <Col span={8}>
                             <Card>
                                 <Statistic
-                                    title="Total Items"
+                                    title="Unique Items"
                                     value={totalItems}
                                     loading={loading}
+                                    suffix={
+                                        <Tooltip title="Number of unique serial numbers in the system">
+                                            <InfoCircleOutlined style={{ marginLeft: 8 }} />
+                                        </Tooltip>
+                                    }
                                 />
                             </Card>
                         </Col>
@@ -876,6 +958,11 @@ const InventoryPage = () => {
                                     title="Duplicate Items"
                                     value={duplicateSerials.size}
                                     loading={loading}
+                                    suffix={
+                                        <Tooltip title="Number of serial numbers that appear multiple times">
+                                            <InfoCircleOutlined style={{ marginLeft: 8 }} />
+                                        </Tooltip>
+                                    }
                                 />
                             </Card>
                         </Col>
@@ -1001,6 +1088,11 @@ const InventoryPage = () => {
                             title: 'Serial Number',
                             dataIndex: 'serialnumber',
                             key: 'serialnumber',
+                            render: (text, record) => (
+                                <Tooltip title={record.model}>
+                                    {text}
+                                </Tooltip>
+                            )
                         },
                         {
                             title: 'Model',
@@ -1013,25 +1105,43 @@ const InventoryPage = () => {
                             key: 'computername',
                         },
                         {
+                            title: 'Status',
+                            dataIndex: 'status',
+                            key: 'status',
+                            render: (text) => (
+                                <Tag color={text === 'pending' ? 'orange' : 'green'}>
+                                    {text || 'pending'}
+                                </Tag>
+                            )
+                        },
+                        {
                             title: 'Actions',
                             key: 'actions',
                             render: (_, record) => (
                                 <Space>
-                                    <Button
-                                        danger
-                                        onClick={() => handleRemoveFromOutbound(record.outbound_item_id)}
-                                        icon={<DeleteOutlined />}
+                                    <Popconfirm
+                                        title="Are you sure you want to remove this item?"
+                                        onConfirm={() => handleRemoveFromOutbound(record.outbound_item_id)}
+                                        okText="Yes"
+                                        cancelText="No"
                                     >
-                                        Remove
-                                    </Button>
+                                        <Button
+                                            type="link"
+                                            danger
+                                            icon={<DeleteOutlined />}
+                                        >
+                                            Remove
+                                        </Button>
+                                    </Popconfirm>
                                 </Space>
-                            ),
-                        },
+                            )
+                        }
                     ]}
                     dataSource={outboundItems}
-                    rowKey="outbound_item_id"
                     loading={outboundLoading}
                     pagination={false}
+                    rowKey="outbound_item_id"
+                    size="small"
                 />
             </Modal>
         </div>

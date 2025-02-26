@@ -5,17 +5,12 @@ import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, Delet
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { storeService, inventoryService, salesService, rmaService, orderService } from '../api';
-import { formatSystemSku } from '../utils/formatters';
+import { formatSystemSku, formatDate, formatDateForCSV, sortDate } from '../utils/formatters';
 
 const { Search } = Input;
 const { Option } = Select;
 
 // Utility functions
-const formatDate = (text) => {
-    if (!text) return 'N/A';
-    return new Date(text).toLocaleString();
-};
-
 const formatOS = (text) => {
     if (!text || text === 'N/A') return 'N/A';
     const osLower = text.toLowerCase();
@@ -524,7 +519,10 @@ const StorePage = () => {
             dataIndex: 'disks',
             key: 'disks',
             width: 150,
-            render: (text) => text || 'N/A'
+            render: (text) => {
+                if (!text) return 'N/A';
+                return text.replace(/"/g, '');
+            }
         },
         {
             title: 'Design Capacity',
@@ -565,7 +563,7 @@ const StorePage = () => {
             key: 'received_at',
             width: 150,
             render: formatDate,
-            sorter: (a, b) => new Date(a.received_at) - new Date(b.received_at)
+            sorter: sortDate
         },
         user?.group_name === 'admin' && {
             title: 'Actions',

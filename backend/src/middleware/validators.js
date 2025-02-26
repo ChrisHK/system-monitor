@@ -47,6 +47,30 @@ const validateDataProcessing = [
     }
 ];
 
+// 檢查數據校驗和
+const checksumValidator = (req, res, next) => {
+    try {
+        // 簡單實現，實際應用中應該計算並驗證校驗和
+        if (!req.body.metadata?.checksum) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing checksum'
+            });
+        }
+        
+        // 這裡可以添加實際的校驗和驗證邏輯
+        
+        next();
+    } catch (error) {
+        console.error('Checksum validation error:', error);
+        res.status(400).json({
+            success: false,
+            error: 'Invalid checksum'
+        });
+    }
+};
+
 module.exports = {
-    validateDataProcessing
+    validateDataProcessing,
+    checksumValidator
 }; 

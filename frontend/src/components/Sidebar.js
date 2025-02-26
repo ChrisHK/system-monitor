@@ -105,6 +105,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
         setIsLoading(true);
         try {
             // 1. 獲取用戶詳細信息
+            console.log('Fetching user details...');
             const userResponse = await userService.getCurrentUser();
             if (!userResponse?.success) {
                 throw new Error('Failed to fetch user details');
@@ -113,8 +114,15 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             if (!userData) {
                 throw new Error('No user data received');
             }
+            console.log('User data received:', {
+                id: userData.id,
+                group_name: userData.group_name,
+                permitted_stores: userData.permitted_stores,
+                store_permissions: userData.store_permissions
+            });
 
             // 2. 獲取群組信息
+            console.log('Fetching groups...');
             const groupsResponse = await userService.getGroups();
             if (!groupsResponse?.success) {
                 throw new Error('Failed to fetch groups');
@@ -123,6 +131,10 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             if (!groups) {
                 throw new Error('No groups data received');
             }
+            console.log('Groups data received:', {
+                count: groups.length,
+                groups: groups.map(g => ({ id: g.id, name: g.name }))
+            });
 
             // 3. 設置權限
             let userGroupPermissions = null;
@@ -131,7 +143,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                 if (adminGroup) {
                     userGroupPermissions = {
                         success: true,
-                        permissions: adminGroup.permitted_stores || [],
+                        permitted_stores: adminGroup.permitted_stores || [],
                         store_permissions: adminGroup.store_permissions || {},
                         main_permissions: {
                             inventory: true,
@@ -146,35 +158,53 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                 if (userGroup) {
                     // 確保 store_permissions 的格式正確
                     const processedStorePermissions = {};
-                    Object.entries(userGroup.store_permissions || {}).forEach(([storeId, permissions]) => {
-                        // 確保 storeId 是數字
-                        const numericStoreId = parseInt(storeId, 10);
-                        if (!isNaN(numericStoreId)) {
-                            processedStorePermissions[numericStoreId] = {
-                                inventory: permissions.inventory === true || permissions.inventory === '1',
-                                orders: permissions.orders === true || permissions.orders === '1',
-                                rma: permissions.rma === true || permissions.rma === '1',
-                                outbound: permissions.outbound === true || permissions.outbound === '1'
-                            };
+                    if (userGroup.store_permissions) {
+                        // 如果 store_permissions 是數組，轉換為對象格式
+                        if (Array.isArray(userGroup.store_permissions)) {
+                            userGroup.store_permissions.forEach(perm => {
+                                if (perm.store_id) {
+                                    processedStorePermissions[perm.store_id] = {
+                                        inventory: perm.inventory === '1' || perm.inventory === true,
+                                        orders: perm.orders === '1' || perm.orders === true,
+                                        rma: perm.rma === '1' || perm.rma === true,
+                                        outbound: perm.outbound === '1' || perm.outbound === true
+                                    };
+                                }
+                            });
+                        } else {
+                            // 如果已經是對象格式
+                            Object.entries(userGroup.store_permissions).forEach(([storeId, permissions]) => {
+                                const numericStoreId = parseInt(storeId, 10);
+                                if (!isNaN(numericStoreId)) {
+                                    processedStorePermissions[numericStoreId] = {
+                                        inventory: permissions.inventory === '1' || permissions.inventory === true,
+                                        orders: permissions.orders === '1' || permissions.orders === true,
+                                        rma: permissions.rma === '1' || permissions.rma === true,
+                                        outbound: permissions.outbound === '1' || permissions.outbound === true
+                                    };
+                                }
+                            });
                         }
-                    });
+                    }
 
                     userGroupPermissions = {
                         success: true,
-                        permissions: userGroup.permitted_stores || [],
+                        permitted_stores: userData.permitted_stores || [],
                         store_permissions: processedStorePermissions,
                         main_permissions: {
-                            inventory: userGroup.main_permissions?.inventory === true || userGroup.main_permissions?.inventory === '1',
-                            inventory_ram: userGroup.main_permissions?.inventory_ram === true || userGroup.main_permissions?.inventory_ram === '1',
-                            outbound: userGroup.main_permissions?.outbound === true || userGroup.main_permissions?.outbound === '1',
-                            inbound: userGroup.main_permissions?.inbound === true || userGroup.main_permissions?.inbound === '1'
+                            inventory: userGroup.main_permissions?.inventory === '1' || userGroup.main_permissions?.inventory === true,
+                            inventory_ram: userGroup.main_permissions?.inventory_ram === '1' || userGroup.main_permissions?.inventory_ram === true,
+                            outbound: userGroup.main_permissions?.outbound === '1' || userGroup.main_permissions?.outbound === true,
+                            inbound: userGroup.main_permissions?.inbound === '1' || userGroup.main_permissions?.inbound === true
                         }
                     };
                 }
             }
+            console.log('User group permissions processed:', userGroupPermissions);
             setGroupPermissions(userGroupPermissions);
 
             // 4. 獲取商店列表
+            console.log('Fetching stores...');
             const storesResponse = await storeService.getStores();
             if (!storesResponse?.success) {
                 throw new Error('Failed to fetch stores');
@@ -186,19 +216,55 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
                 throw new Error('Invalid stores data format');
             }
 
-            if (userData.group_name !== 'admin' && userGroupPermissions?.permissions) {
-                // 使用 store_permissions 來過濾商店
-                const permittedStoreIds = Object.keys(userGroupPermissions.store_permissions).map(id => parseInt(id, 10));
+            console.log('All stores before filtering:', {
+                count: filteredStores.length,
+                stores: filteredStores.map(s => ({ id: s.id, name: s.name }))
+            });
+
+            if (userData.group_name !== 'admin' && userData.permitted_stores) {
+                // 使用 permitted_stores 來過濾商店
+                const permittedStoreIds = userData.permitted_stores;
+                
+                // 檢查是否所有允許的商店都存在
+                const missingStores = permittedStoreIds.filter(id => 
+                    !filteredStores.some(store => store.id === id)
+                );
+                
+                if (missingStores.length > 0) {
+                    console.warn('Some permitted stores are missing from the stores list:', {
+                        missingIds: missingStores,
+                        availableStores: filteredStores.map(s => ({ id: s.id, name: s.name }))
+                    });
+                }
+
                 filteredStores = filteredStores.filter(store => 
                     permittedStoreIds.includes(store.id)
                 );
+
+                console.log('Stores after permission filtering:', {
+                    count: filteredStores.length,
+                    stores: filteredStores.map(s => ({ id: s.id, name: s.name }))
+                });
             }
+            
+            // 按名稱排序商店
+            filteredStores.sort((a, b) => a.name.localeCompare(b.name));
+            
+            console.log('Final filtered and sorted stores:', {
+                count: filteredStores.length,
+                stores: filteredStores.map(s => ({ id: s.id, name: s.name }))
+            });
+            
             setStores(filteredStores);
 
             // 獲取完商店列表後，更新通知計數
             fetchNotificationCounts();
         } catch (error) {
-            console.error('Error fetching user data and stores:', error);
+            console.error('Error fetching user data and stores:', {
+                error: error.message,
+                stack: error.stack,
+                userId: user?.id
+            });
             message.error('Failed to load sidebar data');
         } finally {
             setIsLoading(false);
@@ -348,10 +414,7 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
 
         // Check if user has store permissions
         const hasStorePermissions = user?.group_name === 'admin' || 
-            (groupPermissions?.store_permissions && 
-             Object.values(groupPermissions.store_permissions).some(perm => 
-                perm.inventory === true || perm.orders === true || perm.rma === true || perm.outbound === true
-             ));
+            (user?.permitted_stores && user.permitted_stores.length > 0);
 
         // Show Branches menu if user has permissions
         if (hasStorePermissions) {
@@ -371,6 +434,14 @@ const Sidebar = ({ collapsed, setCollapsed, storeId }) => {
             }
 
             const storeItems = stores.map(store => {
+                // 檢查商店是否在允許的商店列表中
+                const isPermittedStore = user?.group_name === 'admin' || 
+                    user?.permitted_stores?.includes(store.id);
+
+                if (!isPermittedStore) {
+                    return null;
+                }
+
                 const storePermissions = groupPermissions?.store_permissions?.[store.id] || {};
                 const menuItems = [];
 

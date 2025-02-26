@@ -116,12 +116,49 @@ class InventoryService {
       }
     };
 
-    this.sendToStore = async (storeId) => {
+    this.sendToStore = async (storeId, outboundIds = []) => {
       try {
-        const response = await api.post(ENDPOINTS.OUTBOUND.SEND_TO_STORE(storeId));
+        if (!storeId) {
+          throw new Error('Store ID is required');
+        }
+
+        if (!Array.isArray(outboundIds) || outboundIds.length === 0) {
+          throw new Error('At least one outbound item is required');
+        }
+
+        console.log('Sending to store:', {
+          storeId,
+          outboundIds,
+          timestamp: new Date().toISOString()
+        });
+
+        const response = await api.post(
+          ENDPOINTS.OUTBOUND.SEND_TO_STORE(storeId),
+          {
+            outbound_ids: outboundIds,
+            store_id: parseInt(storeId, 10)
+          }
+        );
+
+        if (!response?.success) {
+          throw new Error(response?.error?.message || 'Failed to send items to store');
+        }
+
+        console.log('Send to store response:', {
+          success: response.success,
+          data: response.data,
+          timestamp: new Date().toISOString()
+        });
+
         return response;
       } catch (error) {
-        console.error('Send to store error:', error);
+        console.error('Send to store error:', {
+          error: error.message,
+          stack: error.stack,
+          storeId,
+          outboundIds,
+          timestamp: new Date().toISOString()
+        });
         throw error;
       }
     };
@@ -162,16 +199,33 @@ class InventoryService {
       if (!storeId) {
         throw new Error('Store ID is required');
       }
-      const outboundItems = await this.getOutboundItems();
-      if (!outboundItems?.success || !outboundItems.items?.length) {
-        throw new Error('No outbound items to send');
+
+      try {
+        console.log('Getting outbound items for bulk send');
+        const outboundItems = await this.getOutboundItems();
+        
+        if (!outboundItems?.success || !outboundItems.items?.length) {
+          throw new Error('No outbound items to send');
+        }
+
+        const outboundIds = outboundItems.items.map(item => item.outbound_item_id);
+        console.log('Sending items to store:', {
+          storeId,
+          itemCount: outboundIds.length,
+          items: outboundIds,
+          timestamp: new Date().toISOString()
+        });
+
+        return await this.sendToStore(storeId, outboundIds);
+      } catch (error) {
+        console.error('Bulk send to store error:', {
+          error: error.message,
+          stack: error.stack,
+          storeId,
+          timestamp: new Date().toISOString()
+        });
+        throw error;
       }
-      const outboundIds = outboundItems.items.map(item => item.outbound_item_id);
-      const response = await api.post(ENDPOINTS.OUTBOUND.SEND_TO_STORE(storeId), {
-        outboundIds,
-        force: false
-      });
-      return response;
     };
 
     this.getRecordById = async (id) => {
@@ -219,6 +273,17 @@ class InventoryService {
         }
       );
       return response;
+    };
+
+    // 清理重複記錄
+    this.cleanupDuplicates = async () => {
+      try {
+        const response = await api.post('/records/cleanup-duplicates');
+        return response;
+      } catch (error) {
+        console.error('Error cleaning up duplicates:', error);
+        throw error;
+      }
     };
 
     // Bind all methods

@@ -4,6 +4,7 @@ const pool = require('../db');
 const { auth, checkRole, checkGroup } = require('../middleware/auth');
 const { checkStorePermission } = require('../middleware/checkPermission');
 const cacheService = require('../services/cacheService');
+const { formatDateForCSV } = require('../utils/formatters');
 
 const storeCache = new Map();
 const STORE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -11,50 +12,51 @@ const STORE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 // Get all stores
 router.get('/', auth, async (req, res) => {
     try {
-        const userId = req.user.id;
-        const cacheKey = `stores-${userId}`;
-
-        // 檢查緩存
-        const cachedStores = storeCache.get(cacheKey);
-        if (cachedStores && cachedStores.expiry > Date.now()) {
-            return res.json({ success: true, stores: cachedStores.data });
-        }
-
         console.log('=== GET /api/stores - Fetching stores ===');
+        console.log('User:', {
+            id: req.user.id,
+            group: req.user.group_name,
+            permitted_stores: req.user.permitted_stores
+        });
         
-        // 根據用戶組獲取緩存鍵
-        const groupName = req.user?.group_name || 'all';
+        // 1. 先從緩存獲取完整的商店列表
+        let allStores = cacheService.getStoreList('all');
         
-        // 嘗試從緩存獲取商店列表
-        let stores = cacheService.getStoreList(groupName);
-        
-        if (!stores) {
-            console.log('Cache miss - Fetching stores from database');
-            // 從數據庫獲取商店列表
+        if (!allStores) {
+            console.log('Cache miss - Fetching all stores from database');
+            // 從數據庫獲取所有商店
             const result = await pool.query('SELECT * FROM stores ORDER BY name');
-            stores = result.rows;
-
-            // 如果用戶不是管理員，根據權限過濾商店
-            if (groupName !== 'admin' && req.user?.permitted_stores) {
-                stores = stores.filter(store => 
-                    req.user.permitted_stores.includes(store.id)
-                );
-            }
-
-            // 存入緩存
-            cacheService.setStoreList(stores, groupName);
-            console.log('Stores cached for group:', groupName);
+            allStores = result.rows;
+            
+            // 將完整的商店列表存入緩存
+            cacheService.setStoreList(allStores, 'all');
+            console.log('Cached complete store list:', {
+                count: allStores.length,
+                stores: allStores.map(s => ({ id: s.id, name: s.name }))
+            });
         } else {
-            console.log('Cache hit - Using cached stores for group:', groupName);
+            console.log('Cache hit - Using cached complete store list');
         }
 
-        // 設置緩存
-        storeCache.set(cacheKey, {
-            data: stores,
-            expiry: Date.now() + STORE_CACHE_TTL
-        });
+        // 2. 根據用戶權限過濾商店
+        let filteredStores = allStores;
+        if (req.user.group_name !== 'admin' && req.user.permitted_stores) {
+            console.log('Filtering stores by user permissions');
+            filteredStores = allStores.filter(store => 
+                req.user.permitted_stores.includes(store.id)
+            );
+            console.log('Filtered stores:', {
+                before: allStores.length,
+                after: filteredStores.length,
+                permitted: req.user.permitted_stores
+            });
+        }
 
-        res.json({ success: true, stores });
+        // 3. 返回過濾後的商店列表
+        res.json({
+            success: true,
+            stores: filteredStores
+        });
     } catch (error) {
         console.error('Error fetching stores:', error);
         res.status(500).json({ 
@@ -546,7 +548,7 @@ router.get('/:storeId/export', auth, checkStorePermission('inventory'), async (r
                 item.full_charge_capacity,
                 item.cycle_count,
                 item.battery_health ? `${item.battery_health}%` : 'N/A',
-                new Date(item.received_at).toLocaleString()
+                formatDateForCSV(item.received_at)
             ].map(value => `"${value || 'N/A'}"`); // Wrap in quotes and handle null values
 
             csv += row.join(',') + '\n';

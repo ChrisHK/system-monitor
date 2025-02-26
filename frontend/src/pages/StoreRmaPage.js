@@ -23,7 +23,7 @@ import {
 import { rmaService } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
-import moment from 'moment';
+import { formatDate, sortDate } from '../utils/formatters';
 
 const { Search } = Input;
 const { Panel } = Collapse;
@@ -47,7 +47,7 @@ const StoreRmaPage = () => {
         try {
             setLoading(true);
             setError('');
-            const response = await rmaService.getRmaItems(storeId);
+            const response = await rmaService.getRmaItems({ storeId });
             console.log('RMA API Response:', response);
             
             if (!response?.success) {
@@ -280,7 +280,8 @@ const StoreRmaPage = () => {
             dataIndex: 'rma_date',
             key: 'rma_date',
             width: 150,
-            render: (date) => moment(date).format('YYYY-MM-DD HH:mm:ss')
+            render: formatDate,
+            sorter: sortDate
         },
         {
             title: 'Reason',

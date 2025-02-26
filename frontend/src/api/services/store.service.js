@@ -7,10 +7,32 @@ class StoreService {
     // Define all methods before binding
     this.getStores = async (params) => {
       try {
+        console.log('Fetching stores with params:', params);
         const response = await api.get(ENDPOINTS.STORE.LIST, { params });
+        
+        if (!response?.success) {
+          console.error('Store API returned unsuccessful response:', response);
+          throw new Error(response?.error || 'Failed to fetch stores');
+        }
+
+        const stores = response.data?.stores || response.stores;
+        if (!Array.isArray(stores)) {
+          console.error('Invalid stores data format:', stores);
+          throw new Error('Invalid stores data format');
+        }
+
+        console.log('Successfully fetched stores:', {
+          count: stores.length,
+          stores: stores.map(s => ({ id: s.id, name: s.name }))
+        });
+
         return response;
       } catch (error) {
-        console.error('Get stores error:', error);
+        console.error('Get stores error:', {
+          error: error.message,
+          stack: error.stack,
+          params
+        });
         throw error;
       }
     };

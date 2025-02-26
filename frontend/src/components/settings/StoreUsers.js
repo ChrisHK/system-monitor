@@ -43,7 +43,7 @@ const StoreUsers = () => {
     });
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
-    const { isAdmin } = useAuth();
+    const { isAdmin, refreshUser } = useAuth();
 
     useEffect(() => {
         fetchUsers();
@@ -140,7 +140,10 @@ const StoreUsers = () => {
             if (response?.success) {
                 setSuccess(editingUser ? 'User updated successfully' : 'User created successfully');
                 handleCloseDialog();
-                fetchUsers();
+                await fetchUsers();
+                
+                // Refresh current user data if the updated user is the current user
+                await refreshUser();
             } else {
                 throw new Error(response?.error || 'Operation failed');
             }

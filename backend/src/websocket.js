@@ -1,30 +1,14 @@
 const WebSocket = require('ws');
+const config = require('./config');
 
-function setupWebSocket(server) {
-    // Create WebSocket server directly on the HTTP server
-    const wss = new WebSocket.Server({ 
-        server: server,
-        path: '/',  // Match the frontend path
-        perMessageDeflate: false
+function setupWebSocketServer(server) {
+    const wss = new WebSocket.Server({
+        server,
+        path: config.ws.path
     });
 
-    console.log('WebSocket server initialized');
-
-    // Connection handling
-    wss.on('connection', (ws, req) => {
-        const clientIp = req.socket.remoteAddress;
-        console.log('New WebSocket connection:', {
-            clientIp,
-            headers: req.headers,
-            url: req.url,
-            timestamp: new Date().toISOString()
-        });
-
-        // Set up ping-pong
+    wss.on('connection', (ws) => {
         ws.isAlive = true;
-        ws.on('pong', () => {
-            ws.isAlive = true;
-        });
 
         // Send welcome message
         try {
@@ -37,9 +21,7 @@ function setupWebSocket(server) {
             console.error('Error sending welcome message:', error);
         }
 
-        // Message handling
         ws.on('message', (message) => {
-            console.log('Received:', message.toString());
             try {
                 ws.send(JSON.stringify({
                     type: 'echo',
@@ -51,46 +33,35 @@ function setupWebSocket(server) {
             }
         });
 
-        // Error handling
         ws.on('error', (error) => {
-            console.error('WebSocket client error:', {
-                error,
-                clientIp,
-                timestamp: new Date().toISOString()
-            });
+            console.error('WebSocket client error:', error);
         });
 
-        // Close handling
         ws.on('close', () => {
-            console.log('Client disconnected:', {
-                clientIp,
-                timestamp: new Date().toISOString()
-            });
+            ws.isAlive = false;
+        });
+
+        ws.on('pong', () => {
+            ws.isAlive = true;
         });
     });
 
-    // Heartbeat check
+    // Set up ping interval
     const interval = setInterval(() => {
         wss.clients.forEach((ws) => {
             if (ws.isAlive === false) {
-                console.log('Terminating inactive connection');
                 return ws.terminate();
             }
             ws.isAlive = false;
             ws.ping();
         });
-    }, 30000);
+    }, config.ws.pingInterval);
 
     wss.on('close', () => {
         clearInterval(interval);
     });
 
-    // Log active connections every minute
-    setInterval(() => {
-        console.log('Active WebSocket connections:', wss.clients.size);
-    }, 60000);
-
     return wss;
 }
 
-module.exports = setupWebSocket; 
+module.exports = setupWebSocketServer; 

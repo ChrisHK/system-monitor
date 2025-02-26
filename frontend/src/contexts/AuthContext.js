@@ -11,33 +11,37 @@ export const AuthProvider = ({ children }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
-    useEffect(() => {
-        const loadUser = async () => {
-            try {
-                if (!authService.isAuthenticated()) {
-                    setLoading(false);
-                    return;
-                }
-
-                const response = await authService.checkAuth();
-                
-                if (!response?.success) {
-                    throw new Error(response?.error || 'Authentication check failed');
-                }
-                
-                setUser(response.user);
-            } catch (error) {
-                console.error('Error loading user:', error);
-                setError(error.message || 'Failed to load user');
-                await authService.logout();
+    const refreshUser = useCallback(async () => {
+        try {
+            setLoading(true);
+            setError(null);
+            
+            if (!authService.isAuthenticated()) {
                 setUser(null);
-            } finally {
-                setLoading(false);
+                return;
             }
-        };
 
-        loadUser();
+            const response = await authService.checkAuth();
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Authentication check failed');
+            }
+            
+            setUser(response.user);
+            return response.user;
+        } catch (error) {
+            console.error('Error refreshing user:', error);
+            setError(error.message || 'Failed to refresh user');
+            await authService.logout();
+            setUser(null);
+        } finally {
+            setLoading(false);
+        }
     }, []);
+
+    useEffect(() => {
+        refreshUser();
+    }, [refreshUser]);
 
     const login = useCallback(async (username, password) => {
         try {
@@ -110,7 +114,8 @@ export const AuthProvider = ({ children }) => {
         isAdmin,
         isAuthenticated,
         error,
-        loading
+        loading,
+        refreshUser
     };
 
     return (

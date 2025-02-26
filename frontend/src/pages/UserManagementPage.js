@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Input, Select, message, Space, Tag, Alert } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
 import { userService, storeService } from '../api';
+import { useAuth } from '../contexts/AuthContext';
 
 const { Option } = Select;
 
@@ -13,6 +14,7 @@ const UserManagementPage = () => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [form] = Form.useForm();
+    const { refreshUser } = useAuth();
 
     const fetchUsers = async () => {
         try {
@@ -69,7 +71,7 @@ const UserManagementPage = () => {
         setIsModalVisible(true);
     };
 
-    const handleSubmit = async (values) => {
+    const handleUpdateUser = async (values) => {
         try {
             setLoading(true);
             setError(null);
@@ -84,6 +86,10 @@ const UserManagementPage = () => {
             setIsModalVisible(false);
             form.resetFields();
             await fetchUsers();
+            
+            // Refresh current user data if the updated user is the current user
+            await refreshUser();
+            
         } catch (error) {
             console.error('Error updating user:', error);
             setError(error.message);
@@ -179,7 +185,7 @@ const UserManagementPage = () => {
                 <Form
                     form={form}
                     layout="vertical"
-                    onFinish={handleSubmit}
+                    onFinish={handleUpdateUser}
                 >
                     <Form.Item
                         name="username"

@@ -174,6 +174,16 @@ export const setupInterceptors = (instance, config) => {
         }
       }
 
+      // Log successful response
+      console.log('API Response:', {
+        url: response.config.url,
+        baseURL: response.config.baseURL,
+        method: response.config.method,
+        status: response.status,
+        data: response.data,
+        timestamp: new Date().toISOString()
+      });
+
       // Ensure success is set
       response.data.success = response.data.success ?? true;
       return response.data;
@@ -215,14 +225,46 @@ export const setupInterceptors = (instance, config) => {
         return handleAuthError(error);
       }
 
-      // Network errors in production
-      if (isProduction && error.code === 'ERR_NETWORK') {
-        console.error('Network error in production:', {
+      // Handle network errors
+      if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') {
+        console.error('Network error:', {
           url: error.config?.url,
           baseURL: error.config?.baseURL,
           fullUrl: error.config ? `${error.config.baseURL || ''}${error.config.url}` : undefined,
+          code: error.code,
+          message: error.message,
           headers: error.config?.headers,
           timestamp: new Date().toISOString()
+        });
+
+        return Promise.reject({
+          code: ERROR_CODES.NETWORK_ERROR,
+          message: 'Network error occurred',
+          details: {
+            url: error.config?.url,
+            code: error.code,
+            message: error.message
+          }
+        });
+      }
+
+      // Handle timeout errors
+      if (error.code === 'ECONNABORTED' && error.message.includes('timeout')) {
+        console.error('Request timeout:', {
+          url: error.config?.url,
+          baseURL: error.config?.baseURL,
+          fullUrl: error.config ? `${error.config.baseURL || ''}${error.config.url}` : undefined,
+          timeout: error.config?.timeout,
+          timestamp: new Date().toISOString()
+        });
+
+        return Promise.reject({
+          code: ERROR_CODES.TIMEOUT,
+          message: 'Request timeout',
+          details: {
+            url: error.config?.url,
+            timeout: error.config?.timeout
+          }
         });
       }
 
@@ -234,7 +276,11 @@ export const setupInterceptors = (instance, config) => {
         });
       }
 
-      return Promise.reject(error);
+      return Promise.reject({
+        code: ERROR_CODES.UNKNOWN,
+        message: error.message || 'Unknown error occurred',
+        details: error
+      });
     }
   );
 }; 

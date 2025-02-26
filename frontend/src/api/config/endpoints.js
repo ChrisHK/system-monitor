@@ -20,7 +20,7 @@ export const getApiBaseUrl = () => {
   }
 
   // Development environment - use environment variable or default
-  const devUrl = process.env.REACT_APP_API_URL || 'http://localhost:3000';
+  const devUrl = process.env.REACT_APP_API_URL || 'http://localhost:3000/api';
   console.log('Using development API URL:', {
     url: devUrl,
     source: process.env.REACT_APP_API_URL ? 'env' : 'default',
@@ -75,7 +75,7 @@ export const ENDPOINTS = {
     ITEMS: '/outbound/items',
     ADD_ITEM: '/outbound/items',
     REMOVE_ITEM: (itemId) => `/outbound/items/${itemId}`,
-    SEND_TO_STORE: (storeId) => `/outbound/send/${storeId}`,
+    SEND_TO_STORE: (storeId) => `/outbound/items/${storeId}/send`,
     CONFIRM: (id) => `/outbound/${id}/confirm`,
     SEARCH: '/outbound/search'
   },
@@ -183,5 +183,8 @@ export const ENDPOINTS = {
       REMOVE: (recordId, tagId) => `/tags/${recordId}/remove/${tagId}`,
       BATCH: '/tags/batch-assign'
     }
+  },
+  DATA_PROCESS: {
+    ARCHIVE_DUPLICATES: '/data-process/archive-duplicates'
   }
 }; 

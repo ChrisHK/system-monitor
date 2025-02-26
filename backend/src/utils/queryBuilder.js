@@ -46,11 +46,12 @@ const queryTemplates = {
     // 系統記錄相關查詢
     systemRecords: {
         base: `
-            SELECT DISTINCT ON (r.id) 
+            SELECT 
                 r.*,
                 COALESCE(s.id, si_all.store_id) as store_id,
                 COALESCE(s.name, si_all.store_name) as store_name,
-                COALESCE(il.location, 'inventory') as current_location
+                COALESCE(il.location, 'inventory') as current_location,
+                TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI:SS') as formatted_date
             FROM system_records r
             LEFT JOIN store_items si ON r.id = si.record_id
             LEFT JOIN stores s ON si.store_id = s.id
@@ -60,28 +61,41 @@ const queryTemplates = {
                 FROM store_items si_sub
                 JOIN stores s ON si_sub.store_id = s.id
             ) si_all ON r.id = si_all.record_id
+            WHERE r.is_current = true
         `,
         count: `
             SELECT COUNT(DISTINCT r.id) 
             FROM system_records r
             LEFT JOIN store_items si ON r.id = si.record_id
             LEFT JOIN stores s ON si.store_id = s.id
+            WHERE r.is_current = true
         `,
         searchFields: ['r.serialnumber', 'r.model', 'r.manufacturer']
     },
 
     // 重複記錄查詢
     duplicates: `
-        WITH duplicates AS (
-            SELECT serialnumber
+        WITH record_counts AS (
+            SELECT 
+                serialnumber,
+                COUNT(*) as record_count,
+                MIN(created_at) as first_seen,
+                MAX(created_at) as last_seen
             FROM system_records
             WHERE is_current = true
             GROUP BY serialnumber
             HAVING COUNT(*) > 1
         )
-        SELECT DISTINCT r.serialnumber
-        FROM system_records r
-        JOIN duplicates d ON r.serialnumber = d.serialnumber
+        SELECT 
+            r.*,
+            rc.record_count,
+            rc.first_seen,
+            rc.last_seen,
+            TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI:SS') as formatted_date
+        FROM record_counts rc
+        JOIN system_records r ON r.serialnumber = rc.serialnumber
+        WHERE r.is_current = true
+        ORDER BY rc.record_count DESC, r.serialnumber, r.created_at DESC
     `
 };
 

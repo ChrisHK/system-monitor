@@ -1,6 +1,6 @@
 import { api } from '../config/axios';
 import { ENDPOINTS } from '../config/endpoints';
-import { withErrorHandling, createQueryString } from '../utils/apiUtils';
+import { withErrorHandling, createQueryString, retryWithBackoff } from '../utils/apiUtils';
 
 class RmaService {
   constructor() {
@@ -24,29 +24,45 @@ class RmaService {
     this.processRma = this.processRma.bind(this);
     this.completeRma = this.completeRma.bind(this);
     this.failRma = this.failRma.bind(this);
+    this.deleteRmaItem = this.deleteRmaItem.bind(this);
+    this.failRmaItem = this.failRmaItem.bind(this);
   }
 
-  async getRmaItems(storeId, params) {
-    // 如果是 inventory RMA
-    if (storeId === 'inventory') {
+  async getRmaItems(params) {
+    try {
+      // Handle inventory RMA case
+      if (params.storeId === 'inventory') {
+        return retryWithBackoff(async () => {
+          const response = await api.get(
+            `${ENDPOINTS.RMA.INVENTORY.BASE}${createQueryString(params)}`
+          );
+          return response;
+        });
+      }
+      
+      // Handle store RMA case
+      const parsedStoreId = parseInt(params.storeId, 10);
+      if (isNaN(parsedStoreId) || parsedStoreId <= 0) {
+        throw new Error(`Invalid store ID: ${params.storeId}`);
+      }
+      
       const response = await api.get(
-        `${ENDPOINTS.RMA.INVENTORY.BASE}${createQueryString(params)}`
+        `${ENDPOINTS.RMA.STORE.BASE(parsedStoreId)}${createQueryString(params)}`
       );
       return response;
+    } catch (error) {
+      console.error('Error in getRmaItems:', error);
+      throw error;
     }
-    
-    // 如果是 store RMA
-    const response = await api.get(
-      `${ENDPOINTS.RMA.STORE.BASE(storeId)}${createQueryString(params)}`
-    );
-    return response;
   }
 
   async getRmaItem(storeId, rmaId) {
     // 如果是 inventory RMA
     if (storeId === 'inventory') {
-      const response = await api.get(ENDPOINTS.RMA.INVENTORY.BY_ID(rmaId));
-      return response;
+      return retryWithBackoff(async () => {
+        const response = await api.get(ENDPOINTS.RMA.INVENTORY.BY_ID(rmaId));
+        return response;
+      });
     }
     
     const response = await api.get(ENDPOINTS.RMA.STORE.BY_ID(storeId, rmaId));
@@ -71,8 +87,10 @@ class RmaService {
   async searchRma(storeId, serialNumber) {
     // 如果是 inventory RMA
     if (storeId === 'inventory') {
-      const response = await api.get(ENDPOINTS.RMA.INVENTORY.SEARCH(serialNumber));
-      return response;
+      return retryWithBackoff(async () => {
+        const response = await api.get(ENDPOINTS.RMA.INVENTORY.SEARCH(serialNumber));
+        return response;
+      });
     }
     
     const response = await api.get(ENDPOINTS.RMA.STORE.SEARCH(storeId, serialNumber));
@@ -122,13 +140,19 @@ class RmaService {
   }
 
   // Inventory RMA specific methods
-  async processRma(rmaId) {
-    const response = await api.put(ENDPOINTS.RMA.INVENTORY.PROCESS(rmaId));
+  async processRma(rmaId, diagnosis) {
+    const response = await api.post(
+      ENDPOINTS.RMA.INVENTORY.PROCESS(rmaId),
+      { diagnosis }
+    );
     return response;
   }
 
-  async completeRma(rmaId) {
-    const response = await api.put(ENDPOINTS.RMA.INVENTORY.COMPLETE(rmaId));
+  async completeRma(rmaId, solution) {
+    const response = await api.post(
+      ENDPOINTS.RMA.INVENTORY.COMPLETE(rmaId),
+      { solution }
+    );
     return response;
   }
 
@@ -141,8 +165,10 @@ class RmaService {
   }
 
   async getRmaStats() {
-    const response = await api.get(ENDPOINTS.RMA.INVENTORY.STATS);
-    return response;
+    return retryWithBackoff(async () => {
+      const response = await api.get(ENDPOINTS.RMA.INVENTORY.STATS);
+      return response;
+    });
   }
 
   async updateInventoryRma(rmaId, data) {
@@ -159,6 +185,21 @@ class RmaService {
     const response = await api.get(
       `${ENDPOINTS.RMA.INVENTORY.EXPORT}${createQueryString(params)}`,
       { responseType: 'blob' }
+    );
+    return response;
+  }
+
+  async deleteRmaItem(rmaId) {
+    return retryWithBackoff(async () => {
+      const response = await api.delete(ENDPOINTS.RMA.INVENTORY.DELETE(rmaId));
+      return response;
+    });
+  }
+
+  async failRmaItem(rmaId, reason) {
+    const response = await api.post(
+      ENDPOINTS.RMA.INVENTORY.FAIL(rmaId),
+      { reason }
     );
     return response;
   }

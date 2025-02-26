@@ -9,8 +9,8 @@ const REQUIRED_ENV_VARS = {
 
 // Development configuration
 const DEV_DEFAULTS = {
-    REACT_APP_API_URL: 'http://192.168.0.10:3000/api',
-    REACT_APP_WS_URL: 'ws://192.168.0.10:3000/ws',
+    REACT_APP_API_URL: 'http://localhost:3001/api',
+    REACT_APP_WS_URL: 'ws://localhost:3001/ws',
     REACT_APP_API_TIMEOUT: '30000',
     ALLOWED_HOSTS: [
         'localhost:3000',
@@ -108,6 +108,7 @@ const getConfig = () => {
     // Log development configuration
     console.log('Development configuration:', {
         ...config,
+        fullApiUrl: `${config.protocol}//${config.host}${config.apiUrl}`,
         timestamp: new Date().toISOString()
     });
 

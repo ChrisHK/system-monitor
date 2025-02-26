@@ -124,16 +124,45 @@ const DataProcessPage = () => {
     );
 
     // 清理舊日誌
-    const handleClearLogs = async () => {
-        try {
-            const response = await api.delete('data-process/logs');
-            if (response.success) {
-                message.success(`${response.cleared} logs have been archived.`);
-                fetchLogs(1, selectedStatus);
+    const handleClearLogs = () => {
+        Modal.confirm({
+            title: 'Clear All Logs',
+            icon: <ExclamationCircleOutlined />,
+            content: 'This will remove ALL processing logs. This action cannot be undone. Are you sure you want to proceed?',
+            okText: 'Yes, Clear All',
+            okType: 'danger',
+            cancelText: 'No',
+            onOk: async () => {
+                try {
+                    setLoading(true);
+                    const response = await api.post('data-process/logs/clean');
+                    
+                    if (response.success) {
+                        message.success('All logs have been cleared successfully');
+                        // 顯示詳細信息
+                        Modal.info({
+                            title: 'Cleanup Results',
+                            content: (
+                                <div>
+                                    <p>Total logs removed: {response.details.totalRemoved}</p>
+                                    <p>Total before: {response.details.totalBefore}</p>
+                                    <p>Total after: {response.details.totalAfter}</p>
+                                </div>
+                            )
+                        });
+                        // 重新獲取日誌
+                        fetchLogs();
+                    } else {
+                        throw new Error(response.error || 'Failed to clear logs');
+                    }
+                } catch (error) {
+                    console.error('Clear logs error:', error);
+                    message.error(error.message || 'Failed to clear logs');
+                } finally {
+                    setLoading(false);
+                }
             }
-        } catch (error) {
-            message.error(error.message || 'Failed to clear logs');
-        }
+        });
     };
 
     // 顯示日誌詳情
