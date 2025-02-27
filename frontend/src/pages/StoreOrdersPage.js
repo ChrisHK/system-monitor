@@ -31,6 +31,25 @@ const StoreOrdersPage = () => {
     const [isPrintModalVisible, setIsPrintModalVisible] = useState(false);
     const [selectedOrderForPrint, setSelectedOrderForPrint] = useState(null);
 
+    const formatPayMethod = (method) => {
+        switch (method) {
+            case 'credit_card':
+                return 'Credit Card';
+            case 'cash':
+                return 'Cash';
+            case 'debit_card':
+                return 'Debit Card';
+            default:
+                return method;
+        }
+    };
+
+    const paymentMethods = [
+        { value: 'credit_card', label: 'Credit Card' },
+        { value: 'cash', label: 'Cash' },
+        { value: 'debit_card', label: 'Debit Card' }
+    ];
+
     const fetchOrders = useCallback(async () => {
         try {
             setIsLoading(true);
@@ -88,10 +107,17 @@ const StoreOrdersPage = () => {
     const handleSaveOrder = async () => {
         if (!pendingOrder) return;
         
-        // Check if all items have prices
+        // Check if all items have prices and payment methods
         const hasEmptyPrices = pendingOrder.items.some(item => !item.price);
+        const hasEmptyPayMethods = pendingOrder.items.some(item => !item.pay_method);
+        
         if (hasEmptyPrices) {
             message.error('Please enter prices for all items before saving the order');
+            return;
+        }
+        
+        if (hasEmptyPayMethods) {
+            message.error('Please select payment methods for all items before saving the order');
             return;
         }
         
@@ -162,16 +188,18 @@ const StoreOrdersPage = () => {
 
     const handleSavePayMethod = async (itemId, payMethod) => {
         try {
+            console.log('Updating payment method:', { itemId, payMethod });
             const response = await orderService.updateOrderItemPayMethod(storeId, itemId, payMethod);
+            
             if (response?.success) {
                 message.success('Payment method saved successfully');
-                fetchOrders();
+                await fetchOrders(); // 重新獲取訂單以更新顯示
             } else {
                 throw new Error(response?.error || 'Failed to save payment method');
             }
         } catch (error) {
-            message.error(error.message || 'Failed to save payment method');
             console.error('Error in handleSavePayMethod:', error);
+            message.error(error.message || 'Failed to save payment method');
         }
     };
 
@@ -340,7 +368,20 @@ const StoreOrdersPage = () => {
             title: 'Pay Method',
             dataIndex: 'pay_method',
             key: 'pay_method',
-            render: (text) => text || 'Credit Card'
+            width: 150,
+            render: (text, record) => (
+                <Select
+                    defaultValue={text || 'credit_card'}
+                    style={{ width: '100%' }}
+                    onChange={(value) => handleSavePayMethod(record.id, value)}
+                >
+                    {paymentMethods.map(method => (
+                        <Option key={method.value} value={method.value}>
+                            {method.label}
+                        </Option>
+                    ))}
+                </Select>
+            )
         },
         {
             title: 'Price',
@@ -450,8 +491,8 @@ const StoreOrdersPage = () => {
             return {
                 ...col,
                 render: (text, record) => record.is_deleted ? (
-                    <span style={{ color: '#999' }}>{text || 'Credit Card'}</span>
-                ) : (text || 'Credit Card')
+                    <span style={{ color: '#999' }}>{formatPayMethod(text || 'credit_card')}</span>
+                ) : formatPayMethod(text || 'credit_card')
             };
         }
         // For all other columns

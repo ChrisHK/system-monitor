@@ -68,6 +68,8 @@ const InventoryPage = () => {
     const isFirstMount = useRef(true);
     const { addNotification } = useNotification();
     const [selectedStore, setSelectedStore] = useState(null);
+    const [outboundSerialNumber, setOutboundSerialNumber] = useState('');
+    const [itemLocations, setItemLocations] = useState({});
 
     // 使用 useRef 來存儲最後一次的搜索參數
     const lastSearchParams = useRef({
@@ -80,7 +82,7 @@ const InventoryPage = () => {
     // 檢查用戶是否有 outbound 權限
     const hasOutboundPermission = useMemo(() => {
         return user?.group_name === 'admin' || 
-            user?.group_permissions?.main_permissions?.outbound === true;
+            user?.main_permissions?.outbound === true;
     }, [user]);
 
     useEffect(() => {
@@ -167,42 +169,94 @@ const InventoryPage = () => {
 
     const fetchRecords = useCallback(async (force = false) => {
         try {
-            console.log('Starting fetchRecords:', {
-                searchText,
-                pagination: {
-                    current: pagination.current,
-                    pageSize: pagination.pageSize
-                },
-                storeId,
-                force,
-                timestamp: new Date().toISOString()
-            });
-
             setLoading(true);
             setError('');
-            
-            const searchParams = {
+
+            // 檢查是否需要重新獲取數據
+            if (!force && !isInitialLoad) {
+                const currentParams = {
+                    searchText,
+                    page: pagination.current,
+                    pageSize: pagination.pageSize,
+                    storeId
+                };
+
+                if (JSON.stringify(currentParams) === JSON.stringify(lastSearchParams.current)) {
+                    setLoading(false);
+                    return;
+                }
+            }
+
+            // 更新最後一次搜索參數
+            lastSearchParams.current = {
+                searchText,
                 page: pagination.current,
-                limit: pagination.pageSize,
-                ...(storeId && storeId !== 'all' ? { store_id: parseInt(storeId, 10) } : {}),
-                ...(searchText ? { search: searchText } : {})
+                pageSize: pagination.pageSize,
+                storeId
             };
 
-            console.log('Search params:', searchParams);
-
-            const response = await inventoryService.getInventoryRecords(searchParams);
-
-            console.log('API Response:', {
-                success: response?.success,
-                total: response?.total,
-                totalAll: response?.totalAll,
-                uniqueSerials: response?.uniqueSerials,
-                recordsCount: response?.records?.length,
-                timestamp: new Date().toISOString()
+            const response = await inventoryService.getInventoryRecords({
+                page: pagination.current,
+                limit: pagination.pageSize,
+                search: searchText,
+                store_id: storeId
             });
 
             if (!response?.success) {
-                throw new Error(response?.error || 'Failed to load inventory data');
+                throw new Error(response?.error || 'Failed to fetch inventory data');
+            }
+
+            // 處理記錄數據
+            if (response.records?.length > 0) {
+                // 檢查每個記錄的位置
+                const locationPromises = response.records.map(record => 
+                    inventoryService.checkItemLocation(record.serialnumber)
+                        .catch(error => {
+                            console.warn(`Failed to check location for ${record.serialnumber}:`, error);
+                            return { success: false };
+                        })
+                );
+                
+                const locations = await Promise.all(locationPromises);
+                
+                // 更新 locations state
+                const newLocations = {};
+                locations.forEach((locationResponse, index) => {
+                    if (locationResponse?.success) {
+                        newLocations[response.records[index].serialnumber] = locationResponse.data || locationResponse;
+                    }
+                });
+                
+                setItemLocations(prev => ({ ...prev, ...newLocations }));
+
+                const processedRecords = response.records.map(record => {
+                    const locationInfo = newLocations[record.serialnumber];
+                    let location = 'Inventory';
+                    let locationColor = 'green';
+
+                    if (locationInfo) {
+                        if (locationInfo.location === 'store') {
+                            location = locationInfo.storeName || 'Store';
+                            locationColor = 'blue';
+                        } else if (locationInfo.location === 'outbound') {
+                            location = 'Outbound';
+                            locationColor = 'orange';
+                        }
+                    }
+
+                    return {
+                        ...record,
+                        key: record.id,
+                        location,
+                        locationColor
+                    };
+                });
+
+                setRecords(processedRecords);
+                setFilteredRecords(processedRecords);
+            } else {
+                setRecords([]);
+                setFilteredRecords([]);
             }
 
             // 更新統計數據
@@ -212,30 +266,6 @@ const InventoryPage = () => {
                 ...prev,
                 total: response.total || 0
             }));
-
-            // 處理記錄數據
-            if (response.records?.length > 0) {
-                const processedRecords = response.records.map(record => ({
-                    ...record,
-                    key: record.id,
-                    location: 'Inventory',
-                    locationColor: 'green'
-                }));
-
-                setRecords(processedRecords);
-                setFilteredRecords(processedRecords);
-            } else {
-                setRecords([]);
-                setFilteredRecords([]);
-            }
-
-            console.log('Records processed:', {
-                totalRecords: response.totalAll,
-                uniqueItems: response.uniqueSerials,
-                duplicateItems: duplicateSerials.size,
-                processedRecords: response.records?.length,
-                timestamp: new Date().toISOString()
-            });
 
         } catch (error) {
             console.error('Error in fetchRecords:', {
@@ -247,7 +277,7 @@ const InventoryPage = () => {
         } finally {
             setLoading(false);
         }
-    }, [pagination.current, pagination.pageSize, storeId, searchText]);
+    }, [pagination.current, pagination.pageSize, storeId, searchText, isInitialLoad]);
 
     // 初始加載
     useEffect(() => {
@@ -822,6 +852,9 @@ const InventoryPage = () => {
             addNotification('outbound', 'add');
             await fetchOutboundItems();
             await fetchRecords();
+
+            // Clear the input field after successful addition
+            setOutboundSerialNumber('');
         } catch (error) {
             console.error('Error adding to outbound:', error);
             setError(error.message || 'Failed to add to outbound');
@@ -889,6 +922,35 @@ const InventoryPage = () => {
 
         return () => clearTimeout(timer);
     }, [searchText, fetchRecords]);
+
+    // Add the handleUpdateNotes function near other handlers
+    const handleUpdateNotes = useCallback(async (itemId, notes) => {
+        try {
+            setOutboundLoading(true);
+            setError('');
+            
+            console.log('Updating notes for item:', {
+                itemId,
+                notes,
+                timestamp: new Date().toISOString()
+            });
+            
+            const response = await inventoryService.updateOutboundItemNotes(itemId, notes);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to update notes');
+            }
+            
+            message.success('Notes updated successfully');
+            await fetchOutboundItems();
+        } catch (error) {
+            console.error('Failed to update notes:', error);
+            setError(error.message || 'Failed to update notes');
+            message.error(error.message || 'Failed to update notes');
+        } finally {
+            setOutboundLoading(false);
+        }
+    }, [fetchOutboundItems]);
 
     return (
         <div style={{ padding: '24px' }}>
@@ -1052,6 +1114,8 @@ const InventoryPage = () => {
                             placeholder="Enter serial number to add..."
                             allowClear
                             enterButton="Add"
+                            value={outboundSerialNumber}
+                            onChange={e => setOutboundSerialNumber(e.target.value)}
                             onSearch={handleAddToOutboundBySerial}
                             style={{ width: '100%' }}
                         />
@@ -1112,6 +1176,20 @@ const InventoryPage = () => {
                                 <Tag color={text === 'pending' ? 'orange' : 'green'}>
                                     {text || 'pending'}
                                 </Tag>
+                            )
+                        },
+                        {
+                            title: 'Notes',
+                            dataIndex: 'notes',
+                            key: 'notes',
+                            width: 200,
+                            render: (text, record) => (
+                                <Input.TextArea
+                                    defaultValue={text}
+                                    autoSize={{ minRows: 1, maxRows: 3 }}
+                                    onBlur={(e) => handleUpdateNotes(record.outbound_item_id, e.target.value)}
+                                    placeholder="Add notes..."
+                                />
                             )
                         },
                         {

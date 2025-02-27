@@ -131,6 +131,7 @@ router.get('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (
                                 'disks', sr.disks,
                                 'price', oi.price,
                                 'notes', oi.notes,
+                                'pay_method', oi.pay_method,
                                 'is_deleted', oi.is_deleted,
                                 'order', json_build_object(
                                     'id', o.id,
@@ -326,21 +327,15 @@ router.post('/:storeId', auth, checkStorePermission('orders'), catchAsync(async 
 
             // Add to order_items
             await client.query(`
-                INSERT INTO store_order_items (order_id, record_id, notes)
-                VALUES ($1, $2, $3)
-            `, [orderId, item.recordId, item.notes || null]).catch(err => {
-                console.error('Database error adding item to order:', err);
-                throw new Error(`Failed to add item ${item.recordId} to order`);
-            });
+                INSERT INTO store_order_items (order_id, record_id, notes, pay_method)
+                VALUES ($1, $2, $3, $4)
+            `, [orderId, item.recordId, item.notes || null, item.payMethod || 'credit_card']);
             
             // Remove from store_items
             await client.query(
                 'DELETE FROM store_items WHERE store_id = $1 AND record_id = $2',
                 [storeId, item.recordId]
-            ).catch(err => {
-                console.error('Database error removing item from store:', err);
-                throw new Error(`Failed to remove item ${item.recordId} from store`);
-            });
+            );
         }
         
         await client.query('COMMIT');
@@ -578,6 +573,60 @@ router.put('/:storeId/items/:itemId/price', auth, checkStorePermission('orders')
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Error updating price:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+}));
+
+// Update order item pay method
+router.put('/:storeId/items/:itemId/pay-method', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
+    const { storeId, itemId } = req.params;
+    const { payMethod } = req.body;
+    const client = await pool.connect();
+    
+    try {
+        // Validate pay method
+        const validPayMethods = ['credit_card', 'cash', 'debit_card'];
+        if (!validPayMethods.includes(payMethod)) {
+            throw new Error('Invalid payment method');
+        }
+
+        await client.query('BEGIN');
+
+        // Check if item exists and belongs to a pending order
+        const itemResult = await client.query(`
+            SELECT oi.id
+            FROM store_order_items oi
+            JOIN store_orders o ON oi.order_id = o.id
+            WHERE oi.id = $1 
+            AND o.store_id = $2
+            AND o.status = 'pending'
+        `, [itemId, storeId]);
+
+        if (itemResult.rows.length === 0) {
+            throw new Error('Item not found or order is not pending');
+        }
+
+        // Update pay method
+        await client.query(`
+            UPDATE store_order_items
+            SET pay_method = $1
+            WHERE id = $2
+        `, [payMethod, itemId]);
+
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            message: 'Payment method updated successfully'
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error updating payment method:', error);
         res.status(500).json({
             success: false,
             error: error.message

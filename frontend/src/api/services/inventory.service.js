@@ -286,6 +286,25 @@ class InventoryService {
       }
     };
 
+    this.updateOutboundItemNotes = async (itemId, notes) => {
+      if (!itemId) {
+        throw new Error('Item ID is required');
+      }
+
+      try {
+        const response = await api.put(`${ENDPOINTS.OUTBOUND.UPDATE_NOTES(itemId)}`, { notes });
+        return response;
+      } catch (error) {
+        console.error('Update notes error:', {
+          error: error.message,
+          stack: error.stack,
+          itemId,
+          timestamp: new Date().toISOString()
+        });
+        throw error;
+      }
+    };
+
     // Bind all methods
     Object.getOwnPropertyNames(InventoryService.prototype)
       .filter(prop => typeof this[prop] === 'function')

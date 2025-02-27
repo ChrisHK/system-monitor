@@ -21,6 +21,7 @@ class UserService {
         this.updateUserRole = this.updateUserRole.bind(this);
         this.getUserPermissions = this.getUserPermissions.bind(this);
         this.updateUserPermissions = this.updateUserPermissions.bind(this);
+        this.updateUserPassword = this.updateUserPassword.bind(this);
     }
 
     async getCurrentUser() {
@@ -138,58 +139,66 @@ class UserService {
         return response;
     }
 
-    async createGroup(groupData) {
-        // 轉換 store_permissions 為陣列格式
-        const { name, description, store_permissions } = groupData;
-        const storePermissionsArray = [];
-        
-        // 將每個商店的權限轉換為陣列元素
-        Object.entries(store_permissions || {}).forEach(([storeId, permissions]) => {
-            storePermissionsArray.push({
-                store_id: storeId,
-                inventory: permissions.inventory === true ? '1' : '0',
-                orders: permissions.orders === true ? '1' : '0',
-                rma: permissions.rma === true ? '1' : '0',
-                outbound: permissions.outbound === true ? '1' : '0'
-            });
-        });
+    async createGroup({ name, description, main_permissions, store_permissions }) {
+        // Prepare store permissions array
+        const storePermissionsArray = store_permissions.map(permissions => ({
+            store_id: permissions.store_id,
+            inventory: permissions.inventory === true,
+            orders: permissions.orders === true,
+            rma: permissions.rma === true,
+            outbound: permissions.outbound === true
+        }));
 
-        const basicData = {
+        // Prepare the payload
+        const payload = {
             name: name.trim(),
             description: description.trim(),
-            store_permissions: storePermissionsArray  // 直接使用陣列
+            main_permissions,
+            store_permissions: storePermissionsArray
         };
         
-        console.log('Creating group with data:', basicData);
-        const response = await api.post(ENDPOINTS.GROUP.CREATE, basicData);
+        console.log('Creating group with data:', payload);
+        const response = await api.post(ENDPOINTS.GROUP.CREATE, payload);
         return response;
     }
 
     async updateGroup(groupId, groupData) {
-        // 轉換 store_permissions 為陣列格式
-        const { name, description, store_permissions } = groupData;
-        const storePermissionsArray = [];
-        
-        // 將每個商店的權限轉換為陣列元素
-        Object.entries(store_permissions || {}).forEach(([storeId, permissions]) => {
-            storePermissionsArray.push({
-                store_id: storeId,
-                inventory: permissions.inventory === true ? '1' : '0',
-                orders: permissions.orders === true ? '1' : '0',
-                rma: permissions.rma === true ? '1' : '0',
-                outbound: permissions.outbound === true ? '1' : '0'
+        try {
+            console.log('Updating group with data:', {
+                ...groupData,
+                timestamp: new Date().toISOString()
             });
-        });
 
-        const basicData = {
-            name: name.trim(),
-            description: description.trim(),
-            store_permissions: storePermissionsArray  // 直接使用陣列
-        };
-        
-        console.log('Updating group with data:', basicData);
-        const response = await api.put(ENDPOINTS.GROUP.UPDATE(groupId), basicData);
-        return response;
+            // Extract all necessary data
+            const { name, description, main_permissions, store_permissions } = groupData;
+
+            // Prepare store permissions array
+            const storePermissionsArray = store_permissions.map(permissions => ({
+                store_id: permissions.store_id,
+                inventory: permissions.inventory === true,
+                orders: permissions.orders === true,
+                rma: permissions.rma === true,
+                outbound: permissions.outbound === true
+            }));
+
+            // Prepare the payload
+            const payload = {
+                name: name.trim(),
+                description: description.trim(),
+                main_permissions,
+                store_permissions: storePermissionsArray
+            };
+
+            const response = await api.put(ENDPOINTS.GROUP.UPDATE(groupId), payload);
+            return response;
+        } catch (error) {
+            console.error('Update group error:', {
+                error: error.message,
+                groupId,
+                groupData
+            });
+            throw error;
+        }
     }
 
     async updateGroupPermissions(groupId, permissions) {
@@ -236,6 +245,16 @@ class UserService {
     async deleteGroup(groupId) {
         const response = await api.delete(ENDPOINTS.GROUP.DELETE(groupId));
         return response;
+    }
+
+    async updateUserPassword(userId, password) {
+        try {
+            const response = await api.put(ENDPOINTS.USER.UPDATE_PASSWORD(userId), { password });
+            return response;
+        } catch (error) {
+            console.error('Update user password error:', error);
+            throw error;
+        }
     }
 }
 
@@ -377,6 +396,14 @@ const wrappedService = {
             return await userService.updateUserPermissions(userId, permissions);
         } catch (error) {
             console.error('Update user permissions error:', error);
+            throw error;
+        }
+    },
+    updateUserPassword: async (userId, password) => {
+        try {
+            return await userService.updateUserPassword(userId, password);
+        } catch (error) {
+            console.error('Update user password error:', error);
             throw error;
         }
     }

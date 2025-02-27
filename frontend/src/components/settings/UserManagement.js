@@ -210,7 +210,13 @@ const UserManagement = () => {
 
             let response;
             if (editingUser) {
+                // Update user data
                 response = await userService.updateUser(editingUser.id, userData);
+                
+                // If password is provided, update it
+                if (values.password) {
+                    await userService.updateUserPassword(editingUser.id, values.password);
+                }
             } else {
                 response = await userService.createUser(userData);
             }
@@ -438,11 +444,31 @@ const UserManagement = () => {
                         </Select>
                     </Form.Item>
 
-                    {!editingUser && (
+                    {editingUser ? (
+                        <Form.Item
+                            name="password"
+                            label="New Password"
+                            rules={[
+                                {
+                                    min: 6,
+                                    message: 'Password must be at least 6 characters!'
+                                }
+                            ]}
+                            extra="Leave blank to keep current password"
+                        >
+                            <Input.Password disabled={loading} />
+                        </Form.Item>
+                    ) : (
                         <Form.Item
                             name="password"
                             label="Password"
-                            rules={[{ required: true, message: 'Please input password!' }]}
+                            rules={[
+                                { required: true, message: 'Please input password!' },
+                                {
+                                    min: 6,
+                                    message: 'Password must be at least 6 characters!'
+                                }
+                            ]}
                         >
                             <Input.Password disabled={loading} />
                         </Form.Item>

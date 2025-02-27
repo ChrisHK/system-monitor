@@ -7,9 +7,13 @@ const checkMainPermission = (feature) => {
         try {
             const { user } = req;
 
-            console.log('=== Checking Main Permission ===');
-            console.log('User:', { id: user.id, group: user.group_name });
-            console.log('Feature:', feature);
+            console.log('=== Checking Main Permission ===', {
+                userId: user.id,
+                username: user.username,
+                group: user.group_name,
+                feature,
+                mainPermissions: user.main_permissions
+            });
 
             // 如果是admin群組，直接允許訪問
             if (user.group_name === 'admin') {
@@ -17,48 +21,27 @@ const checkMainPermission = (feature) => {
                 return next();
             }
 
-            // 從緩存獲取用戶權限
-            let permissions = cacheService.getUserPermissions(user.id);
-
-            if (!permissions) {
-                // 緩存未命中，從數據庫獲取
-                const groupResult = await pool.query(`
-                    SELECT g.name as group_name, gp.permission_value
-                    FROM groups g
-                    LEFT JOIN group_permissions gp ON g.id = gp.group_id AND gp.permission_type = $2
-                    WHERE g.id = $1
-                `, [user.group_id, feature]);
-
-                if (groupResult.rows.length === 0) {
-                    console.log('Error: User group not found');
-                    return res.status(403).json({
-                        success: false,
-                        error: 'Access denied: User group not found'
-                    });
-                }
-
-                permissions = {
-                    group: groupResult.rows[0],
-                    features: {}
-                };
-
-                // 將權限存入緩存
-                cacheService.setUserPermissions(user.id, permissions);
-            }
-
-            // 檢查特定功能的權限
-            if (permissions.group.permission_value === true) {
+            // 直接檢查 main_permissions
+            if (user.main_permissions && user.main_permissions[feature] === true) {
                 console.log(`Access granted: Has ${feature} permission`);
                 return next();
             }
 
-            console.log(`Access denied: No ${feature} permission`);
+            console.log(`Access denied: No ${feature} permission`, {
+                userPermissions: user.main_permissions
+            });
+
             return res.status(403).json({
                 success: false,
                 error: `Access denied: No permission for ${feature}`
             });
         } catch (error) {
-            console.error('Error checking main permission:', error);
+            console.error('Error checking main permission:', {
+                error: error.message,
+                stack: error.stack,
+                feature
+            });
+            
             res.status(500).json({
                 success: false,
                 error: 'Internal server error while checking permissions',
@@ -113,7 +96,7 @@ const checkStorePermission = (feature) => {
             if (!storePermissions) {
                 // 緩存未命中，從數據庫獲取
                 const storePermissionResult = await pool.query(`
-                    SELECT store_id, features
+                    SELECT store_id, permissions
                     FROM group_store_permissions
                     WHERE group_id = $1 AND store_id = $2
                 `, [user.group_id, storeId]);
@@ -139,7 +122,7 @@ const checkStorePermission = (feature) => {
             }
 
             // 檢查特定功能的權限
-            const features = storePermissions.features || {
+            const permissions = storePermissions.permissions || {
                 view: true,
                 basic: true,
                 inventory: false,
@@ -147,8 +130,8 @@ const checkStorePermission = (feature) => {
                 rma: false
             };
 
-            console.log('Current features:', features);
-            if (features[feature] === true) {
+            console.log('Current permissions:', permissions);
+            if (permissions[feature] === true) {
                 console.log(`Access granted: Has ${feature} permission`);
                 return next();
             }

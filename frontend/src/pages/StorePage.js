@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select, Form, InputNumber } from 'antd';
-import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { storeService, inventoryService, salesService, rmaService, orderService } from '../api';
@@ -49,6 +49,10 @@ const StorePage = () => {
     const [form] = Form.useForm();
     const [selectedItems, setSelectedItems] = useState([]);
     const [searchPerformed, setSearchPerformed] = useState(false);
+    const [editingNoteId, setEditingNoteId] = useState(null);
+    const [editingNoteText, setEditingNoteText] = useState('');
+    const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
+    const [editingNotes, setEditingNotes] = useState({});
 
     // 優化權限檢查，使用 useMemo 緩存所有權限相關的結果
     const permissions = useMemo(() => {
@@ -95,7 +99,24 @@ const StorePage = () => {
         }
     }, []);
 
-    // 3. 再定義 handleOutbound
+    // 3. 再定義 fetchStores
+    const fetchStores = useCallback(async () => {
+        try {
+            const response = await storeService.getStores();
+            if (response?.success) {
+                const storeOptions = response.stores.map(store => ({
+                    value: store.id,
+                    label: store.name
+                }));
+                setStores(storeOptions);
+            }
+        } catch (error) {
+            console.error('Error fetching stores:', error);
+            message.error('Failed to fetch stores');
+        }
+    }, []);
+
+    // 4. 再定義 handleOutbound
     const handleOutbound = useCallback(async () => {
         if (!permissions.hasOutbound) {
             message.error('You do not have permission to perform outbound operations');
@@ -103,12 +124,15 @@ const StorePage = () => {
         }
 
         try {
-            await fetchOutboundItems();
+            await Promise.all([
+                fetchOutboundItems(),
+                fetchStores()
+            ]);
             setOutboundModalVisible(true);
         } catch (error) {
             handleError(error, 'fetch outbound items');
         }
-    }, [permissions.hasOutbound, fetchOutboundItems, handleError]);
+    }, [permissions.hasOutbound, fetchOutboundItems, fetchStores, handleError]);
 
     // 優化數據獲取邏輯
     const fetchData = useCallback(async () => {
@@ -157,7 +181,8 @@ const StorePage = () => {
         }
 
         fetchData();
-    }, [permissions.hasAccess, fetchData, navigate]);
+        fetchStores(); // 初始加載商店列表
+    }, [permissions.hasAccess, fetchData, fetchStores, navigate]);
 
     // 優化搜索邏輯
     const handleSearch = useCallback((value) => {
@@ -220,13 +245,15 @@ const StorePage = () => {
     const handleAddToOutbound = async (serialNumber) => {
         try {
             setOutboundLoading(true);
-            const searchResponse = await inventoryService.searchRecords(serialNumber);
+            const searchResponse = await inventoryService.searchRecords('serialnumber', serialNumber);
             if (searchResponse?.success && searchResponse.records?.length > 0) {
                 const record = searchResponse.records[0];
                 const addResponse = await inventoryService.addToOutbound(record.id);
                 if (addResponse?.success) {
                     message.success('Item added to outbound successfully');
                     await fetchOutboundItems();
+                    // Clear the input field after successful addition
+                    setSearchSerialNumber('');
                 } else {
                     throw new Error(addResponse?.error || 'Failed to add item to outbound');
                 }
@@ -263,6 +290,31 @@ const StorePage = () => {
         }
     };
 
+    const handleUpdateNotes = async (itemId, notes) => {
+        try {
+            setOutboundLoading(true);
+            const response = await inventoryService.updateOutboundItemNotes(itemId, notes);
+            if (response?.success) {
+                message.success('Notes updated successfully');
+                // Update the local state
+                setOutboundRecords(prevRecords =>
+                    prevRecords.map(record =>
+                        record.outbound_item_id === itemId
+                            ? { ...record, notes }
+                            : record
+                    )
+                );
+            } else {
+                throw new Error(response?.error || 'Failed to update notes');
+            }
+        } catch (error) {
+            console.error('Update notes error:', error);
+            message.error(error.message || 'Failed to update notes');
+        } finally {
+            setOutboundLoading(false);
+        }
+    };
+
     const handleSendToStore = async () => {
         if (!selectedOutboundStore) {
             message.error('Please select a store');
@@ -271,8 +323,16 @@ const StorePage = () => {
 
         try {
             setOutboundLoading(true);
-            const itemIds = outboundRecords.map(item => item.id);
-            const response = await inventoryService.sendToStore(selectedOutboundStore, itemIds);
+            
+            // First update all notes
+            const updateNotesPromises = outboundRecords.map(item => 
+                item.notes ? inventoryService.updateOutboundItemNotes(item.outbound_item_id, item.notes) : Promise.resolve()
+            );
+            await Promise.all(updateNotesPromises);
+
+            // Then send items to store
+            const outboundIds = outboundRecords.map(item => item.outbound_item_id);
+            const response = await inventoryService.sendToStore(selectedOutboundStore, outboundIds);
             
             if (response?.success) {
                 message.success('Items sent to store successfully');
@@ -293,11 +353,25 @@ const StorePage = () => {
         try {
             setLoading(true);
             const response = await storeService.exportStoreInventory(storeId);
-            if (response?.success) {
-                message.success('Export successful');
-            } else {
-                throw new Error('Export failed');
-            }
+            
+            // Create a blob from the response data
+            const blob = new Blob([response], { type: 'text/csv' });
+            
+            // Create a download link
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', `store-${storeId}-inventory-${new Date().toISOString().split('T')[0]}.csv`);
+            
+            // Append link to body, click it, and remove it
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            // Clean up the URL
+            window.URL.revokeObjectURL(url);
+            
+            message.success('Export successful');
         } catch (error) {
             console.error('Export error:', error);
             message.error('Failed to export data');
@@ -420,6 +494,23 @@ const StorePage = () => {
                 handleDeleteItem(itemId);
             }
         });
+    };
+
+    const handleEditNote = (record) => {
+        setEditingNoteId(record.id);
+        setEditingNoteText(record.notes || '');
+        setIsNoteModalVisible(true);
+    };
+
+    const handleSaveNote = async () => {
+        try {
+            await handleUpdateNotes(editingNoteId, editingNoteText);
+            setIsNoteModalVisible(false);
+            setEditingNoteId(null);
+            setEditingNoteText('');
+        } catch (error) {
+            console.error('Save note error:', error);
+        }
     };
 
     const columns = [
@@ -565,6 +656,24 @@ const StorePage = () => {
             render: formatDate,
             sorter: sortDate
         },
+        {
+            title: 'Notes',
+            dataIndex: 'notes',
+            key: 'notes',
+            width: 200,
+            render: (text, record) => (
+                <Space>
+                    <span>{text || '-'}</span>
+                    <Button
+                        type="link"
+                        onClick={() => handleEditNote(record)}
+                        icon={<EditOutlined />}
+                    >
+                        Edit
+                    </Button>
+                </Space>
+            )
+        },
         user?.group_name === 'admin' && {
             title: 'Actions',
             key: 'actions',
@@ -697,6 +806,8 @@ const StorePage = () => {
                         allowClear
                         enterButton="Add"
                         onSearch={handleAddToOutbound}
+                        value={searchSerialNumber}
+                        onChange={e => setSearchSerialNumber(e.target.value)}
                     />
                 </Col>
                 <Col span={8}>
@@ -704,9 +815,9 @@ const StorePage = () => {
                         style={{ width: '100%' }}
                         placeholder="Select store"
                         value={selectedOutboundStore}
-                        onChange={setSelectedOutboundStore}
+                        onChange={value => setSelectedOutboundStore(value)}
                     >
-                        {stores.filter(store => store.value !== 'all').map(store => (
+                        {stores.map(store => (
                             <Option key={store.value} value={store.value}>
                                 {store.label}
                             </Option>
@@ -725,6 +836,16 @@ const StorePage = () => {
                 </Col>
             </Row>
             <Table
+                dataSource={outboundRecords}
+                rowKey={record => `outbound-${record.outbound_item_id}-${record.serialnumber || 'no-serial'}-${record.created_at || Date.now()}`}
+                loading={outboundLoading}
+                style={{ marginTop: 16 }}
+                pagination={{
+                    total: outboundRecords.length,
+                    pageSize: 10,
+                    showSizeChanger: true,
+                    showTotal: (total) => `Total ${total} items`
+                }}
                 columns={[
                     {
                         title: 'Serial Number',
@@ -742,6 +863,41 @@ const StorePage = () => {
                         key: 'model'
                     },
                     {
+                        title: 'Notes',
+                        dataIndex: 'notes',
+                        key: 'notes',
+                        render: (text, record) => {
+                            const isEditing = editingNotes[record.outbound_item_id];
+                            return isEditing ? (
+                                <Input.TextArea
+                                    defaultValue={text}
+                                    autoSize
+                                    onBlur={e => {
+                                        handleUpdateNotes(record.outbound_item_id, e.target.value);
+                                        setEditingNotes(prev => ({
+                                            ...prev,
+                                            [record.outbound_item_id]: false
+                                        }));
+                                    }}
+                                    onPressEnter={e => {
+                                        e.preventDefault();
+                                        e.target.blur();
+                                    }}
+                                />
+                            ) : (
+                                <div
+                                    style={{ cursor: 'pointer' }}
+                                    onClick={() => setEditingNotes(prev => ({
+                                        ...prev,
+                                        [record.outbound_item_id]: true
+                                    }))}
+                                >
+                                    {text || 'Click to add notes'}
+                                </div>
+                            );
+                        }
+                    },
+                    {
                         title: 'Actions',
                         key: 'actions',
                         render: (_, record) => (
@@ -755,16 +911,6 @@ const StorePage = () => {
                         )
                     }
                 ]}
-                dataSource={outboundRecords}
-                rowKey={record => `outbound-${record.outbound_item_id}-${record.serialnumber || 'no-serial'}-${record.created_at || Date.now()}`}
-                loading={outboundLoading}
-                style={{ marginTop: 16 }}
-                pagination={{
-                    total: outboundRecords.length,
-                    pageSize: 10,
-                    showSizeChanger: true,
-                    showTotal: (total) => `Total ${total} items`
-                }}
             />
         </Modal>
     );
@@ -904,6 +1050,24 @@ const StorePage = () => {
             {renderOutboundModal()}
             {renderSalesModal()}
             {renderRmaModal()}
+
+            <Modal
+                title="Edit Notes"
+                open={isNoteModalVisible}
+                onOk={handleSaveNote}
+                onCancel={() => {
+                    setIsNoteModalVisible(false);
+                    setEditingNoteId(null);
+                    setEditingNoteText('');
+                }}
+            >
+                <Input.TextArea
+                    value={editingNoteText}
+                    onChange={(e) => setEditingNoteText(e.target.value)}
+                    placeholder="Enter notes..."
+                    autoSize={{ minRows: 3, maxRows: 5 }}
+                />
+            </Modal>
         </div>
     );
 };

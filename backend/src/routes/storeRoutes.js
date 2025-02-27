@@ -154,24 +154,62 @@ router.put('/:id', auth, checkGroup(['admin']), async (req, res) => {
 });
 
 // Delete a store
-router.delete('/:id', auth, checkGroup(['admin']), async (req, res) => {
-    const { id } = req.params;
-    
+router.delete('/:id', auth, async (req, res) => {
+    const client = await pool.connect();
     try {
-        const result = await pool.query('DELETE FROM stores WHERE id = $1 RETURNING *', [id]);
+        await client.query('BEGIN');
         
-        if (result.rows.length === 0) {
-            return res.status(404).json({ success: false, error: 'Store not found' });
+        const { id } = req.params;
+
+        // 1. 檢查商店是否存在
+        const storeCheck = await client.query(
+            'SELECT id, name FROM stores WHERE id = $1',
+            [id]
+        );
+
+        if (storeCheck.rows.length === 0) {
+            throw new Error('Store not found');
         }
 
-        // 清除所有商店列表緩存
+        // 2. 更新 item_locations 表中的記錄
+        await client.query(`
+            UPDATE item_locations 
+            SET store_id = NULL,
+                store_name = NULL,
+                location = 'inventory',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE store_id = $1
+        `, [id]);
+
+        // 3. 刪除商店項目
+        await client.query('DELETE FROM store_items WHERE store_id = $1', [id]);
+
+        // 4. 刪除商店
+        await client.query('DELETE FROM stores WHERE id = $1', [id]);
+
+        await client.query('COMMIT');
+
+        // 清除緩存
         cacheService.clearStoreListCache();
-        console.log('Store list cache cleared after store deletion');
-        
-        res.json({ success: true, message: 'Store deleted successfully' });
+        console.log('Store cache cleared after deletion');
+
+        res.json({
+            success: true,
+            message: 'Store deleted successfully'
+        });
     } catch (error) {
-        console.error('Error deleting store:', error);
-        res.status(500).json({ success: false, error: error.message });
+        await client.query('ROLLBACK');
+        console.error('Error deleting store:', {
+            error: error.message,
+            stack: error.stack
+        });
+        
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
     }
 });
 
@@ -181,7 +219,7 @@ router.get('/:storeId/items', auth, checkStorePermission('inventory'), async (re
     
     try {
         const query = `
-            SELECT r.*, s.received_at 
+            SELECT r.*, s.received_at, s.notes 
             FROM store_items s
             JOIN system_records r ON s.record_id = r.id
             WHERE s.store_id = $1
@@ -706,6 +744,51 @@ router.get('/find-item/:serialNumber', auth, async (req, res) => {
             success: false,
             error: 'Failed to find item store'
         });
+    }
+});
+
+// Update store item notes
+router.put('/:storeId/items/:itemId/notes', auth, checkStorePermission('inventory'), async (req, res) => {
+    const { storeId, itemId } = req.params;
+    const { notes } = req.body;
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+
+        // Check if item exists in this store
+        const itemResult = await client.query(`
+            SELECT id
+            FROM store_items
+            WHERE store_id = $1 AND record_id = $2
+        `, [storeId, itemId]);
+
+        if (itemResult.rows.length === 0) {
+            throw new Error('Item not found in this store');
+        }
+
+        // Update notes
+        await client.query(`
+            UPDATE store_items
+            SET notes = $1
+            WHERE store_id = $2 AND record_id = $3
+        `, [notes, storeId, itemId]);
+
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            message: 'Notes updated successfully'
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error updating notes:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
     }
 });
 

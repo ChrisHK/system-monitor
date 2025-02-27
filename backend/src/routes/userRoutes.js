@@ -77,10 +77,10 @@ router.post('/login', async (req, res) => {
                     jsonb_object_agg(
                         gsp.store_id::text,
                         jsonb_build_object(
-                            'inventory', COALESCE(gsp.features->>'inventory', 'false')::boolean,
-                            'orders', COALESCE(gsp.features->>'orders', 'false')::boolean,
-                            'rma', COALESCE(gsp.features->>'rma', 'false')::boolean,
-                            'outbound', COALESCE(gsp.features->>'outbound', 'false')::boolean
+                            'inventory', COALESCE((gsp.permissions->>'inventory')::boolean, false),
+                            'orders', COALESCE((gsp.permissions->>'orders')::boolean, false),
+                            'rma', COALESCE((gsp.permissions->>'rma')::boolean, false),
+                            'outbound', COALESCE((gsp.permissions->>'outbound')::boolean, false)
                         )
                     ) as store_permissions,
                     array_agg(DISTINCT gsp.store_id) as permitted_stores
@@ -94,50 +94,12 @@ router.post('/login', async (req, res) => {
                 u.group_id,
                 u.is_active,
                 g.name as group_name,
-                g.permissions,
+                g.main_permissions,
                 sp.permitted_stores,
-                sp.store_permissions,
-                jsonb_build_object(
-                    'inventory', CASE 
-                        WHEN g.name = 'admin' THEN true 
-                        WHEN gp_inv.permission_value::text = 'true' THEN true 
-                        ELSE false 
-                    END,
-                    'inventory_ram', CASE 
-                        WHEN g.name = 'admin' THEN true 
-                        WHEN gp_ram.permission_value::text = 'true' THEN true 
-                        ELSE false 
-                    END,
-                    'outbound', CASE 
-                        WHEN g.name = 'admin' THEN true 
-                        WHEN gp_out.permission_value::text = 'true' THEN true 
-                        ELSE false 
-                    END,
-                    'inbound', CASE 
-                        WHEN g.name = 'admin' THEN true 
-                        WHEN gp_in.permission_value::text = 'true' THEN true 
-                        ELSE false 
-                    END,
-                    'purchase_order', CASE 
-                        WHEN g.name = 'admin' THEN true 
-                        WHEN gp_po.permission_value::text = 'true' THEN true 
-                        ELSE false 
-                    END,
-                    'tag_management', CASE 
-                        WHEN g.name = 'admin' THEN true 
-                        WHEN gp_tag.permission_value::text = 'true' THEN true 
-                        ELSE false 
-                    END
-                ) as main_permissions
+                sp.store_permissions
             FROM users u
             LEFT JOIN groups g ON u.group_id = g.id
             LEFT JOIN store_permissions sp ON g.id = sp.group_id
-            LEFT JOIN group_permissions gp_inv ON g.id = gp_inv.group_id AND gp_inv.permission_type = 'inventory'
-            LEFT JOIN group_permissions gp_ram ON g.id = gp_ram.group_id AND gp_ram.permission_type = 'inventory_ram'
-            LEFT JOIN group_permissions gp_out ON g.id = gp_out.group_id AND gp_out.permission_type = 'outbound'
-            LEFT JOIN group_permissions gp_in ON g.id = gp_in.group_id AND gp_in.permission_type = 'inbound'
-            LEFT JOIN group_permissions gp_po ON g.id = gp_po.group_id AND gp_po.permission_type = 'purchase_order'
-            LEFT JOIN group_permissions gp_tag ON g.id = gp_tag.group_id AND gp_tag.permission_type = 'tag_management'
             WHERE u.username = $1
         `;
         
@@ -439,6 +401,34 @@ router.delete('/:id', auth, checkGroup(['admin']), catchAsync(async (req, res) =
     res.json({
         success: true,
         message: 'User deleted successfully'
+    });
+}));
+
+// Update user password (admin group only)
+router.put('/:id/password', auth, checkGroup(['admin']), catchAsync(async (req, res) => {
+    const { id } = req.params;
+    const { password } = req.body;
+
+    if (!password) {
+        throw new ValidationError('Password is required');
+    }
+
+    // Hash the new password
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    // Update user password
+    const result = await query(
+        'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id',
+        [passwordHash, id]
+    );
+
+    if (result.rows.length === 0) {
+        throw new NotFoundError('User not found');
+    }
+
+    res.json({
+        success: true,
+        message: 'Password updated successfully'
     });
 }));
 

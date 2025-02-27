@@ -21,6 +21,7 @@ class OrderService {
     this.addToOrder = this.addToOrder.bind(this);
     this.addToRma = this.addToRma.bind(this);
     this.updateOrderItemPrice = this.updateOrderItemPrice.bind(this);
+    this.updateOrderItemPayMethod = this.updateOrderItemPayMethod.bind(this);
     this.updateOrderItemNotes = this.updateOrderItemNotes.bind(this);
     this.deleteOrderItem = this.deleteOrderItem.bind(this);
     this.saveOrder = this.saveOrder.bind(this);
@@ -130,9 +131,15 @@ class OrderService {
 
   // Store Order specific methods
   async addToOrder(storeId, items) {
+    // 確保每個項目都有支付方式
+    const itemsWithDefaults = items.map(item => ({
+      ...item,
+      payMethod: item.payMethod || 'credit_card'
+    }));
+
     const response = await api.post(
       ENDPOINTS.ORDER.STORE.BASE(storeId),
-      { items }
+      { items: itemsWithDefaults }
     );
     return response;
   }
@@ -151,6 +158,17 @@ class OrderService {
       { price }
     );
     return response;
+  }
+
+  async updateOrderItemPayMethod(storeId, itemId, payMethod) {
+    try {
+      const endpoint = ENDPOINTS.ORDER.STORE.UPDATE_PAY_METHOD(storeId, itemId);
+      const response = await api.put(endpoint, { payMethod });
+      return response;
+    } catch (error) {
+      console.error('Error updating payment method:', error);
+      throw error;
+    }
   }
 
   async updateOrderItemNotes(storeId, itemId, notes) {

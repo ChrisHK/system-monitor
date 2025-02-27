@@ -49,7 +49,8 @@ export const ENDPOINTS = {
     ROLES: '/users/roles',
     UPDATE_ROLE: (userId) => `/users/${userId}/role`,
     PERMISSIONS: '/users/permissions',
-    UPDATE_PERMISSIONS: (userId) => `/users/${userId}/permissions`
+    UPDATE_PERMISSIONS: (userId) => `/users/${userId}/permissions`,
+    UPDATE_PASSWORD: (userId) => `/users/${userId}/password`
   },
   GROUP: {
     LIST: '/groups',
@@ -77,7 +78,8 @@ export const ENDPOINTS = {
     REMOVE_ITEM: (itemId) => `/outbound/items/${itemId}`,
     SEND_TO_STORE: (storeId) => `/outbound/items/${storeId}/send`,
     CONFIRM: (id) => `/outbound/${id}/confirm`,
-    SEARCH: '/outbound/search'
+    SEARCH: '/outbound/search',
+    UPDATE_NOTES: (itemId) => `/outbound/items/${itemId}/notes`
   },
   STORE: {
     LIST: '/stores',
@@ -130,6 +132,7 @@ export const ENDPOINTS = {
       DELETE_ITEM: (storeId, itemId) => `/orders/${storeId}/items/${itemId}`,
       UPDATE_NOTES: (storeId, itemId) => `/orders/${storeId}/items/${itemId}/notes`,
       UPDATE_PRICE: (storeId, itemId) => `/orders/${storeId}/items/${itemId}/price`,
+      UPDATE_PAY_METHOD: (storeId, itemId) => `/orders/${storeId}/items/${itemId}/pay-method`,
       DELETE_COMPLETED: (storeId, orderId) => `/orders/${storeId}/completed/${orderId}`,
     },
     PURCHASE: {

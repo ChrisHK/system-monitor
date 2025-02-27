@@ -110,8 +110,18 @@ class StoreService {
     };
 
     this.exportStoreInventory = async (storeId, params) => {
-      const response = await api.get(ENDPOINTS.STORE.EXPORT(storeId), { params });
-      return response;
+      try {
+        const response = await api.get(ENDPOINTS.STORE.EXPORT(storeId), { 
+          params,
+          responseType: 'blob'
+        });
+        const fileName = `store-${storeId}-inventory-${new Date().toISOString().split('T')[0]}.csv`;
+        await downloadFile(response, fileName);
+        return response;
+      } catch (error) {
+        console.error('Export store inventory error:', error);
+        throw error;
+      }
     };
 
     this.findItemStore = async (serialNumber) => {
