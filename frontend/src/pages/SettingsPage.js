@@ -1,11 +1,11 @@
 import React from 'react';
 import { Routes, Route, useLocation, Navigate, useNavigate } from 'react-router-dom';
-import { Tabs, Card, Typography } from 'antd';
+import { Tabs, Card } from 'antd';
 import GroupManagement from '../components/settings/GroupManagement';
 import StoreManagement from '../components/settings/StoreManagement';
 import UserManagement from '../components/settings/UserManagement';
-
-const { Title } = Typography;
+import TagManagement from '../components/settings/TagManagement';
+import DataProcessPage from './DataProcessPage';
 
 const SettingsPage = () => {
     const location = useLocation();
@@ -16,6 +16,8 @@ const SettingsPage = () => {
         if (currentPath === '/settings/stores') return 'stores';
         if (currentPath === '/settings/groups') return 'groups';
         if (currentPath === '/settings/users') return 'users';
+        if (currentPath === '/settings/tags') return 'tags';
+        if (currentPath === '/settings/data-process') return 'data-process';
         return 'stores';
     };
 
@@ -31,14 +33,19 @@ const SettingsPage = () => {
         {
             key: 'users',
             label: 'User Management',
+        },
+        {
+            key: 'tags',
+            label: 'Tag Management',
+        },
+        {
+            key: 'data-process',
+            label: 'Data Process',
         }
     ];
 
     return (
         <div style={{ padding: '24px' }}>
-            <Title level={2} style={{ marginBottom: '24px' }}>
-                Settings
-            </Title>
             <Card>
                 <Tabs
                     activeKey={getActiveKey()}
@@ -53,6 +60,8 @@ const SettingsPage = () => {
                         <Route path="stores" element={<StoreManagement />} />
                         <Route path="groups" element={<GroupManagement />} />
                         <Route path="users" element={<UserManagement />} />
+                        <Route path="tags" element={<TagManagement />} />
+                        <Route path="data-process" element={<DataProcessPage />} />
                     </Routes>
                 </div>
             </Card>

@@ -2,6 +2,7 @@
   "name": "system-monitor-frontend",
   "version": "0.1.0",
   "private": true,
+  "homepage": "/",
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
     "@emotion/react": "^11.14.0",
@@ -10,15 +11,24 @@
     "@mui/material": "^6.3.1",
     "antd": "^5.23.0",
     "axios": "^1.7.9",
+    "moment": "^2.30.1",
     "react": "^18.2.0",
+    "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^18.2.0",
     "react-router-dom": "^7.1.1",
-    "react-scripts": "5.0.1"
+    "react-scripts": "5.0.1",
+    "styled-components": "^6.1.14",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@babel/plugin-proposal-private-property-in-object": "^7.21.11",
+    "cross-env": "^7.0.3"
   },
   "scripts": {
-    "start": "set PORT=4001 && react-scripts start",
-    "start:network": "set PORT=4001 && react-scripts start",
-    "build": "react-scripts build",
+    "start": "cross-env NODE_ENV=development REACT_APP_API_URL=http://localhost:3000/api REACT_APP_WS_URL=ws://localhost:3000/ws PORT=3001 react-scripts start",
+    "start:prod": "cross-env NODE_ENV=production PORT=80 react-scripts start",
+    "build": "cross-env PUBLIC_URL=/ GENERATE_SOURCEMAP=false react-scripts build",
+    "build:dev": "cross-env GENERATE_SOURCEMAP=true react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
@@ -38,5 +48,8 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }

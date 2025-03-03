@@ -1,4 +1,4 @@
-import { getInventoryRecords, getDuplicateRecords, checkItemLocation, storeApi, updateRecord as apiUpdateRecord, deleteRecord as apiDeleteRecord } from './api';
+import { inventoryService, storeService } from '../api';
 
 // Cache configuration
 const CACHE_EXPIRY = 5 * 60 * 1000; // 5 minutes
@@ -99,8 +99,7 @@ class InventoryDataService {
                 ...params
             };
 
-            console.log('Fetching records with params:', defaultParams);
-            const response = await getInventoryRecords(defaultParams);
+            const response = await inventoryService.getRecords(defaultParams);
             
             if (!response?.success) {
                 throw new Error(response?.error || 'Failed to fetch records');
@@ -117,37 +116,35 @@ class InventoryDataService {
             };
         } catch (error) {
             console.error('Error in getRecords:', error);
-            return {
-                success: false,
-                error: error.message,
-                records: []
-            };
+            throw new Error(error.message || 'Failed to fetch records');
         }
     }
 
     // Get locations with caching and activity tracking
     async getLocation(serialNumber) {
         this.updateActivityTime();
-        if (this.cache.locations.has(serialNumber) && this.isCacheValid('locations')) {
-            return this.cache.locations.get(serialNumber);
-        }
-
+        
         try {
-            const response = await checkItemLocation(serialNumber);
-            if (response?.success) {
-                // Store the location data in cache
-                this.cache.locations.set(serialNumber, {
-                    location: response.location,
-                    store_name: response.store_name,
-                    store_id: response.store_id
-                });
-                this.cache.lastUpdate.locations = Date.now();
-                return response;
+            if (this.cache.locations.has(serialNumber) && this.isCacheValid('locations')) {
+                return this.cache.locations.get(serialNumber);
             }
-            return { success: false, location: 'inventory' };
+
+            const response = await inventoryService.checkItemLocation(serialNumber);
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to check item location');
+            }
+
+            // Store the location data in cache
+            this.cache.locations.set(serialNumber, {
+                location: response.location,
+                store_name: response.store_name,
+                store_id: response.store_id
+            });
+            this.cache.lastUpdate.locations = Date.now();
+            return response;
         } catch (error) {
             console.error('Error checking location:', error);
-            return { success: false, location: 'inventory' };
+            throw new Error(error.message || 'Failed to check item location');
         }
     }
 
@@ -176,9 +173,7 @@ class InventoryDataService {
             this.loadingStates.add(loadingKey);
             const promise = (async () => {
                 try {
-                    console.log('Fetching stores from API...');
-                    const response = await storeApi.getStores();
-                    console.log('Stores API response:', response);
+                    const response = await storeService.getStores();
 
                     if (!response?.success) {
                         throw new Error(response?.error || 'Failed to fetch stores');
@@ -223,151 +218,139 @@ class InventoryDataService {
             }
         } catch (error) {
             console.error('Error fetching stores:', error);
-            const fallbackResponse = {
-                success: false,
-                error: error.message || 'Failed to fetch stores',
-                stores: [{ value: 'all', label: 'All Stores' }]
-            };
-            return fallbackResponse;
+            throw new Error(error.message || 'Failed to fetch stores');
         }
     }
 
     // Get duplicates with caching and activity tracking
     async getDuplicates() {
         this.updateActivityTime();
-        if (this.cache.duplicates && this.isCacheValid('duplicates')) {
-            return this.cache.duplicates;
-        }
+        
+        try {
+            if (this.cache.duplicates && this.isCacheValid('duplicates')) {
+                return this.cache.duplicates;
+            }
 
-        const response = await getDuplicateRecords();
-        if (response?.success) {
+            const response = await inventoryService.getDuplicateRecords();
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to fetch duplicate records');
+            }
+
             this.cache.duplicates = response;
             this.cache.lastUpdate.duplicates = Date.now();
+            return response;
+        } catch (error) {
+            console.error('Error fetching duplicates:', error);
+            throw new Error(error.message || 'Failed to fetch duplicate records');
         }
-        return response;
     }
 
     // Batch check locations with optimized resource usage
     async batchCheckLocations(serialNumbers) {
+        this.updateActivityTime();
+        
         try {
-            console.log('Checking locations for:', serialNumbers);
-            
-            // Process in batches of 50
-            const BATCH_SIZE = 50;
-            const locations = {};
-            
-            for (let i = 0; i < serialNumbers.length; i += BATCH_SIZE) {
-                const batch = serialNumbers.slice(i, i + BATCH_SIZE);
-                console.log(`Processing batch ${i/BATCH_SIZE + 1}:`, batch);
-                
-                const response = await checkItemLocation(batch);
-                console.log('Location check response for batch:', response);
-                
-                if (response?.success && Array.isArray(response.locations)) {
-                    response.locations.forEach(location => {
-                        if (location.serialnumber) {
-                            locations[location.serialnumber] = {
-                                location: location.location || 'inventory',
-                                store_name: location.store_name,
-                                store_id: location.store_id
-                            };
-                            
-                            // Update cache
-                            this.cache.locations.set(location.serialnumber, locations[location.serialnumber]);
-                            this.cache.lastUpdate.locations = Date.now();
-                        }
-                    });
+            const uncachedSerialNumbers = [];
+            const results = new Map();
+
+            // Check cache first
+            serialNumbers.forEach(sn => {
+                if (this.cache.locations.has(sn) && this.isCacheValid('locations')) {
+                    results.set(sn, this.cache.locations.get(sn));
+                } else {
+                    uncachedSerialNumbers.push(sn);
                 }
-                
-                // Add a small delay between batches
-                if (i + BATCH_SIZE < serialNumbers.length) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+            });
+
+            if (uncachedSerialNumbers.length > 0) {
+                const response = await inventoryService.checkItemLocations(uncachedSerialNumbers);
+                if (!response?.success) {
+                    throw new Error(response?.error || 'Failed to check item locations');
+                }
+
+                if (response.locations) {
+                    Object.entries(response.locations).forEach(([sn, location]) => {
+                        this.cache.locations.set(sn, location);
+                        results.set(sn, location);
+                    });
+                    this.cache.lastUpdate.locations = Date.now();
                 }
             }
-            
-            console.log('All batches processed. Final locations:', locations);
-            return locations;
+
+            return {
+                success: true,
+                locations: Object.fromEntries(results)
+            };
         } catch (error) {
-            console.error('Error checking locations:', error);
-            return {};
+            console.error('Error in batch location check:', error);
+            throw new Error(error.message || 'Failed to check item locations');
         }
     }
 
-    // Add method to check if refresh is needed
+    // Check if any cache needs refresh
     needsRefresh() {
-        const now = Date.now();
-        return Object.values(this.cache.lastUpdate).some(lastUpdate => 
-            lastUpdate && (now - lastUpdate) >= CACHE_EXPIRY
-        );
+        return !this.isCacheValid('records') ||
+               !this.isCacheValid('locations') ||
+               !this.isCacheValid('stores') ||
+               !this.isCacheValid('duplicates');
     }
 
-    // Modify refreshCache to be more efficient
+    // Refresh all cached data
     async refreshCache() {
         try {
-            const now = Date.now();
-            const tasks = [];
+            const refreshPromises = [];
 
-            // Only refresh expired caches
-            if (this.cache.stores && 
-                (!this.cache.lastUpdate.stores || 
-                 now - this.cache.lastUpdate.stores >= CACHE_EXPIRY)) {
-                tasks.push(this.getStores());
+            if (!this.isCacheValid('records') && this.cache.records.size > 0) {
+                refreshPromises.push(this.getRecords());
             }
 
-            if (this.cache.duplicates && 
-                (!this.cache.lastUpdate.duplicates || 
-                 now - this.cache.lastUpdate.duplicates >= CACHE_EXPIRY)) {
-                tasks.push(this.getDuplicates());
+            if (!this.isCacheValid('stores') && this.cache.stores) {
+                refreshPromises.push(this.getStores());
             }
 
-            // Only refresh records that are expired
-            for (const [cacheKey] of this.cache.records) {
-                const lastUpdate = this.cache.lastUpdate.records;
-                if (!lastUpdate || now - lastUpdate >= CACHE_EXPIRY) {
-                    const params = JSON.parse(cacheKey);
-                    tasks.push(this.getRecords(params));
-                }
+            if (!this.isCacheValid('duplicates') && this.cache.duplicates) {
+                refreshPromises.push(this.getDuplicates());
             }
 
-            if (tasks.length > 0) {
-                await Promise.all(tasks);
-            }
+            // Locations are refreshed on-demand
+
+            await Promise.allSettled(refreshPromises);
         } catch (error) {
             console.error('Error refreshing cache:', error);
         }
     }
 
-    // Clear cache and loading states
+    // Clear all cached data
     clearCache() {
-        this.cache.records.clear();
-        this.cache.locations.clear();
-        this.cache.stores = null;
-        this.cache.duplicates = null;
-        this.cache.lastUpdate = {
-            records: null,
-            locations: null,
+        this.cache = {
+            records: new Map(),
+            locations: new Map(),
             stores: null,
-            duplicates: null
+            duplicates: null,
+            lastUpdate: {
+                records: null,
+                locations: null,
+                stores: null,
+                duplicates: null
+            }
         };
-        this.loadingStates.clear();
-        this.loadingPromises.clear();
     }
 
-    // Update record with cache invalidation
+    // Update record with error handling
     async updateRecord(id, data) {
         try {
-            const response = await apiUpdateRecord(id, data);
-            if (response?.success) {
-                // Invalidate records cache since data has changed
-                this.cache.records.clear();
-                this.cache.lastUpdate.records = null;
-                
-                // If the update includes a location change, invalidate locations cache
-                if (data.location) {
-                    this.cache.locations.clear();
-                    this.cache.lastUpdate.locations = null;
-                }
+            const response = await inventoryService.updateRecord(id, data);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to update record');
             }
+
+            // Invalidate relevant caches
+            this.cache.lastUpdate.records = null;
+            if (data.location) {
+                this.cache.lastUpdate.locations = null;
+            }
+
             return response;
         } catch (error) {
             console.error('Error updating record:', error);
@@ -375,19 +358,18 @@ class InventoryDataService {
         }
     }
 
-    // Delete record with cache invalidation
+    // Delete record with error handling
     async deleteRecord(id) {
         try {
-            const response = await apiDeleteRecord(id);
-            if (response?.success) {
-                // Invalidate records cache since data has changed
-                this.cache.records.clear();
-                this.cache.lastUpdate.records = null;
-                
-                // Invalidate locations cache for the deleted record
-                this.cache.locations.clear();
-                this.cache.lastUpdate.locations = null;
+            const response = await inventoryService.deleteRecord(id);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to delete record');
             }
+
+            // Invalidate records cache
+            this.cache.lastUpdate.records = null;
+
             return response;
         } catch (error) {
             console.error('Error deleting record:', error);
@@ -396,9 +378,4 @@ class InventoryDataService {
     }
 }
 
-export const inventoryDataService = new InventoryDataService(); 
-
-export const getOutboundData = async () => {
-    const response = await api.fetchOutboundData(); // 调用新的 API 方法
-    return response;
-}; 
+export default new InventoryDataService(); 

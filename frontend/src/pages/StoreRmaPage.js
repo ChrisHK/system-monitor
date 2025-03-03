@@ -1,24 +1,42 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { Table, Card, message, Space, Tag, Button, Input, Collapse, Modal } from 'antd';
-import { rmaApi } from '../services/api';
+import { 
+    Table, 
+    Card, 
+    message, 
+    Space, 
+    Tag, 
+    Button, 
+    Input, 
+    Collapse, 
+    Modal,
+    Alert,
+    Tooltip
+} from 'antd';
+import { 
+    DeleteOutlined, 
+    EditOutlined, 
+    SendOutlined, 
+    SyncOutlined,
+    ExclamationCircleOutlined
+} from '@ant-design/icons';
+import { rmaService } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
+import { formatDate, sortDate } from '../utils/formatters';
 
 const { Search } = Input;
 const { Panel } = Collapse;
 const { TextArea } = Input;
+const { confirm } = Modal;
 
 const StoreRmaPage = () => {
     const { storeId } = useParams();
     const { user } = useAuth();
     const { addNotification } = useNotification();
     
-    // Add debug logs
-    console.log('Current user:', user);
-    console.log('Is admin?', user?.group_name === 'admin');
-    
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
     const [rmaItems, setRmaItems] = useState([]);
     const [searchText, setSearchText] = useState('');
     const [filteredItems, setFilteredItems] = useState([]);
@@ -28,18 +46,25 @@ const StoreRmaPage = () => {
     const fetchRmaItems = useCallback(async () => {
         try {
             setLoading(true);
-            const response = await rmaApi.getRmaItems(storeId);
-            if (response?.success) {
-                const items = response.rma_items.map(item => ({
-                    ...item,
-                    key: item.rma_id
-                }));
-                setRmaItems(items);
-                setFilteredItems(items);
+            setError('');
+            const response = await rmaService.getRmaItems({ storeId });
+            console.log('RMA API Response:', response);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to load RMA data');
             }
+            
+            const items = response.rma_items.map(item => ({
+                ...item,
+                key: item.rma_id,
+                status: item.store_status
+            }));
+            console.log('Processed RMA items:', items);
+            setRmaItems(items);
+            setFilteredItems(items);
         } catch (error) {
             console.error('Error fetching RMA items:', error);
-            message.error('Failed to load RMA data');
+            setError(error.message || 'Failed to load RMA data');
         } finally {
             setLoading(false);
         }
@@ -55,30 +80,45 @@ const StoreRmaPage = () => {
         setSearchText(value);
         const filtered = rmaItems.filter(item => 
             item.serialnumber.toLowerCase().includes(value.toLowerCase()) ||
-            item.notes?.toLowerCase().includes(value.toLowerCase())
+            item.notes?.toLowerCase().includes(value.toLowerCase()) ||
+            item.reason?.toLowerCase().includes(value.toLowerCase())
         );
         setFilteredItems(filtered);
     };
 
     const handleDelete = async (rmaId) => {
         try {
-            Modal.confirm({
+            confirm({
                 title: 'Delete RMA Item',
-                content: 'Are you sure you want to delete this RMA item?',
+                icon: <ExclamationCircleOutlined />,
+                content: 'Are you sure you want to delete this RMA item? This action cannot be undone.',
                 okText: 'Yes',
                 okType: 'danger',
                 cancelText: 'No',
                 onOk: async () => {
-                    const response = await rmaApi.deleteRma(storeId, rmaId);
-                    if (response?.success) {
+                    try {
+                        setOperationLoading(true);
+                        setError('');
+                        const response = await rmaService.deleteRma(storeId, rmaId);
+                        
+                        if (!response?.success) {
+                            throw new Error(response?.error || 'Failed to delete RMA item');
+                        }
+                        
                         message.success('RMA item deleted successfully');
-                        fetchRmaItems();
+                        await fetchRmaItems();
+                    } catch (error) {
+                        console.error('Error deleting RMA item:', error);
+                        setError(error.message || 'Failed to delete RMA item');
+                    } finally {
+                        setOperationLoading(false);
                     }
                 }
             });
         } catch (error) {
-            console.error('Error deleting RMA item:', error);
-            message.error('Failed to delete RMA item');
+            console.error('Error in delete confirmation:', error);
+            setError(error.message || 'Failed to show delete confirmation');
+            setOperationLoading(false);
         }
     };
 
@@ -90,17 +130,20 @@ const StoreRmaPage = () => {
 
         try {
             setOperationLoading(true);
-            const response = await rmaApi.sendToInventory(storeId, record.rma_id);
-            if (response.success) {
-                // Only add notification for inventory RMA
-                console.log('Adding notification for inventory RMA');
-                addNotification('inventory', 'rma');  // For inventory RMA only
-                
-                message.success('Item sent to inventory successfully');
-                await fetchRmaItems();
+            setError('');
+            const response = await rmaService.sendToInventory(storeId, record.rma_id);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to send item to inventory');
             }
+            
+            // Add notification for inventory RMA
+            addNotification('inventory', 'rma');
+            message.success('Item sent to inventory successfully');
+            await fetchRmaItems();
         } catch (error) {
-            message.error(error.message || 'Failed to send item to inventory');
+            console.error('Error sending to inventory:', error);
+            setError(error.message || 'Failed to send item to inventory');
         } finally {
             setOperationLoading(false);
         }
@@ -108,25 +151,36 @@ const StoreRmaPage = () => {
 
     const handleSendToStore = async (rmaId) => {
         try {
-            const response = await rmaApi.sendToStore(storeId, rmaId);
-            if (response?.success) {
-                message.success('Item sent to store inventory successfully');
-                await fetchRmaItems();
+            setOperationLoading(true);
+            setError('');
+            const response = await rmaService.sendToStore(storeId, rmaId);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to send item to store');
             }
+            
+            message.success('Item sent to store inventory successfully');
+            await fetchRmaItems();
         } catch (error) {
             console.error('Error sending to store:', error);
-            message.error('Failed to send item to store');
+            setError(error.message || 'Failed to send item to store');
+        } finally {
+            setOperationLoading(false);
         }
     };
 
     const handleFieldChange = async (rmaId, field, value) => {
         try {
+            setOperationLoading(true);
+            setError('');
+            
             const item = rmaItems.find(item => item.rma_id === rmaId);
-            if (!item) return;
+            if (!item) {
+                throw new Error('RMA item not found');
+            }
 
             if (field === 'reason' && (!value || value.trim() === '')) {
-                message.error('Reason cannot be empty');
-                return;
+                throw new Error('Reason cannot be empty');
             }
 
             const updatedFields = {
@@ -134,15 +188,19 @@ const StoreRmaPage = () => {
                 notes: field === 'notes' ? value : item.notes
             };
 
-            const response = await rmaApi.updateRmaFields(storeId, rmaId, updatedFields);
-            if (response?.success) {
-                message.success('Updated successfully');
-                await fetchRmaItems();
+            const response = await rmaService.updateRmaFields(storeId, rmaId, updatedFields);
+            
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to update fields');
             }
+            
+            message.success('Updated successfully');
+            await fetchRmaItems();
         } catch (error) {
             console.error('Error updating fields:', error);
-            message.error('Failed to update');
+            setError(error.message || 'Failed to update fields');
         } finally {
+            setOperationLoading(false);
             setEditingItem(null);
         }
     };
@@ -152,7 +210,8 @@ const StoreRmaPage = () => {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
-            width: 150
+            width: 150,
+            fixed: 'left'
         },
         {
             title: 'Computer Name',
@@ -209,7 +268,11 @@ const StoreRmaPage = () => {
                     status === 'failed' ? 'red' : 'default';
                 const displayText = status === 'sent_to_inventory' ? 'SENT' : 
                                   status?.toUpperCase() || 'PENDING';
-                return <Tag color={color}>{displayText}</Tag>;
+                return (
+                    <Tooltip title={`Status: ${displayText}`}>
+                        <Tag color={color}>{displayText}</Tag>
+                    </Tooltip>
+                );
             }
         },
         {
@@ -217,7 +280,8 @@ const StoreRmaPage = () => {
             dataIndex: 'rma_date',
             key: 'rma_date',
             width: 150,
-            render: (date) => new Date(date).toLocaleString()
+            render: formatDate,
+            sorter: sortDate
         },
         {
             title: 'Reason',
@@ -245,11 +309,11 @@ const StoreRmaPage = () => {
                                 setFilteredItems(newItems);
                             }}
                             status={!text?.trim() ? 'error' : ''}
+                            disabled={operationLoading}
                         />
                     );
                 }
-                
-                return <div style={{ whiteSpace: 'pre-wrap' }}>{text}</div>;
+                return text;
             }
         },
         {
@@ -258,29 +322,33 @@ const StoreRmaPage = () => {
             key: 'notes',
             width: 200,
             render: (text, record) => {
-                const isPending = !record.store_status || record.store_status === 'pending';
-                
-                if (isPending) {
-                    return (
-                        <TextArea
-                            value={text}
-                            autoSize
-                            onFocus={() => setEditingItem(record.rma_id)}
-                            onBlur={(e) => handleFieldChange(record.rma_id, 'notes', e.target.value)}
-                            onChange={(e) => {
-                                const newItems = rmaItems.map(item => 
-                                    item.rma_id === record.rma_id 
-                                        ? { ...item, notes: e.target.value }
-                                        : item
-                                );
-                                setRmaItems(newItems);
-                                setFilteredItems(newItems);
-                            }}
-                        />
-                    );
+                const isFailed = record.store_status?.toLowerCase() === 'failed';
+                const isSentToStore = record.store_status?.toLowerCase() === 'sent_to_store';
+                const isReadOnly = isFailed || isSentToStore;
+
+                if (isReadOnly) {
+                    return text || '-';
                 }
-                
-                return <div style={{ whiteSpace: 'pre-wrap' }}>{text}</div>;
+
+                return (
+                    <TextArea
+                        value={text || ''}
+                        placeholder="Enter notes (optional)"
+                        autoSize
+                        onFocus={() => setEditingItem(record.rma_id)}
+                        onBlur={(e) => handleFieldChange(record.rma_id, 'notes', e.target.value)}
+                        onChange={(e) => {
+                            const newItems = rmaItems.map(item => 
+                                item.rma_id === record.rma_id 
+                                    ? { ...item, notes: e.target.value }
+                                    : item
+                            );
+                            setRmaItems(newItems);
+                            setFilteredItems(newItems);
+                        }}
+                        disabled={operationLoading}
+                    />
+                );
             }
         },
         {
@@ -289,150 +357,101 @@ const StoreRmaPage = () => {
             fixed: 'right',
             width: 200,
             render: (_, record) => {
-                // More lenient admin check
-                const isAdmin = user && (user.group_name === 'admin' || user.is_admin || user.role === 'admin');
-                console.log('Auth Debug:', { 
-                    user,
-                    group_name: user?.group_name,
-                    is_admin: user?.is_admin,
-                    role: user?.role,
-                    isAdmin
-                });
-                
+                console.log('RMA record:', record);
+                const isPending = record.store_status?.toLowerCase() === 'pending';
+                const isCompleted = record.store_status?.toLowerCase() === 'completed';
+
                 return (
                     <Space>
-                        {(!record.store_status || record.store_status === 'pending') && (
-                            <Button
-                                key="send"
-                                type="primary"
-                                size="small"
-                                loading={operationLoading}
-                                onClick={() => handleSendToInventory(record)}
-                                disabled={!record.reason?.trim()}
-                                title="Send to Inventory"
-                            >
-                                Send
-                            </Button>
+                        {isPending && (
+                            <Tooltip title="Send to Inventory">
+                                <Button
+                                    type="primary"
+                                    icon={<SendOutlined />}
+                                    onClick={() => handleSendToInventory(record)}
+                                    disabled={!record.reason?.trim() || operationLoading}
+                                    loading={operationLoading}
+                                >
+                                    Add to Inventory
+                                </Button>
+                            </Tooltip>
                         )}
-                        
-                        {isAdmin && (
+                        {isCompleted && (
+                            <Tooltip title="Add to Store">
+                                <Button
+                                    type="primary"
+                                    icon={<SendOutlined />}
+                                    onClick={() => handleSendToStore(record.rma_id)}
+                                    loading={operationLoading}
+                                >
+                                    Add to Store
+                                </Button>
+                            </Tooltip>
+                        )}
+                        <Tooltip title="Delete">
                             <Button
-                                key="delete"
-                                type="link"
+                                type="text"
                                 danger
-                                size="small"
+                                icon={<DeleteOutlined />}
                                 onClick={() => handleDelete(record.rma_id)}
-                            >
-                                Delete
-                            </Button>
-                        )}
+                                disabled={operationLoading}
+                            />
+                        </Tooltip>
                     </Space>
                 );
             }
         }
     ];
 
-    const pendingItems = filteredItems.filter(item => !item.store_status || item.store_status === 'pending');
-    const sentItems = filteredItems.filter(item => item.store_status === 'sent_to_inventory');
-    const completedItems = filteredItems.filter(item => item.store_status === 'completed');
-    const failedItems = filteredItems.filter(item => item.store_status === 'failed');
-
     return (
         <div style={{ padding: '24px' }}>
-            <Space direction="vertical" style={{ width: '100%' }} size="large">
-                <Space>
-                    <Search
-                        placeholder="Search by Serial Number or Notes"
-                        allowClear
-                        onSearch={handleSearch}
-                        style={{ width: 300 }}
+            <Card 
+                title="RMA Records"
+                extra={
+                    <Space>
+                        <Search
+                            placeholder="Search by serial number, notes, or reason"
+                            allowClear
+                            onSearch={handleSearch}
+                            onChange={(e) => handleSearch(e.target.value)}
+                            style={{ width: 300 }}
+                            disabled={loading || operationLoading}
+                        />
+                        <Button
+                            icon={<SyncOutlined />}
+                            onClick={fetchRmaItems}
+                            disabled={loading || operationLoading}
+                            loading={loading}
+                        >
+                            Refresh
+                        </Button>
+                    </Space>
+                }
+            >
+                {error && (
+                    <Alert
+                        message="Error"
+                        description={error}
+                        type="error"
+                        showIcon
+                        style={{ marginBottom: 16 }}
                     />
-                </Space>
+                )}
 
-                {/* Pending RMA */}
-                <Card title="Pending RMA">
-                    <Table
-                        columns={columns}
-                        dataSource={pendingItems}
-                        rowKey="rma_id"
-                        loading={loading}
-                        scroll={{ x: 1500 }}
-                        pagination={false}
-                    />
-                </Card>
-
-                {/* Sent to Inventory */}
-                <Card title="Sent to Inventory">
-                    <Table
-                        columns={columns}
-                        dataSource={sentItems}
-                        rowKey="rma_id"
-                        loading={loading}
-                        scroll={{ x: 1500 }}
-                        pagination={false}
-                    />
-                </Card>
-
-                {/* Failed RMA */}
-                <Card title="Failed RMA">
-                    <Table
-                        columns={columns}
-                        dataSource={failedItems}
-                        rowKey="rma_id"
-                        loading={loading}
-                        scroll={{ x: 1500 }}
-                        pagination={false}
-                    />
-                </Card>
-
-                {/* Completed RMA */}
-                <Card title="Completed RMA">
-                    <Table
-                        columns={[
-                            ...columns.slice(0, -1), // Remove the last column (original Actions)
-                            {
-                                title: 'Actions',
-                                key: 'actions',
-                                fixed: 'right',
-                                width: 200,
-                                render: (_, record) => (
-                                    <Space>
-                                        {record.store_status === 'completed' && (
-                                            <>
-                                                <Button
-                                                    type="primary"
-                                                    onClick={() => handleSendToStore(record.rma_id)}
-                                                >
-                                                    Send to Store
-                                                </Button>
-                                                {user && user.group_name === 'admin' && (
-                                                    <Button
-                                                        type="link"
-                                                        danger
-                                                        size="small"
-                                                        onClick={() => handleDelete(record.rma_id)}
-                                                    >
-                                                        Delete
-                                                    </Button>
-                                                )}
-                                            </>
-                                        )}
-                                    </Space>
-                                )
-                            }
-                        ]}
-                        dataSource={completedItems}
-                        rowKey="rma_id"
-                        loading={loading}
-                        scroll={{ x: 1500 }}
-                        pagination={{
-                            showSizeChanger: true,
-                            showQuickJumper: true,
-                            pageSizeOptions: ['10', '20', '50']
-                        }}
-                    />
-                </Card>
-            </Space>
+                <Table
+                    columns={columns}
+                    dataSource={filteredItems}
+                    rowKey="rma_id"
+                    loading={loading}
+                    scroll={{ x: 1500 }}
+                    pagination={{
+                        showSizeChanger: true,
+                        showQuickJumper: true,
+                        pageSizeOptions: ['10', '20', '50', '100'],
+                        showTotal: (total) => `Total ${total} records`
+                    }}
+                />
+            </Card>
         </div>
     );
 };

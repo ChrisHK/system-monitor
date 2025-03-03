@@ -27,9 +27,11 @@ try {
                 throw new Error('Database connection failed');
             }
 
-            if (!storeId || isNaN(storeId)) {
+            // 改進 storeId 驗證
+            const parsedStoreId = parseInt(storeId, 10);
+            if (isNaN(parsedStoreId) || parsedStoreId <= 0) {
                 console.log('Invalid store ID detected:', storeId);
-                throw new Error('Invalid store ID');
+                throw new Error(`Invalid store ID: ${storeId}`);
             }
 
             console.log('Attempting to connect to database pool...');
@@ -38,12 +40,12 @@ try {
 
             // First check if store exists
             console.log('Checking if store exists...');
-            const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [storeId]);
+            const storeCheck = await client.query('SELECT id FROM stores WHERE id = $1', [parsedStoreId]);
             console.log('Store check result:', storeCheck.rows);
             
             if (storeCheck.rows.length === 0) {
-                console.log('Store not found:', storeId);
-                throw new Error(`Store with ID ${storeId} not found`);
+                console.log('Store not found:', parsedStoreId);
+                throw new Error(`Store with ID ${parsedStoreId} not found`);
             }
             console.log('Store exists, proceeding with RMA query');
 
@@ -80,10 +82,10 @@ try {
                 ORDER BY r.rma_date DESC
             `;
             
-            console.log('Executing RMA query with params:', [storeId]);
+            console.log('Executing RMA query with params:', [parsedStoreId]);
             console.log('Query:', query);
             
-            const result = await client.query(query, [storeId]);
+            const result = await client.query(query, [parsedStoreId]);
             console.log('Query completed successfully');
             console.log('Rows returned:', result.rows.length);
             if (result.rows.length > 0) {
@@ -402,11 +404,12 @@ try {
 
             await client.query('BEGIN');
 
-            // 檢查RMA項目是否存在
+            // 檢查RMA項目是否存在並獲取完整信息
             const checkResult = await client.query(`
-                SELECT id, store_status, location_type, inventory_status
-                FROM store_rma 
-                WHERE id = $1 AND store_id = $2
+                SELECT r.*, sr.serialnumber, sr.model, sr.manufacturer
+                FROM store_rma r
+                JOIN system_records sr ON r.record_id = sr.id
+                WHERE r.id = $1 AND r.store_id = $2
             `, [rmaId, storeId]);
 
             console.log('Check result:', checkResult.rows[0]);
@@ -415,13 +418,14 @@ try {
                 throw new Error('RMA item not found');
             }
 
-            const currentStatus = checkResult.rows[0].store_status;
+            const rmaItem = checkResult.rows[0];
+            const currentStatus = rmaItem.store_status;
             if (currentStatus !== 'pending') {
                 throw new Error(`Invalid status transition from ${currentStatus} to sent_to_inventory`);
             }
 
-            // 更新RMA狀態
-            const result = await client.query(`
+            // 更新 store_rma 狀態
+            const updateStoreRma = await client.query(`
                 UPDATE store_rma
                 SET 
                     store_status = 'sent_to_inventory'::rma_store_status,
@@ -432,13 +436,44 @@ try {
                 RETURNING *
             `, [rmaId, storeId]);
 
-            console.log('Update result:', result.rows[0]);
+            // 在 inventory_rma 中創建記錄
+            const createInventoryRma = await client.query(`
+                INSERT INTO inventory_rma (
+                    store_rma_id,
+                    store_id,
+                    record_id,
+                    serialnumber,
+                    model,
+                    manufacturer,
+                    issue_description,
+                    status,
+                    created_at,
+                    store_name
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, 'receive',
+                    CURRENT_TIMESTAMP,
+                    (SELECT name FROM stores WHERE id = $2)
+                )
+                RETURNING *
+            `, [
+                rmaId,
+                storeId,
+                rmaItem.record_id,
+                rmaItem.serialnumber,
+                rmaItem.model,
+                rmaItem.manufacturer,
+                rmaItem.reason
+            ]);
+
+            console.log('Created inventory RMA:', createInventoryRma.rows[0]);
 
             await client.query('COMMIT');
             
             res.json({
                 success: true,
-                rma: result.rows[0]
+                rma: updateStoreRma.rows[0],
+                inventoryRma: createInventoryRma.rows[0]
             });
 
             console.log('=== Send to Inventory completed successfully ===');

@@ -1,4 +1,6 @@
 const db = require('../db');
+const fs = require('fs').promises;
+const path = require('path');
 
 const createTables = async () => {
     const client = await db.connect();
@@ -56,8 +58,43 @@ const createTables = async () => {
         `);
 
         // Import and run RMA tables update
-        const updateRmaTables = require('./migrations/update_rma_tables');
+        const updateRmaTables = require('../migrations/update_rma_tables');
         await updateRmaTables(db);
+
+        // Run new migration for inventory_rma table
+        const inventoryRmaMigration = await fs.readFile(
+            path.join(__dirname, 'migrations', '20240220_009_create_inventory_rma_table.sql'),
+            'utf8'
+        );
+        await client.query(inventoryRmaMigration);
+
+        // Run migration to add diagnosis to store_rma
+        const addDiagnosisMigration = await fs.readFile(
+            path.join(__dirname, 'migrations', '20240221_010_add_diagnosis_to_store_rma.sql'),
+            'utf8'
+        );
+        await client.query(addDiagnosisMigration);
+
+        // Run migration to add solution to store_rma
+        const addSolutionMigration = await fs.readFile(
+            path.join(__dirname, 'migrations', '20240221_011_add_solution_to_store_rma.sql'),
+            'utf8'
+        );
+        await client.query(addSolutionMigration);
+
+        // Run migration to add system records indexes
+        const addSystemRecordsIndexes = await fs.readFile(
+            path.join(__dirname, 'migrations', '20240222_012_add_system_records_indexes.sql'),
+            'utf8'
+        );
+        await client.query(addSystemRecordsIndexes);
+
+        // Run migration to create processing_logs table
+        const createProcessingLogsTable = await fs.readFile(
+            path.join(__dirname, 'migrations', '20240222_013_create_processing_logs_table.sql'),
+            'utf8'
+        );
+        await client.query(createProcessingLogsTable);
 
         await client.query('COMMIT');
         console.log('All tables created and updated successfully');

@@ -125,13 +125,10 @@ router.get('/records', auth, async (req, res) => {
     const offset = (page - 1) * pageSize;
 
     try {
-        // 首先獲取總記錄數
-        const countResult = await pool.query('SELECT COUNT(*) FROM system_records');
-        const total = parseInt(countResult.rows[0].count);
-
         // 獲取分頁數據
         const result = await pool.query(`
             SELECT * FROM system_records
+            WHERE is_current = true
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
         `, [pageSize, offset]);
@@ -139,7 +136,7 @@ router.get('/records', auth, async (req, res) => {
         res.json({
             success: true,
             records: result.rows,
-            total: total,
+            total: result.rows.length,
             page: parseInt(page),
             pageSize: parseInt(pageSize)
         });

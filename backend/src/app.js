@@ -1,8 +1,9 @@
-require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const WebSocket = require('ws');
+const config = require('./config');
 const { errorHandler } = require('./middleware/errorHandler');
 const recordRoutes = require('./routes/recordRoutes');
 const outboundRoutes = require('./routes/outboundRoutes');
@@ -15,27 +16,49 @@ const rmaRoutes = require('./routes/rmaRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const inventoryRmaRoutes = require('./routes/inventoryRmaRoutes');
 const inventoryRoutes = require('./routes/inventoryRoutes');
+const tagRoutes = require('./routes/tagRoutes');
+const purchaseOrderRoutes = require('./routes/purchaseOrderRoutes');
+const categoryRoutes = require('./routes/categoryRoutes');
+const dataProcessRoutes = require('./routes/dataProcessRoutes');
+
+console.log('Environment:', {
+    NODE_ENV: config.nodeEnv,
+    HOST: config.host,
+    PORT: config.port
+});
 
 const app = express();
 const server = http.createServer(app);
 
 // CORS configuration
 const corsOptions = {
-    origin: [
-        'http://localhost:4001',
-        'http://192.168.0.10:4001'
-    ],
+    origin: config.cors.origin,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true
 };
 
 app.use(cors(corsOptions));
+
+// 靜態文件服務
+const publicPath = config.nodeEnv === 'production'
+    ? path.join(config.passenger.appRoot, 'public')
+    : path.join(__dirname, '../public');
+
+console.log('Static files path:', publicPath);
+app.use(express.static(publicPath));
+
+// 只對 API 路由設置 JSON 內容類型
+app.use('/api', (req, res, next) => {
+    res.type('application/json');
+    next();
+});
+
 app.use(express.json());
 
 // JWT Secret check
-if (!process.env.JWT_SECRET) {
-    console.error('JWT_SECRET is not set in environment variables');
+if (!config.jwt.secret) {
+    console.error('JWT secret is not configured');
     process.exit(1);
 }
 
@@ -51,11 +74,15 @@ app.use('/api/rma', rmaRoutes);
 app.use('/api/inventory/rma', inventoryRmaRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/inventory', inventoryRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/tags', tagRoutes);
+app.use('/api/purchase-orders', purchaseOrderRoutes);
+app.use('/api/data-process', dataProcessRoutes);
 
-// Create WebSocket server directly
+// Create WebSocket server
 const wss = new WebSocket.Server({ 
     server,
-    path: '/ws',  // Specify WebSocket path
+    path: config.ws.path,
     perMessageDeflate: false,
     clientTracking: true
 });
@@ -93,51 +120,57 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-// Basic route for testing
-app.get('/', (req, res) => {
-    res.json({ message: 'Server is running' });
-});
-
-// Error handling middleware
-app.use(errorHandler);
-
-// 404 handling
-app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        error: {
-            code: 'NOT_FOUND',
-            message: `Path ${req.url} not found`
-        }
-    });
-});
-
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
-// Start server
-const PORT = process.env.PORT || 4000;
-const HOST = process.env.HOST || '192.168.0.10';
+// Error handling middleware for API routes
+app.use('/api', errorHandler);
 
-server.listen(PORT, HOST, () => {
-    console.log(`Server Configuration:`, {
-        host: HOST,
-        port: PORT,
-        environment: process.env.NODE_ENV || 'development',
-        cors_origins: corsOptions.origin
+// API 404 handling
+app.use('/api/*', (req, res) => {
+    res.status(404).json({
+        success: false,
+        error: {
+            code: 'NOT_FOUND',
+            message: `API path ${req.url} not found`
+        }
     });
-    console.log(`Server running on http://${HOST}:${PORT}`);
-    console.log(`WebSocket server running on ws://${HOST}:${PORT}/ws`);
+});
+
+// Serve React app for all other routes
+app.get('*', (req, res) => {
+    res.sendFile(path.join(publicPath, 'index.html'), (err) => {
+        if (err) {
+            console.error('Error sending index.html:', err);
+            res.status(500).send('Error loading application');
+        }
+    });
+});
+
+// Start server
+const HOST = '0.0.0.0';  // 綁定到所有網絡接口
+
+server.listen(config.port, HOST, () => {
+    console.log(`Server Configuration:`, {
+        host: config.host,
+        bind_address: HOST,
+        port: config.port,
+        environment: config.nodeEnv,
+        cors_origins: config.cors.origin,
+        static_path: publicPath,
+        db_host: config.db.host
+    });
+    console.log(`Server running on http://${config.host}:${config.port}`);
+    console.log(`WebSocket server running on ws://${config.host}:${config.port}${config.ws.path}`);
 });
 
 // Error handling
 server.on('error', (error) => {
     console.error('Server error:', error);
-    // Attempt graceful shutdown
     if (error.code === 'EADDRINUSE') {
-        console.error(`Port ${PORT} is already in use`);
+        console.error(`Port ${config.port} is already in use`);
         process.exit(1);
     }
 });
@@ -148,7 +181,6 @@ process.on('unhandledRejection', (error) => {
 
 process.on('uncaughtException', (error) => {
     console.error('Uncaught Exception:', error);
-    // Attempt graceful shutdown
     setTimeout(() => {
         process.exit(1);
     }, 1000);

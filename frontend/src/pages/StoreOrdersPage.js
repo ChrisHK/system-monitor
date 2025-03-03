@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, Table, Button, message, Input, Collapse, Space, Modal, Tag, Select, DatePicker } from 'antd';
-import { orderApi, rmaApi } from '../services/api';
+import { orderService } from '../api';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { ExclamationCircleOutlined, PrinterOutlined } from '@ant-design/icons';
@@ -31,10 +31,31 @@ const StoreOrdersPage = () => {
     const [isPrintModalVisible, setIsPrintModalVisible] = useState(false);
     const [selectedOrderForPrint, setSelectedOrderForPrint] = useState(null);
 
+    const formatPayMethod = (method) => {
+        if (method === null) return '-';
+        switch (method) {
+            case 'credit_card':
+                return 'Credit Card';
+            case 'cash':
+                return 'Cash';
+            case 'debit_card':
+                return 'Debit Card';
+            default:
+                return method;
+        }
+    };
+
+    const paymentMethods = [
+        { value: '-', label: '-' },
+        { value: 'credit_card', label: 'Credit Card' },
+        { value: 'cash', label: 'Cash' },
+        { value: 'debit_card', label: 'Debit Card' }
+    ];
+
     const fetchOrders = useCallback(async () => {
         try {
             setIsLoading(true);
-            const response = await orderApi.getOrders(storeId);
+            const response = await orderService.getStoreOrders(storeId);
             console.log('Orders API Response:', {
                 success: response.success,
                 orderCount: response.orders?.length,
@@ -88,15 +109,76 @@ const StoreOrdersPage = () => {
     const handleSaveOrder = async () => {
         if (!pendingOrder) return;
         
-        // Check if all items have prices
+        // Check for empty payment methods and prices
+        const hasEmptyPayMethods = pendingOrder.items.some(item => !item.pay_method);
         const hasEmptyPrices = pendingOrder.items.some(item => !item.price);
-        if (hasEmptyPrices) {
-            message.error('Please enter prices for all items before saving the order');
+        
+        // If both are empty, show combined confirmation
+        if (hasEmptyPayMethods && hasEmptyPrices) {
+            Modal.confirm({
+                title: 'Missing Information',
+                content: 'Some items do not have payment methods and prices set. Do you want to continue saving the order?',
+                okText: 'Yes, Save Order',
+                cancelText: 'Cancel',
+                onOk: async () => {
+                    try {
+                        await orderService.saveOrder(storeId, pendingOrder.id);
+                        message.success('Order saved successfully');
+                        fetchOrders();
+                    } catch (error) {
+                        message.error('Failed to save order');
+                        console.error(error);
+                    }
+                }
+            });
             return;
         }
         
+        // If only payment methods are empty
+        if (hasEmptyPayMethods) {
+            Modal.confirm({
+                title: 'Missing Payment Methods',
+                content: 'Some items do not have payment methods set. Do you want to continue saving the order?',
+                okText: 'Yes, Save Order',
+                cancelText: 'Cancel',
+                onOk: async () => {
+                    try {
+                        await orderService.saveOrder(storeId, pendingOrder.id);
+                        message.success('Order saved successfully');
+                        fetchOrders();
+                    } catch (error) {
+                        message.error('Failed to save order');
+                        console.error(error);
+                    }
+                }
+            });
+            return;
+        }
+        
+        // If only prices are empty
+        if (hasEmptyPrices) {
+            Modal.confirm({
+                title: 'Items Without Prices',
+                content: 'Some items do not have prices set. Do you want to continue saving the order?',
+                okText: 'Yes, Save Order',
+                cancelText: 'Cancel',
+                onOk: async () => {
+                    try {
+                        await orderService.saveOrder(storeId, pendingOrder.id);
+                        message.success('Order saved successfully');
+                        fetchOrders();
+                    } catch (error) {
+                        message.error('Failed to save order');
+                        console.error(error);
+                    }
+                }
+            });
+            return;
+        }
+        
+        // If all information is complete
         try {
-            await orderApi.saveOrder(storeId, pendingOrder.id);
+            await orderService.saveOrder(storeId, pendingOrder.id);
             message.success('Order saved successfully');
             fetchOrders();
         } catch (error) {
@@ -112,7 +194,7 @@ const StoreOrdersPage = () => {
         }
 
         try {
-            await orderApi.deleteOrderItem(storeId, itemId);
+            await orderService.deleteOrderItem(storeId, itemId);
             message.success('Item deleted successfully');
             fetchOrders();
         } catch (error) {
@@ -123,7 +205,7 @@ const StoreOrdersPage = () => {
 
     const handleSaveNotes = async (itemId, notes) => {
         try {
-            await orderApi.updateOrderItemNotes(storeId, itemId, notes);
+            await orderService.updateOrderItemNotes(storeId, itemId, notes);
             message.success('Notes saved successfully');
             setEditingNotes(prev => ({
                 ...prev,
@@ -143,7 +225,7 @@ const StoreOrdersPage = () => {
         }
 
         try {
-            const response = await orderApi.updateOrderItemPrice(storeId, itemId, parseFloat(price));
+            const response = await orderService.updateOrderItemPrice(storeId, itemId, parseFloat(price));
             if (response?.success) {
                 message.success('Price saved successfully');
                 setEditingPrice(prev => ({
@@ -162,16 +244,21 @@ const StoreOrdersPage = () => {
 
     const handleSavePayMethod = async (itemId, payMethod) => {
         try {
-            const response = await orderApi.updateOrderItemPayMethod(storeId, itemId, payMethod);
+            // 如果選擇了 "-"，則設置為 null
+            const actualPayMethod = payMethod === '-' ? null : payMethod;
+            
+            console.log('Updating payment method:', { itemId, payMethod: actualPayMethod });
+            const response = await orderService.updateOrderItemPayMethod(storeId, itemId, actualPayMethod);
+            
             if (response?.success) {
                 message.success('Payment method saved successfully');
-                fetchOrders();
+                await fetchOrders(); // 重新獲取訂單以更新顯示
             } else {
                 throw new Error(response?.error || 'Failed to save payment method');
             }
         } catch (error) {
-            message.error(error.message || 'Failed to save payment method');
             console.error('Error in handleSavePayMethod:', error);
+            message.error(error.message || 'Failed to save payment method');
         }
     };
 
@@ -226,7 +313,7 @@ const StoreOrdersPage = () => {
             };
             console.log('RMA data to be sent:', rmaData);
             
-            const response = await rmaApi.addToRma(storeId, rmaData);
+            const response = await orderService.addToRma(storeId, rmaData);
             console.log('RMA API response:', response);
 
             if (response && response.success) {
@@ -254,7 +341,7 @@ const StoreOrdersPage = () => {
 
     const handleDeleteOrder = async (storeId, orderId) => {
         try {
-            const response = await orderApi.deleteOrder(storeId, orderId);
+            const response = await orderService.deleteOrder(storeId, orderId);
             if (response.success) {
                 message.success('Order deleted successfully');
                 fetchOrders();
@@ -340,7 +427,21 @@ const StoreOrdersPage = () => {
             title: 'Pay Method',
             dataIndex: 'pay_method',
             key: 'pay_method',
-            render: (text) => text || 'Credit Card'
+            width: 150,
+            render: (text, record) => (
+                <Select
+                    defaultValue="-"
+                    value={text === null ? '-' : text}
+                    style={{ width: '100%' }}
+                    onChange={(value) => handleSavePayMethod(record.id, value)}
+                >
+                    {paymentMethods.map(method => (
+                        <Option key={method.value} value={method.value}>
+                            {method.label}
+                        </Option>
+                    ))}
+                </Select>
+            )
         },
         {
             title: 'Price',
@@ -450,8 +551,8 @@ const StoreOrdersPage = () => {
             return {
                 ...col,
                 render: (text, record) => record.is_deleted ? (
-                    <span style={{ color: '#999' }}>{text || 'Credit Card'}</span>
-                ) : (text || 'Credit Card')
+                    <span style={{ color: '#999' }}>{formatPayMethod(text)}</span>
+                ) : formatPayMethod(text)
             };
         }
         // For all other columns
@@ -546,14 +647,74 @@ const StoreOrdersPage = () => {
                         <Button 
                             type="primary" 
                             onClick={() => {
-                                // Check if all items have prices
+                                // Check for empty payment methods and prices
+                                const hasEmptyPayMethods = pendingOrder.items.some(item => !item.pay_method);
                                 const hasEmptyPrices = pendingOrder.items.some(item => !item.price);
+                                
+                                // If both are empty, show combined confirmation
+                                if (hasEmptyPayMethods && hasEmptyPrices) {
+                                    Modal.confirm({
+                                        title: 'Missing Information',
+                                        content: 'Some items do not have payment methods and prices set. Do you want to continue saving the order?',
+                                        okText: 'Yes, Save Order',
+                                        cancelText: 'Cancel',
+                                        onOk: async () => {
+                                            try {
+                                                await orderService.saveOrder(storeId, pendingOrder.id);
+                                                message.success('Order saved successfully');
+                                                fetchOrders();
+                                            } catch (error) {
+                                                message.error('Failed to save order');
+                                                console.error(error);
+                                            }
+                                        }
+                                    });
+                                    return;
+                                }
+                                
+                                // If only payment methods are empty
+                                if (hasEmptyPayMethods) {
+                                    Modal.confirm({
+                                        title: 'Missing Payment Methods',
+                                        content: 'Some items do not have payment methods set. Do you want to continue saving the order?',
+                                        okText: 'Yes, Save Order',
+                                        cancelText: 'Cancel',
+                                        onOk: async () => {
+                                            try {
+                                                await orderService.saveOrder(storeId, pendingOrder.id);
+                                                message.success('Order saved successfully');
+                                                fetchOrders();
+                                            } catch (error) {
+                                                message.error('Failed to save order');
+                                                console.error(error);
+                                            }
+                                        }
+                                    });
+                                    return;
+                                }
+                                
+                                // If only prices are empty
                                 if (hasEmptyPrices) {
-                                    message.error('Please enter prices for all items before saving the order');
+                                    Modal.confirm({
+                                        title: 'Items Without Prices',
+                                        content: 'Some items do not have prices set. Do you want to continue saving the order?',
+                                        okText: 'Yes, Save Order',
+                                        cancelText: 'Cancel',
+                                        onOk: async () => {
+                                            try {
+                                                await orderService.saveOrder(storeId, pendingOrder.id);
+                                                message.success('Order saved successfully');
+                                                fetchOrders();
+                                            } catch (error) {
+                                                message.error('Failed to save order');
+                                                console.error(error);
+                                            }
+                                        }
+                                    });
                                     return;
                                 }
 
-                                // Show confirmation modal
+                                // If all information is complete
                                 Modal.confirm({
                                     title: 'Save Order',
                                     content: 'Are you sure you want to save this order?',
@@ -561,7 +722,7 @@ const StoreOrdersPage = () => {
                                     cancelText: 'No',
                                     onOk: async () => {
                                         try {
-                                            await orderApi.saveOrder(storeId, pendingOrder.id);
+                                            await orderService.saveOrder(storeId, pendingOrder.id);
                                             message.success('Order saved successfully');
                                             fetchOrders();
                                         } catch (error) {

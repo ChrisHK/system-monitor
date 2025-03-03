@@ -131,6 +131,7 @@ router.get('/:storeId', auth, checkStorePermission('orders'), catchAsync(async (
                                 'disks', sr.disks,
                                 'price', oi.price,
                                 'notes', oi.notes,
+                                'pay_method', oi.pay_method,
                                 'is_deleted', oi.is_deleted,
                                 'order', json_build_object(
                                     'id', o.id,
@@ -326,21 +327,15 @@ router.post('/:storeId', auth, checkStorePermission('orders'), catchAsync(async 
 
             // Add to order_items
             await client.query(`
-                INSERT INTO store_order_items (order_id, record_id, notes)
-                VALUES ($1, $2, $3)
-            `, [orderId, item.recordId, item.notes || null]).catch(err => {
-                console.error('Database error adding item to order:', err);
-                throw new Error(`Failed to add item ${item.recordId} to order`);
-            });
+                INSERT INTO store_order_items (order_id, record_id, notes, pay_method)
+                VALUES ($1, $2, $3, $4)
+            `, [orderId, item.recordId, item.notes || null, item.payMethod || null]);
             
             // Remove from store_items
             await client.query(
                 'DELETE FROM store_items WHERE store_id = $1 AND record_id = $2',
                 [storeId, item.recordId]
-            ).catch(err => {
-                console.error('Database error removing item from store:', err);
-                throw new Error(`Failed to remove item ${item.recordId} from store`);
-            });
+            );
         }
         
         await client.query('COMMIT');
@@ -394,6 +389,9 @@ router.put('/:storeId/:orderId/save', auth, checkStorePermission('orders'), catc
         if (result.rows.length === 0) {
             throw new Error('Order not found or already completed');
         }
+
+        // 確保項目不會返回到商店列表
+        // 我們不需要做任何額外的操作，因為項目在添加到訂單時就已經從 store_items 中刪除了
 
         await client.query('COMMIT');
         
@@ -587,6 +585,60 @@ router.put('/:storeId/items/:itemId/price', auth, checkStorePermission('orders')
     }
 }));
 
+// Update order item pay method
+router.put('/:storeId/items/:itemId/pay-method', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
+    const { storeId, itemId } = req.params;
+    const { payMethod } = req.body;
+    const client = await pool.connect();
+    
+    try {
+        // Validate pay method
+        const validPayMethods = ['credit_card', 'cash', 'debit_card', null];
+        if (payMethod !== null && !validPayMethods.includes(payMethod)) {
+            throw new Error('Invalid payment method');
+        }
+
+        await client.query('BEGIN');
+
+        // Check if item exists and belongs to a pending order
+        const itemResult = await client.query(`
+            SELECT oi.id
+            FROM store_order_items oi
+            JOIN store_orders o ON oi.order_id = o.id
+            WHERE oi.id = $1 
+            AND o.store_id = $2
+            AND o.status = 'pending'
+        `, [itemId, storeId]);
+
+        if (itemResult.rows.length === 0) {
+            throw new Error('Item not found or order is not pending');
+        }
+
+        // Update pay method
+        await client.query(`
+            UPDATE store_order_items
+            SET pay_method = $1
+            WHERE id = $2
+        `, [payMethod, itemId]);
+
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            message: 'Payment method updated successfully'
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Error updating payment method:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    } finally {
+        client.release();
+    }
+}));
+
 // Delete order item from completed order
 router.delete('/:storeId/completed/:orderId', auth, checkGroup(['admin']), catchAsync(async (req, res) => {
     const { storeId, orderId } = req.params;
@@ -650,6 +702,112 @@ router.delete('/:storeId/completed/:orderId', auth, checkGroup(['admin']), catch
             success: false,
             error: error.message
         });
+    } finally {
+        client.release();
+    }
+}));
+
+// Admin delete store order
+router.delete('/stores/:storeId/orders/:orderId', auth, checkGroup(['admin']), catchAsync(async (req, res) => {
+  const { storeId, orderId } = req.params;
+  
+  // 檢查訂單是否存在
+  const order = await pool.query(
+    'SELECT * FROM store_orders WHERE store_id = $1 AND id = $2',
+    [storeId, orderId]
+  );
+
+  if (order.rows.length === 0) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'NOT_FOUND',
+        message: 'Order not found'
+      }
+    });
+  }
+
+  // 刪除訂單
+  await pool.query('BEGIN');
+  try {
+    // 先刪除訂單項目
+    await pool.query(
+      'DELETE FROM store_order_items WHERE order_id = $1',
+      [orderId]
+    );
+
+    // 再刪除訂單本身
+    await pool.query(
+      'DELETE FROM store_orders WHERE id = $1',
+      [orderId]
+    );
+
+    await pool.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: 'Order deleted successfully'
+    });
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    throw error;
+  }
+}));
+
+// Bulk add items to order
+router.post('/:storeId/bulk-add', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
+    const { storeId } = req.params;
+    const { items } = req.body;
+    const client = await pool.connect();
+    
+    try {
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            throw new ValidationError('Valid items array is required');
+        }
+
+        await client.query('BEGIN');
+
+        // Get or create pending order
+        const pendingOrderQuery = await client.query(`
+            SELECT id 
+            FROM store_orders 
+            WHERE store_id = $1 AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [storeId]);
+
+        let orderId;
+        if (pendingOrderQuery.rows.length > 0) {
+            orderId = pendingOrderQuery.rows[0].id;
+        } else {
+            const newOrderResult = await client.query(`
+                INSERT INTO store_orders (store_id, status)
+                VALUES ($1, 'pending')
+                RETURNING id
+            `, [storeId]);
+            orderId = newOrderResult.rows[0].id;
+        }
+
+        // Insert all items
+        const insertPromises = items.map(item => 
+            client.query(`
+                INSERT INTO store_order_items (order_id, record_id, pay_method)
+                VALUES ($1, $2, $3)
+                RETURNING id
+            `, [orderId, item.record_id, null])
+        );
+
+        await Promise.all(insertPromises);
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Items added successfully',
+            order_id: orderId
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
     } finally {
         client.release();
     }

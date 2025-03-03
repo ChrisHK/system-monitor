@@ -6,12 +6,19 @@ const { Title } = Typography;
 
 const PrintOrder = ({ order }) => {
     const calculateTotal = (items) => {
+        // 檢查是否所有項目的價格都是 null
+        const allPricesNull = items.every(item => item.price === null);
+        if (allPricesNull) {
+            return '-';
+        }
         return items.reduce((total, item) => total + (parseFloat(item.price) || 0), 0);
     };
 
     if (!order || !order.items) {
         return <div>No order data available</div>;
     }
+
+    const total = calculateTotal(order.items);
 
     return (
         <div className="print-container">
@@ -46,8 +53,8 @@ const PrintOrder = ({ order }) => {
                                 <td>{item.cpu}</td>
                                 <td>{item.ram_gb || '-'}</td>
                                 <td>{item.disks}</td>
-                                <td>{item.pay_method || 'Credit Card'}</td>
-                                <td>${item.price || 0}</td>
+                                <td>{item.pay_method === null ? '-' : item.pay_method}</td>
+                                <td>{item.price === null ? '-' : `$${item.price || 0}`}</td>
                                 <td>1</td>
                             </tr>
                         ))}
@@ -55,7 +62,7 @@ const PrintOrder = ({ order }) => {
                     <tfoot>
                         <tr>
                             <td colSpan="7" style={{ textAlign: 'right' }}>Total:</td>
-                            <td colSpan="2">${calculateTotal(order.items).toFixed(2)}</td>
+                            <td colSpan="2">{total === '-' ? '-' : `$${total.toFixed(2)}`}</td>
                         </tr>
                     </tfoot>
                 </table>

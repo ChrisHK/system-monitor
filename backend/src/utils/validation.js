@@ -19,16 +19,19 @@ const validateGroupData = (data) => {
         return 'Group name can only contain letters, numbers, underscores and hyphens';
     }
 
-    // 檢查 permitted_stores 或 store_permissions
-    if ((!permitted_stores || !Array.isArray(permitted_stores) || permitted_stores.length === 0) &&
-        (!store_permissions || Object.keys(store_permissions).length === 0)) {
-        return 'At least one store must be selected';
-    }
+    // 如果提供了 store_permissions 或 permitted_stores，則進行驗證
+    if (store_permissions || permitted_stores) {
+        // 檢查 permitted_stores 或 store_permissions
+        if ((!permitted_stores || !Array.isArray(permitted_stores) || permitted_stores.length === 0) &&
+            (!store_permissions || Object.keys(store_permissions).length === 0)) {
+            return 'At least one store must be selected';
+        }
 
-    // 如果有 permitted_stores，檢查每個 store ID 是否為有效的數字
-    if (permitted_stores && Array.isArray(permitted_stores) && 
-        !permitted_stores.every(id => Number.isInteger(id) && id > 0)) {
-        return 'Invalid store ID format';
+        // 如果有 permitted_stores，檢查每個 store ID 是否為有效的數字
+        if (permitted_stores && Array.isArray(permitted_stores) && 
+            !permitted_stores.every(id => Number.isInteger(id) && id > 0)) {
+            return 'Invalid store ID format';
+        }
     }
 
     return null;
@@ -53,8 +56,44 @@ const validateRmaStatus = (currentStatus, newStatus) => {
     return true;
 };
 
+// 驗證採購訂單數據
+const validatePurchaseOrder = (data) => {
+    const errors = [];
+
+    // 驗證訂單基本信息
+    if (!data.po_number) {
+        errors.push('PO number is required');
+    }
+
+    if (!data.order_date) {
+        errors.push('Order date is required');
+    }
+
+    // 驗證訂單項目
+    if (!Array.isArray(data.items)) {
+        errors.push('Items must be an array');
+    } else if (data.items.length === 0) {
+        errors.push('At least one item is required');
+    } else {
+        data.items.forEach((item, index) => {
+            if (!item.serialnumber) {
+                errors.push(`Item ${index + 1}: Serial number is required`);
+            }
+            if (typeof item.cost !== 'number' || item.cost <= 0) {
+                errors.push(`Item ${index + 1}: Cost must be greater than 0`);
+            }
+        });
+    }
+
+    return {
+        isValid: errors.length === 0,
+        errors
+    };
+};
+
 module.exports = {
     validateGroupData,
     validateRmaStatus,
-    RMA_STATUS_FLOW
+    RMA_STATUS_FLOW,
+    validatePurchaseOrder
 }; 

@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../db');
 const cacheService = require('../services/cacheService');
+const { AuthenticationError } = require('./errorTypes');
 
 const authCache = new Map();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -12,7 +13,7 @@ const auth = async (req, res, next) => {
         const token = req.header('Authorization')?.replace('Bearer ', '');
         
         if (!token) {
-            throw new Error('No token provided');
+            throw new AuthenticationError('No token provided');
         }
 
         // 檢查緩存
@@ -22,9 +23,17 @@ const auth = async (req, res, next) => {
             return next();
         }
 
+        let decoded;
         try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            const userId = decoded.id;
+            decoded = jwt.verify(token, process.env.JWT_SECRET, {
+                algorithms: [process.env.JWT_ALGORITHM || 'HS256']
+            });
+            
+            // 確保 id 是數字類型
+            const userId = typeof decoded.id === 'string' ? parseInt(decoded.id, 10) : decoded.id;
+            if (isNaN(userId)) {
+                throw new AuthenticationError('Invalid user ID in token');
+            }
             
             console.log('Token verified for user:', userId);
             
@@ -41,57 +50,90 @@ const auth = async (req, res, next) => {
                 console.log('Cache miss - Fetching user data from database');
                 // 緩存未命中，從數據庫獲取用戶數據和權限
                 const result = await pool.query(`
-                    WITH user_data AS (
+                    WITH store_permissions AS (
                         SELECT 
-                            u.id,
-                            u.username,
-                            u.group_id as user_group_id,
-                            u.role_id,
-                            u.is_active,
-                            g.name as group_name,
-                            g.id as group_id,
-                            r.name as role_name,
-                            ARRAY_AGG(DISTINCT gsp.store_id) FILTER (WHERE gsp.store_id IS NOT NULL) as permitted_stores,
-                            ARRAY_AGG(DISTINCT gsp.features) FILTER (WHERE gsp.features IS NOT NULL) as store_features,
-                            jsonb_build_object(
-                                'inventory', BOOL_OR(CASE WHEN gp.permission_type = 'inventory' THEN gp.permission_value::boolean ELSE false END),
-                                'inventory_ram', BOOL_OR(CASE WHEN gp.permission_type = 'inventory_ram' THEN gp.permission_value::boolean ELSE false END),
-                                'inbound', BOOL_OR(CASE WHEN gp.permission_type = 'inbound' THEN gp.permission_value::boolean ELSE false END),
-                                'outbound', BOOL_OR(CASE WHEN gp.permission_type = 'outbound' THEN gp.permission_value::boolean ELSE false END)
-                            ) as main_permissions
-                        FROM users u
-                        LEFT JOIN groups g ON u.group_id = g.id
-                        LEFT JOIN roles r ON u.role_id = r.id
-                        LEFT JOIN group_store_permissions gsp ON g.id = gsp.group_id
-                        LEFT JOIN group_permissions gp ON g.id = gp.group_id
-                        WHERE u.id = $1 AND u.is_active = true
-                        GROUP BY u.id, u.username, u.group_id, u.role_id, u.is_active, g.id, g.name, r.name
+                            gsp.group_id,
+                            jsonb_object_agg(
+                                gsp.store_id::text,
+                                jsonb_build_object(
+                                    'inventory', COALESCE((gsp.permissions->>'inventory')::boolean, false),
+                                    'orders', COALESCE((gsp.permissions->>'orders')::boolean, false),
+                                    'rma', COALESCE((gsp.permissions->>'rma')::boolean, false),
+                                    'outbound', COALESCE((gsp.permissions->>'outbound')::boolean, false)
+                                )
+                            ) as store_permissions,
+                            array_agg(DISTINCT gsp.store_id) as permitted_stores
+                        FROM group_store_permissions gsp
+                        GROUP BY gsp.group_id
                     )
                     SELECT 
-                        ud.id,
-                        ud.username,
-                        ud.user_group_id as group_id,
-                        ud.role_id,
-                        ud.is_active,
-                        ud.group_name,
-                        ud.role_name,
-                        ud.permitted_stores,
-                        ud.store_features,
-                        ud.main_permissions
-                    FROM user_data ud
+                        u.id::integer,
+                        u.username,
+                        u.group_id::integer,
+                        u.role_id::integer,
+                        u.is_active,
+                        g.name as group_name,
+                        g.main_permissions,
+                        r.name as role_name,
+                        sp.permitted_stores,
+                        sp.store_permissions
+                    FROM users u
+                    LEFT JOIN groups g ON u.group_id = g.id
+                    LEFT JOIN roles r ON u.role_id = r.id
+                    LEFT JOIN store_permissions sp ON g.id = sp.group_id
+                    WHERE u.id = $1 AND u.is_active = true
                 `, [userId]);
 
                 if (result.rows.length === 0) {
-                    throw new Error('User not found or inactive');
+                    throw new AuthenticationError('User not found or inactive');
                 }
 
                 userData = result.rows[0];
+                
+                // 確保數據類型正確
+                userData.id = parseInt(userData.id, 10);
+                userData.group_id = parseInt(userData.group_id, 10);
+                userData.role_id = userData.role_id ? parseInt(userData.role_id, 10) : null;
+                userData.permitted_stores = userData.permitted_stores?.map(id => parseInt(id, 10)) || [];
+
+                // 確保 admin 用戶有所有權限
+                if (userData.group_name === 'admin') {
+                    userData.main_permissions = {
+                        inventory: true,
+                        inventory_ram: true,
+                        inbound: true,
+                        outbound: true,
+                        purchase_order: true,
+                        tag_management: true
+                    };
+                    
+                    // 如果是 admin，確保所有商店都有完整權限
+                    if (userData.permitted_stores && userData.permitted_stores.length > 0) {
+                        const fullStorePermissions = {};
+                        userData.permitted_stores.forEach(storeId => {
+                            fullStorePermissions[storeId] = {
+                                inventory: true,
+                                orders: true,
+                                rma: true,
+                                outbound: true
+                            };
+                        });
+                        userData.store_permissions = fullStorePermissions;
+                    }
+                } else {
+                    // 確保 main_permissions 是一個對象
+                    userData.main_permissions = userData.main_permissions || {};
+                    // 確保 store_permissions 是一個對象
+                    userData.store_permissions = userData.store_permissions || {};
+                }
+
                 console.log('User data loaded:', {
                     userId: userData.id,
                     username: userData.username,
                     group: userData.group_name,
                     mainPermissions: userData.main_permissions,
-                    permittedStores: userData.permitted_stores
+                    permittedStores: userData.permitted_stores,
+                    storePermissions: userData.store_permissions
                 });
                 
                 // 將用戶數據存入緩存
@@ -104,19 +146,19 @@ const auth = async (req, res, next) => {
                             group_name: userData.group_name,
                             permissions: userData.main_permissions
                         },
-                        features: userData.store_features
+                        store_permissions: userData.store_permissions
                     };
                     cacheService.setUserPermissions(userId, permissionsData);
                     console.log('Cached permissions data:', permissionsData);
                 }
 
                 // 如果有商店權限，為每個商店設置權限緩存
-                if (userData.permitted_stores && userData.store_features) {
-                    userData.permitted_stores.forEach((storeId, index) => {
-                        if (userData.store_features[index]) {
+                if (userData.permitted_stores && userData.store_permissions) {
+                    userData.permitted_stores.forEach(storeId => {
+                        if (userData.store_permissions[storeId]) {
                             const storePermissions = {
                                 store_id: storeId,
-                                features: userData.store_features[index]
+                                permissions: userData.store_permissions[storeId]
                             };
                             cacheService.setStorePermissions(
                                 userData.group_id,
@@ -146,13 +188,23 @@ const auth = async (req, res, next) => {
                 role: req.user.role_name,
                 fromCache: !!userData,
                 mainPermissions: req.user.main_permissions,
-                storeFeatures: req.user.store_features
+                storeFeatures: req.user.store_permissions
             });
             
             next();
         } catch (jwtError) {
-            console.error('JWT verification failed:', jwtError);
-            throw new Error('Invalid token');
+            console.error('JWT verification failed:', {
+                error: jwtError.message,
+                name: jwtError.name,
+                stack: jwtError.stack
+            });
+            
+            if (jwtError.name === 'TokenExpiredError') {
+                throw new AuthenticationError('Token has expired');
+            } else if (jwtError.name === 'JsonWebTokenError') {
+                throw new AuthenticationError('Invalid token');
+            }
+            throw new AuthenticationError('Token verification failed');
         }
     } catch (error) {
         console.error('=== Authentication Error ===', {
@@ -161,10 +213,15 @@ const auth = async (req, res, next) => {
             name: error.name
         });
         
-        res.status(401).json({
+        const statusCode = error instanceof AuthenticationError ? 401 : 500;
+        const errorMessage = error instanceof AuthenticationError 
+            ? error.message 
+            : 'Internal server error during authentication';
+        
+        res.status(statusCode).json({
             success: false,
-            error: 'Please authenticate',
-            detail: error.message
+            error: errorMessage,
+            code: error.name
         });
     }
 };
@@ -188,6 +245,7 @@ const checkGroup = (requiredGroups = [], requireStore = false) => {
             user: {
                 id: user?.id,
                 group: user?.group_name,
+                permissions: user?.permissions,
                 hasGroupId: !!user?.group_id
             },
             required: {
@@ -204,7 +262,7 @@ const checkGroup = (requiredGroups = [], requireStore = false) => {
             });
         }
 
-        const isAdminGroup = user.group_name === 'admin';
+        const isAdminGroup = user.group_name === 'admin' || (user.permissions && user.permissions.includes('admin'));
         const hasGroupPermission = isAdminGroup || requiredGroups.includes(user.group_name);
         const hasStorePermission = !requireStore || 
             isAdminGroup || 
@@ -214,6 +272,7 @@ const checkGroup = (requiredGroups = [], requireStore = false) => {
             isAdminGroup,
             hasGroupPermission,
             hasStorePermission,
+            permissions: user.permissions,
             permittedStores: user.permitted_stores
         });
 
