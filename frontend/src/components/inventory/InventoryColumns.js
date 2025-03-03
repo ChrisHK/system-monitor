@@ -135,7 +135,10 @@ export const createInventoryColumns = ({
         dataIndex: 'touchscreen',
         key: 'touchscreen',
         width: 100,
-        render: (value) => value ? 'Yes' : 'No'
+        render: (value) => {
+            if (value === 'Yes' || value === 'Yes Detected') return 'Yes';
+            return 'No';
+        }
     },
     {
         title: 'RAM (GB)',

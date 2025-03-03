@@ -100,6 +100,14 @@ const calculateTotalDisksGB = (disksData) => {
     }
 };
 
+// 處理 touchscreen 值的輔助函數
+const formatTouchscreen = (value) => {
+    if (value === 'Yes' || value === 'Yes Detected') {
+        return 'Yes';
+    }
+    return 'No';
+};
+
 // Process inventory data
 const processInventoryData = async (req, res) => {
     const client = await pool.connect();
@@ -173,7 +181,7 @@ const processInventoryData = async (req, res) => {
                     item.cpu || '',
                     item.resolution || '',
                     item.graphicscard || '',
-                    item.touchscreen || false,
+                    formatTouchscreen(item.touchscreen),
                     parseFloat(item.ram_gb) || 0,
                     item.disks || '',
                     parseInt(item.design_capacity) || 0,

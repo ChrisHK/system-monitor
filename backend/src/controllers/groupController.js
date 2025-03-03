@@ -1,5 +1,6 @@
 const pool = require('../db');
 const { validateGroupData } = require('../utils/validation');
+const cacheService = require('../services/cacheService');
 
 // 獲取所有群組
 const getGroups = async (req, res) => {
@@ -42,7 +43,8 @@ const getGroups = async (req, res) => {
                                 inventory: true,
                                 orders: true,
                                 rma: true,
-                                outbound: true
+                                outbound: true,
+                                bulk_select: true
                             };
                             return acc;
                         }, {}),
@@ -52,7 +54,8 @@ const getGroups = async (req, res) => {
                             outbound: true,
                             inbound: true,
                             purchase_order: true,
-                            tag_management: true
+                            tag_management: true,
+                            bulk_select: true
                         }
                     };
                 }
@@ -76,7 +79,8 @@ const getGroups = async (req, res) => {
                                 inventory: permissions.inventory === true,
                                 orders: permissions.orders === true,
                                 rma: permissions.rma === true,
-                                outbound: permissions.outbound === true
+                                outbound: permissions.outbound === true,
+                                bulk_select: permissions.bulk_select === true
                             };
                         } catch (error) {
                             console.error(`Error parsing permissions for store ${p.store_id}:`, error);
@@ -84,7 +88,8 @@ const getGroups = async (req, res) => {
                                 inventory: false,
                                 orders: false,
                                 rma: false,
-                                outbound: false
+                                outbound: false,
+                                bulk_select: false
                             };
                         }
                     }
@@ -203,14 +208,15 @@ const createGroup = async (req, res) => {
                                 inventory: perm.inventory === '1' || perm.inventory === true,
                                 orders: perm.orders === '1' || perm.orders === true,
                                 rma: perm.rma === '1' || perm.rma === true,
-                                outbound: perm.outbound === '1' || perm.outbound === true
+                                outbound: perm.outbound === '1' || perm.outbound === true,
+                                bulk_select: perm.bulk_select === '1' || perm.bulk_select === true
                             };
 
                             return client.query(`
                                 INSERT INTO group_store_permissions 
-                                (group_id, store_id, permissions)
-                                VALUES ($1, $2, $3::jsonb)
-                            `, [group.id, perm.store_id, JSON.stringify(permissionsObj)]);
+                                (group_id, store_id, permissions, bulk_select)
+                                VALUES ($1, $2, $3::jsonb, $4)
+                            `, [group.id, perm.store_id, JSON.stringify(permissionsObj), permissionsObj.bulk_select]);
                         });
 
                     await Promise.all(insertPromises);
@@ -300,14 +306,15 @@ const updateGroup = async (req, res) => {
                     inventory: perm.inventory === '1' || perm.inventory === true,
                     orders: perm.orders === '1' || perm.orders === true,
                     outbound: perm.outbound === '1' || perm.outbound === true,
-                    rma: perm.rma === '1' || perm.rma === true
+                    rma: perm.rma === '1' || perm.rma === true,
+                    bulk_select: perm.bulk_select === '1' || perm.bulk_select === true
                 };
 
                 return client.query(`
                     INSERT INTO group_store_permissions 
-                    (group_id, store_id, permissions)
-                    VALUES ($1, $2, $3::jsonb)
-                `, [id, perm.store_id, JSON.stringify(permissionsObj)]);
+                    (group_id, store_id, permissions, bulk_select)
+                    VALUES ($1, $2, $3::jsonb, $4)
+                `, [id, perm.store_id, JSON.stringify(permissionsObj), permissionsObj.bulk_select]);
             });
 
             await Promise.all(insertPromises);
@@ -316,7 +323,11 @@ const updateGroup = async (req, res) => {
         // 4. Commit transaction
         await client.query('COMMIT');
 
-        // 5. Get updated group data
+        // 5. Clear cache
+        await cacheService.clearStoreListCache(); // 清理商店列表緩存
+        await cacheService.clearAllPermissionsCache(); // 清理所有權限相關緩存
+
+        // 6. Get updated group data
         const updatedGroup = await getGroupWithPermissions(client, id);
 
         res.json({
@@ -492,13 +503,14 @@ const updateGroupPermissions = async (req, res) => {
                                     inventory: p.inventory === '1' || p.inventory === true,
                                     orders: p.orders === '1' || p.orders === true,
                                     rma: p.rma === '1' || p.rma === true,
-                                    outbound: p.outbound === '1' || p.outbound === true
+                                    outbound: p.outbound === '1' || p.outbound === true,
+                                    bulk_select: p.bulk_select === '1' || p.bulk_select === true
                                 };
                             }
                         });
 
                         const insertValues = validStoreIds.map((_, index) => {
-                            return `($1, $${index * 2 + 2}, $${index * 2 + 3}::jsonb)`;
+                            return `($1, $${index * 2 + 2}, $${index * 2 + 3}::jsonb, $${index * 2 + 4})`;
                         }).join(',');
 
                         const flatParams = [id];
@@ -507,9 +519,14 @@ const updateGroupPermissions = async (req, res) => {
                                 inventory: false,
                                 orders: false,
                                 rma: false,
-                                outbound: false
+                                outbound: false,
+                                bulk_select: false
                             };
-                            flatParams.push(storeId, JSON.stringify(permissions));
+                            flatParams.push(
+                                storeId, 
+                                JSON.stringify(permissions),
+                                permissions.bulk_select
+                            );
                         });
 
                         console.log('Inserting store permissions:', {
@@ -519,7 +536,7 @@ const updateGroupPermissions = async (req, res) => {
                         });
 
                         await client.query(`
-                            INSERT INTO group_store_permissions (group_id, store_id, features)
+                            INSERT INTO group_store_permissions (group_id, store_id, permissions, bulk_select)
                             VALUES ${insertValues}
                         `, flatParams);
                     }
@@ -527,6 +544,10 @@ const updateGroupPermissions = async (req, res) => {
             }
 
             await client.query('COMMIT');
+            
+            // Clear cache
+            await cacheService.clearStoreListCache(); // 清理商店列表緩存
+            await cacheService.clearAllPermissionsCache(); // 清理所有權限相關緩存
             
             // 獲取更新後的權限
             const [mainPermissionsResult, storePermissionsResult] = await Promise.all([
@@ -553,7 +574,8 @@ const updateGroupPermissions = async (req, res) => {
                     inventory: features.inventory === true,
                     orders: features.orders === true,
                     rma: features.rma === true,
-                    outbound: features.outbound === true
+                    outbound: features.outbound === true,
+                    bulk_select: features.bulk_select === true
                 };
 
                 console.log(`Processed permissions for store ${row.store_id}:`, {
@@ -569,7 +591,8 @@ const updateGroupPermissions = async (req, res) => {
                         inventory: false,
                         orders: false,
                         rma: false,
-                        outbound: false
+                        outbound: false,
+                        bulk_select: false
                     };
                 }
             });
@@ -628,7 +651,13 @@ const getGroupWithPermissions = async (client, groupId) => {
                 COALESCE(
                     jsonb_object_agg(
                         gsp.store_id::text,
-                        gsp.permissions
+                        jsonb_build_object(
+                            'inventory', (gsp.permissions->>'inventory')::boolean,
+                            'orders', (gsp.permissions->>'orders')::boolean,
+                            'rma', (gsp.permissions->>'rma')::boolean,
+                            'outbound', (gsp.permissions->>'outbound')::boolean,
+                            'bulk_select', gsp.bulk_select
+                        )
                     ) FILTER (WHERE gsp.store_id IS NOT NULL),
                     '{}'::jsonb
                 ) as store_permissions,

@@ -216,13 +216,27 @@ router.delete('/:id', auth, async (req, res) => {
 // Get store items
 router.get('/:storeId/items', auth, checkStorePermission('inventory'), async (req, res) => {
     const { storeId } = req.params;
+    const { exclude_ordered } = req.query;
     
     try {
         const query = `
+            WITH unique_store_items AS (
+                SELECT DISTINCT ON (s.record_id) s.record_id, s.received_at, s.notes
+                FROM store_items s
+                WHERE s.store_id = $1
+                ORDER BY s.record_id, s.received_at DESC
+            )
             SELECT r.*, s.received_at, s.notes 
-            FROM store_items s
+            FROM unique_store_items s
             JOIN system_records r ON s.record_id = r.id
-            WHERE s.store_id = $1
+            WHERE NOT EXISTS (
+                SELECT 1 
+                FROM store_order_items oi
+                JOIN store_orders o ON oi.order_id = o.id
+                WHERE oi.record_id = r.id
+                AND o.store_id = $1
+                AND (o.status = 'pending' OR o.status = 'completed')
+            )
             ORDER BY s.received_at DESC
         `;
         

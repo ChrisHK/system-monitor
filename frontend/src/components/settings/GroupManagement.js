@@ -14,7 +14,9 @@ import {
     Checkbox,
     Alert,
     Card,
-    Divider
+    Divider,
+    Row,
+    Col
 } from 'antd';
 import { 
     EditOutlined, 
@@ -86,6 +88,9 @@ const GroupManagement = () => {
     const [error, setError] = useState(null);
     const [form] = Form.useForm();
     const [selectedStores, setSelectedStores] = useState([]);
+    
+    // 將 Form.useWatch 移到組件頂層
+    const watchedStores = Form.useWatch('stores', form) || [];
 
     const fetchGroups = async () => {
         try {
@@ -228,47 +233,40 @@ const GroupManagement = () => {
             return;
         }
         setEditingGroup(group);
-        setSelectedStores(group.permitted_stores || []);
+        const permittedStores = group.permitted_stores || [];
+        setSelectedStores(permittedStores);
 
-        // 轉換現有的商店權限格式
+        // 轉換商店權限格式
         const storePermissions = {};
         if (group.store_permissions) {
             Object.entries(group.store_permissions).forEach(([storeId, features]) => {
-                const storePrefix = `store_${storeId}_`;
-                
-                // 檢查 features 是否為字符串，如果是則解析它
-                const parsedFeatures = typeof features === 'string' ? JSON.parse(features) : features;
+                // 確保 features 是對象
+                const parsedFeatures = typeof features === 'string' ? 
+                    JSON.parse(features) : features;
 
-                // 檢查每個權限值並設置默認值
-                const inventory = parsedFeatures?.inventory ?? false;
-                const orders = parsedFeatures?.orders ?? false;
-                const rma = parsedFeatures?.rma ?? false;
-                const outbound = parsedFeatures?.outbound ?? false;
+                // 設置商店權限
+                const permissions = [];
+                if (parsedFeatures.inventory) permissions.push('inventory');
+                if (parsedFeatures.orders) permissions.push('orders');
+                if (parsedFeatures.rma) permissions.push('rma');
+                if (parsedFeatures.outbound) permissions.push('outbound');
 
-                storePermissions[`${storePrefix}inventory`] = inventory;
-                storePermissions[`${storePrefix}orders`] = orders;
-                storePermissions[`${storePrefix}rma`] = rma;
-                storePermissions[`${storePrefix}outbound`] = outbound;
+                storePermissions[storeId] = {
+                    permissions: permissions,
+                    bulk_select: parsedFeatures.bulk_select || false
+                };
             });
         }
-
-        // 轉換主權限從數字(0/1)到布爾值
-        const mainPermissions = {
-            inventory: group.main_permissions?.inventory === 1 || group.main_permissions?.inventory === true,
-            inventory_ram: group.main_permissions?.inventory_ram === 1 || group.main_permissions?.inventory_ram === true,
-            outbound: group.main_permissions?.outbound === 1 || group.main_permissions?.outbound === true,
-            inbound: group.main_permissions?.inbound === 1 || group.main_permissions?.inbound === true,
-            purchase_order: group.main_permissions?.purchase_order === 1 || group.main_permissions?.purchase_order === true,
-            tag_management: group.main_permissions?.tag_management === 1 || group.main_permissions?.tag_management === true
-        };
 
         // 設置表單值
         const formValues = {
             name: group.name,
             description: group.description,
-            permitted_stores: group.permitted_stores || [],
+            permitted_stores: permittedStores,
             store_permissions: storePermissions,
-            main_permissions: mainPermissions
+            main_permissions: Object.entries(group.main_permissions || {})
+                .filter(([_, value]) => value === 1 || value === true)
+                .map(([key]) => key)
         };
 
         console.log('Setting form values:', formValues);
@@ -279,32 +277,33 @@ const GroupManagement = () => {
     const handleSubmit = async (values) => {
         try {
             // Convert main permissions to boolean values
-            const mainPermissions = {
-                inventory: values.main_permissions?.inventory === true,
-                inventory_ram: values.main_permissions?.inventory_ram === true,
-                outbound: values.main_permissions?.outbound === true,
-                inbound: values.main_permissions?.inbound === true,
-                purchase_order: values.main_permissions?.purchase_order === true,
-                tag_management: values.main_permissions?.tag_management === true
-            };
+            const mainPermissions = (values.main_permissions || []).reduce((acc, key) => {
+                acc[key] = true;
+                return acc;
+            }, {});
 
-            // Process store permissions
-            const validStorePermissions = selectedStores.map(storeId => {
-                const storePrefix = `store_${storeId}_`;
+            // Process store permissions - convert to array format for API
+            const storePermissionsArray = selectedStores.map(storeId => {
+                const storePerms = values.store_permissions?.[storeId] || {};
+                const permissions = storePerms.permissions || [];
+                const bulkSelect = storePerms.bulk_select || false;
+                
                 return {
-                    store_id: storeId.toString(),
-                    inventory: values.store_permissions[`${storePrefix}inventory`] === true,
-                    orders: values.store_permissions[`${storePrefix}orders`] === true,
-                    outbound: values.store_permissions[`${storePrefix}outbound`] === true,
-                    rma: values.store_permissions[`${storePrefix}rma`] === true
+                    store_id: storeId,
+                    inventory: permissions.includes('inventory'),
+                    orders: permissions.includes('orders'),
+                    rma: permissions.includes('rma'),
+                    outbound: permissions.includes('outbound'),
+                    bulk_select: bulkSelect
                 };
             });
 
             const groupData = {
-                name: values.name,
-                description: values.description,
+                name: values.name.trim(),
+                description: values.description.trim(),
                 main_permissions: mainPermissions,
-                store_permissions: validStorePermissions
+                store_permissions: storePermissionsArray,
+                permitted_stores: values.permitted_stores || []
             };
 
             console.log('Submitting group data:', groupData);
@@ -366,107 +365,93 @@ const GroupManagement = () => {
     };
 
     const renderStorePermissions = () => {
-        // Add null check for selectedStores and stores
-        if (!selectedStores || !Array.isArray(selectedStores) || !stores || !Array.isArray(stores)) {
-            return null;
-        }
-
-        // Check length after ensuring it's an array
-        if (selectedStores.length === 0) {
-            return null;
-        }
-
         return (
-            <>
-                <Divider orientation="left">Store Permissions</Divider>
-                {selectedStores.map(storeId => {
-                    const store = stores.find(s => s.id === storeId);
-                    if (!store) return null;
+            <div>
+                <Form.Item label="Store Permissions">
+                    {selectedStores.map(storeId => {
+                        const store = stores.find(s => s.id === storeId);
+                        if (!store) return null;
 
-                    const storePrefix = `store_${storeId}_`;
-
-                    return (
-                        <Card 
-                            key={storeId} 
-                            size="small" 
-                            title={store.name}
-                            style={{ marginBottom: 16 }}
-                        >
-                            <Form.Item
-                                name={['store_permissions', `${storePrefix}inventory`]}
-                                valuePropName="checked"
-                                initialValue={false}
+                        return (
+                            <Card 
+                                key={storeId} 
+                                title={store.name}
+                                style={{ marginBottom: 16 }}
                             >
-                                <Checkbox>Inventory Management</Checkbox>
-                            </Form.Item>
-                            <Form.Item
-                                name={['store_permissions', `${storePrefix}orders`]}
-                                valuePropName="checked"
-                                initialValue={false}
-                            >
-                                <Checkbox>Orders Management</Checkbox>
-                            </Form.Item>
-                            <Form.Item
-                                name={['store_permissions', `${storePrefix}rma`]}
-                                valuePropName="checked"
-                                initialValue={false}
-                            >
-                                <Checkbox>RMA Management</Checkbox>
-                            </Form.Item>
-                            <Form.Item
-                                name={['store_permissions', `${storePrefix}outbound`]}
-                                valuePropName="checked"
-                                initialValue={false}
-                            >
-                                <Checkbox>Outbound Management</Checkbox>
-                            </Form.Item>
-                        </Card>
-                    );
-                })}
-            </>
+                                <Form.Item
+                                    name={['store_permissions', storeId, 'permissions']}
+                                    initialValue={[]}
+                                >
+                                    <Checkbox.Group style={{ width: '100%' }}>
+                                        <Row>
+                                            <Col span={8}>
+                                                <Checkbox value="inventory">
+                                                    Inventory Management
+                                                </Checkbox>
+                                            </Col>
+                                            <Col span={8}>
+                                                <Checkbox value="orders">
+                                                    Orders Management
+                                                </Checkbox>
+                                            </Col>
+                                            <Col span={8}>
+                                                <Checkbox value="rma">
+                                                    RMA Management
+                                                </Checkbox>
+                                            </Col>
+                                            <Col span={8}>
+                                                <Checkbox value="outbound">
+                                                    Outbound Management
+                                                </Checkbox>
+                                            </Col>
+                                        </Row>
+                                    </Checkbox.Group>
+                                </Form.Item>
+                                <Form.Item
+                                    name={['store_permissions', storeId, 'bulk_select']}
+                                    valuePropName="checked"
+                                    initialValue={false}
+                                >
+                                    <Checkbox>
+                                        Enable Bulk Select
+                                    </Checkbox>
+                                </Form.Item>
+                            </Card>
+                        );
+                    })}
+                </Form.Item>
+            </div>
         );
     };
 
     const renderMainPermissions = () => (
-        <>
-            <Divider orientation="left">Main Permissions</Divider>
-            <Form.Item
-                name={['main_permissions', 'inventory']}
-                valuePropName="checked"
-            >
-                <Checkbox>Inventory Access</Checkbox>
-            </Form.Item>
-            <Form.Item
-                name={['main_permissions', 'inventory_ram']}
-                valuePropName="checked"
-            >
-                <Checkbox>RAM Inventory Access</Checkbox>
-            </Form.Item>
-            <Form.Item
-                name={['main_permissions', 'outbound']}
-                valuePropName="checked"
-            >
-                <Checkbox>Outbound Access</Checkbox>
-            </Form.Item>
-            <Form.Item
-                name={['main_permissions', 'inbound']}
-                valuePropName="checked"
-            >
-                <Checkbox>Inbound Access</Checkbox>
-            </Form.Item>
-            <Form.Item
-                name={['main_permissions', 'purchase_order']}
-                valuePropName="checked"
-            >
-                <Checkbox>Purchase Order Access</Checkbox>
-            </Form.Item>
-            <Form.Item
-                name={['main_permissions', 'tag_management']}
-                valuePropName="checked"
-            >
-                <Checkbox>Tag Management Access</Checkbox>
-            </Form.Item>
-        </>
+        <Form.Item label="Main Permissions" name="main_permissions">
+            <Checkbox.Group>
+                <Row>
+                    <Col span={8}>
+                        <Checkbox value="inventory">Inventory Management</Checkbox>
+                    </Col>
+                    <Col span={8}>
+                        <Checkbox value="outbound">Outbound Management</Checkbox>
+                    </Col>
+                    <Col span={8}>
+                        <Checkbox value="store">Store Management</Checkbox>
+                    </Col>
+                    <Col span={8}>
+                        <Checkbox value="rma">RMA Management</Checkbox>
+                    </Col>
+                    <Col span={8}>
+                        <Checkbox value="reports">Reports Access</Checkbox>
+                    </Col>
+                    <Col span={8}>
+                        <Checkbox value="settings">Settings Access</Checkbox>
+                    </Col>
+                    <Col span={8}>
+                        <Checkbox value="bulk_select">Bulk Select</Checkbox>
+                    </Col>
+                </Row>
+            </Checkbox.Group>
+        </Form.Item>
     );
 
     const columns = [

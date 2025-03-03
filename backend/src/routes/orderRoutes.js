@@ -329,7 +329,7 @@ router.post('/:storeId', auth, checkStorePermission('orders'), catchAsync(async 
             await client.query(`
                 INSERT INTO store_order_items (order_id, record_id, notes, pay_method)
                 VALUES ($1, $2, $3, $4)
-            `, [orderId, item.recordId, item.notes || null, item.payMethod || 'credit_card']);
+            `, [orderId, item.recordId, item.notes || null, item.payMethod || null]);
             
             // Remove from store_items
             await client.query(
@@ -389,6 +389,9 @@ router.put('/:storeId/:orderId/save', auth, checkStorePermission('orders'), catc
         if (result.rows.length === 0) {
             throw new Error('Order not found or already completed');
         }
+
+        // 確保項目不會返回到商店列表
+        // 我們不需要做任何額外的操作，因為項目在添加到訂單時就已經從 store_items 中刪除了
 
         await client.query('COMMIT');
         
@@ -590,8 +593,8 @@ router.put('/:storeId/items/:itemId/pay-method', auth, checkStorePermission('ord
     
     try {
         // Validate pay method
-        const validPayMethods = ['credit_card', 'cash', 'debit_card'];
-        if (!validPayMethods.includes(payMethod)) {
+        const validPayMethods = ['credit_card', 'cash', 'debit_card', null];
+        if (payMethod !== null && !validPayMethods.includes(payMethod)) {
             throw new Error('Invalid payment method');
         }
 
@@ -749,6 +752,65 @@ router.delete('/stores/:storeId/orders/:orderId', auth, checkGroup(['admin']), c
     await pool.query('ROLLBACK');
     throw error;
   }
+}));
+
+// Bulk add items to order
+router.post('/:storeId/bulk-add', auth, checkStorePermission('orders'), catchAsync(async (req, res) => {
+    const { storeId } = req.params;
+    const { items } = req.body;
+    const client = await pool.connect();
+    
+    try {
+        if (!items || !Array.isArray(items) || items.length === 0) {
+            throw new ValidationError('Valid items array is required');
+        }
+
+        await client.query('BEGIN');
+
+        // Get or create pending order
+        const pendingOrderQuery = await client.query(`
+            SELECT id 
+            FROM store_orders 
+            WHERE store_id = $1 AND status = 'pending'
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [storeId]);
+
+        let orderId;
+        if (pendingOrderQuery.rows.length > 0) {
+            orderId = pendingOrderQuery.rows[0].id;
+        } else {
+            const newOrderResult = await client.query(`
+                INSERT INTO store_orders (store_id, status)
+                VALUES ($1, 'pending')
+                RETURNING id
+            `, [storeId]);
+            orderId = newOrderResult.rows[0].id;
+        }
+
+        // Insert all items
+        const insertPromises = items.map(item => 
+            client.query(`
+                INSERT INTO store_order_items (order_id, record_id, pay_method)
+                VALUES ($1, $2, $3)
+                RETURNING id
+            `, [orderId, item.record_id, null])
+        );
+
+        await Promise.all(insertPromises);
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: 'Items added successfully',
+            order_id: orderId
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    } finally {
+        client.release();
+    }
 }));
 
 module.exports = router; 

@@ -15,8 +15,12 @@ const validateDataProcessing = [
     body('metadata.version').notEmpty().withMessage('Version is required'),
     body('metadata.checksum').notEmpty().withMessage('Checksum is required'),
 
-    // Items validation - only require serialnumber
+    // Items validation
     body('items.*.serialnumber').notEmpty().withMessage('Serial number is required'),
+    body('items.*.touchscreen')
+        .optional()
+        .isIn(['Yes', 'Yes Detected', 'No', 'Not Detected'])
+        .withMessage('Invalid touchscreen value'),
     
     // Custom validation for checksum
     async (req, res, next) => {

@@ -38,6 +38,12 @@ def validate_required_fields(item):
     missing_fields = [field for field in required_fields if field not in item]
     if missing_fields:
         raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+    
+    # Validate touchscreen value if present
+    if 'touchscreen' in item:
+        valid_values = ['Yes', 'Yes Detected', 'No', 'Not Detected']
+        if str(item['touchscreen']) not in valid_values:
+            raise ValueError(f"Invalid touchscreen value: {item['touchscreen']}")
 
 def normalize_item(item):
     """只保留並規範化 serialnumber
@@ -460,36 +466,9 @@ class ChecksumCalculator:
 
     @staticmethod
     def normalize_items(items):
-        """Normalize items to ensure consistent format
-        
-        Args:
-            items: List of item dictionaries
-            
-        Returns:
-            list: List of normalized items
-        """
+        """Normalize items to ensure consistent format"""
         normalized_items = []
         for item in items:
-            # 解析磁盤字符串為數組
-            disks_str = str(item.get('disks', ''))
-            disks = []
-            if disks_str:
-                disk_parts = disks_str.split(',')
-                for disk_str in disk_parts:
-                    if disk_str.strip():
-                        try:
-                            type_, size, model = disk_str.strip().split(':')
-                            # 解析大小為數字
-                            size_num = float(size.replace('TB', '000').replace('GB', ''))
-                            disks.append({
-                                'size_gb': size_num
-                            })
-                        except:
-                            # 如果解析失敗，添加一個空的磁盤記錄
-                            disks.append({
-                                'size_gb': 0
-                            })
-            
             # 確保字段順序與數據庫列名完全匹配，並使用正確的數據類型
             normalized_item = {
                 'id': None,  # 由數據庫自動生成
@@ -502,7 +481,7 @@ class ChecksumCalculator:
                 'cpu': str(item.get('cpu', '')),  # text
                 'resolution': str(item.get('resolution', ''))[:100],  # varchar(100)
                 'graphicscard': str(item.get('graphicscard', '')),  # text
-                'touchscreen': str(item.get('touchscreen', 'false'))[:100],  # varchar(100)
+                'touchscreen': 'Yes' if str(item.get('touchscreen', '')).lower() in ['yes', 'yes detected'] else 'No',  # varchar(100)
                 'ram_gb': float(item.get('ram_gb', 0)),  # numeric
                 'disks': str(item.get('disks', '')),  # text
                 'design_capacity': int(item.get('design_capacity', 0)),  # bigint

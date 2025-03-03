@@ -26,6 +26,7 @@ class OrderService {
     this.deleteOrderItem = this.deleteOrderItem.bind(this);
     this.saveOrder = this.saveOrder.bind(this);
     this.deleteCompletedOrder = this.deleteCompletedOrder.bind(this);
+    this.bulkAddToOrder = this.bulkAddToOrder.bind(this);
   }
 
   // Regular Orders
@@ -131,10 +132,10 @@ class OrderService {
 
   // Store Order specific methods
   async addToOrder(storeId, items) {
-    // 確保每個項目都有支付方式
+    // 設置默認值，支付方式為 null
     const itemsWithDefaults = items.map(item => ({
       ...item,
-      payMethod: item.payMethod || 'credit_card'
+      payMethod: null
     }));
 
     const response = await api.post(
@@ -142,6 +143,36 @@ class OrderService {
       { items: itemsWithDefaults }
     );
     return response;
+  }
+
+  // 批量添加到訂單
+  async bulkAddToOrder(storeId, items) {
+    try {
+      // 格式化項目數據
+      const formattedItems = items.map(item => ({
+        record_id: item.record_id,
+        serialnumber: item.serialnumber,
+        notes: item.notes || '',
+        price: item.price || 0,
+        pay_method: null  // 設置默認支付方式為 null
+      }));
+
+      console.log('Bulk adding items to order:', {
+        storeId,
+        itemCount: items.length,
+        items: formattedItems
+      });
+
+      const response = await api.post(
+        ENDPOINTS.ORDER.STORE.BULK_ADD(storeId),
+        { items: formattedItems }
+      );
+
+      return response;
+    } catch (error) {
+      console.error('Bulk add to order error:', error);
+      throw error;
+    }
   }
 
   async addToRma(storeId, rmaData) {

@@ -10,6 +10,7 @@ const dataProcessSchema = Joi.object({
             computername: Joi.string().required(),
             manufacturer: Joi.string().required(),
             model: Joi.string().required(),
+            touchscreen: Joi.string().valid('Yes', 'Yes Detected', 'No', 'Not Detected'),
             ram_gb: Joi.number().integer().min(0),
             disks: Joi.array().items(
                 Joi.object({

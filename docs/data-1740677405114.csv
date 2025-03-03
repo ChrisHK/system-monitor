@@ -1,2 +1,0 @@
-"id","username","group_name","main_permissions"
-4,"test01","Stock","{""inbound"": false, ""outbound"": true, ""inventory"": true, ""inventory_ram"": false, ""purchase_order"": false, ""tag_management"": false}"

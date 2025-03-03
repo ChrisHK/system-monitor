@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Table, message, Row, Col, Card, Statistic, Button, Input, Space, Tag, Modal, Select, Form, InputNumber } from 'antd';
-import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SearchOutlined, ExportOutlined, DownloadOutlined, DeleteOutlined, EditOutlined, SendOutlined } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { useNotification } from '../contexts/NotificationContext';
 import { storeService, inventoryService, salesService, rmaService, orderService } from '../api';
@@ -41,7 +41,7 @@ const StorePage = () => {
     const [selectedOutboundStore, setSelectedOutboundStore] = useState(null);
     const [salesModalVisible, setSalesModalVisible] = useState(false);
     const [rmaModalVisible, setRmaModalVisible] = useState(false);
-    const [searchSerialNumber, setSearchSerialNumber] = useState('');
+    const [searchInputValue, setSearchInputValue] = useState('');
     const [selectedItem, setSelectedItem] = useState(null);
     const [price, setPrice] = useState(0);
     const [reason, setReason] = useState('');
@@ -53,6 +53,7 @@ const StorePage = () => {
     const [editingNoteText, setEditingNoteText] = useState('');
     const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
     const [editingNotes, setEditingNotes] = useState({});
+    const [selectedRowKeys, setSelectedRowKeys] = useState([]);
 
     // 優化權限檢查，使用 useMemo 緩存所有權限相關的結果
     const permissions = useMemo(() => {
@@ -72,6 +73,39 @@ const StorePage = () => {
             hasAccess: isAdmin || user.permitted_stores?.includes(Number(storeId)),
             hasOutbound: isAdmin || storePermissions.outbound === true
         };
+    }, [user, storeId]);
+
+    // 檢查是否有批量選擇權限
+    const hasBulkSelectPermission = useMemo(() => {
+        if (!user) return false;
+        
+        // 檢查全局權限
+        if (user.group_name === 'admin' || 
+            (user.main_permissions && user.main_permissions.bulk_select)) {
+            return true;
+        }
+        
+        // 檢查商店特定權限
+        const storePermissions = user.store_permissions?.[storeId];
+        return storePermissions?.bulk_select === true;
+    }, [user, storeId]);
+
+    // 檢查是否有訂單權限
+    const hasOrderPermission = useMemo(() => {
+        if (!user) return false;
+        
+        // 檢查全局權限
+        if (user.group_name === 'admin') return true;
+        
+        // 檢查主要權限
+        if (user.main_permissions?.orders === true) return true;
+        
+        // 檢查商店特定權限
+        const storePermissions = user.store_permissions?.[storeId];
+        if (!storePermissions) return false;
+        
+        // 檢查 orders 權限，支持字符串和布爾值
+        return storePermissions.orders === true || storePermissions.orders === '1';
     }, [user, storeId]);
 
     // 1. 首先定義 handleError，因為它被其他函數使用
@@ -144,7 +178,7 @@ const StorePage = () => {
             // 並行請求數據
             const [storeResponse, itemsResponse] = await Promise.all([
                 storeService.getStoreById(storeId),
-                storeService.getStoreItems(storeId)
+                storeService.getStoreItems(storeId, { exclude_ordered: true })
             ]);
 
             if (storeResponse?.success) {
@@ -154,8 +188,17 @@ const StorePage = () => {
             }
 
             if (itemsResponse?.success) {
-                setRecords(itemsResponse.items);
-                setFilteredRecords(itemsResponse.items);
+                // 使用 Map 來確保每個商品只出現一次
+                const uniqueItems = new Map();
+                itemsResponse.items.forEach(item => {
+                    const key = `${item.id}_${item.serialnumber}`;
+                    if (!uniqueItems.has(key)) {
+                        uniqueItems.set(key, item);
+                    }
+                });
+                const uniqueItemsArray = Array.from(uniqueItems.values());
+                setRecords(uniqueItemsArray);
+                setFilteredRecords(uniqueItemsArray);
             } else {
                 throw new Error('Failed to fetch store items');
             }
@@ -194,12 +237,13 @@ const StorePage = () => {
         
         const searchValue = value.toLowerCase();
         const filtered = records.filter(record => 
-            record.serialnumber.toLowerCase().includes(searchValue) ||
-            record.computername?.toLowerCase().includes(searchValue) ||
-            record.model?.toLowerCase().includes(searchValue)
+            record.serialnumber?.toLowerCase().includes(searchValue) ||
+            record.model?.toLowerCase().includes(searchValue) ||
+            record.systemsku?.toLowerCase().includes(searchValue)
         );
         setFilteredRecords(filtered);
         setSearchPerformed(true);
+        setSearchInputValue(''); // Clear search input using state
     }, [records]);
 
     const handleModalClose = useCallback((type) => {
@@ -253,7 +297,7 @@ const StorePage = () => {
                     message.success('Item added to outbound successfully');
                     await fetchOutboundItems();
                     // Clear the input field after successful addition
-                    setSearchSerialNumber('');
+                    setSearchInputValue('');
                 } else {
                     throw new Error(addResponse?.error || 'Failed to add item to outbound');
                 }
@@ -390,7 +434,7 @@ const StorePage = () => {
 
     const handleSalesSearch = async () => {
         try {
-            const response = await salesService.searchSales(storeId, searchSerialNumber);
+            const response = await salesService.searchSales(storeId, searchInputValue);
             if (response?.success) {
                 setSelectedItem(response.item);
             } else {
@@ -404,7 +448,7 @@ const StorePage = () => {
 
     const handleRmaSearch = async () => {
         try {
-            const response = await rmaService.searchRma(storeId, searchSerialNumber);
+            const response = await rmaService.searchRma(storeId, searchInputValue);
             if (response?.success) {
                 setSelectedItem(response.item);
             } else {
@@ -473,7 +517,10 @@ const StorePage = () => {
             const response = await storeService.deleteStoreItem(storeId, itemId);
             if (response?.success) {
                 message.success('Item deleted successfully');
-                await fetchData();
+                // 添加延遲以確保後端處理完成
+                setTimeout(async () => {
+                    await fetchData();
+                }, 500);
             } else {
                 throw new Error(response?.error || 'Failed to delete item');
             }
@@ -529,15 +576,13 @@ const StorePage = () => {
             title: 'Serial Number',
             dataIndex: 'serialnumber',
             key: 'serialnumber',
-            width: 150,
-            sorter: (a, b) => a.serialnumber.localeCompare(b.serialnumber)
+            width: 150
         },
         {
             title: 'Computer Name',
             dataIndex: 'computername',
             key: 'computername',
-            width: 150,
-            sorter: (a, b) => (a.computername || '').localeCompare(b.computername || '')
+            width: 150
         },
         {
             title: 'Manufacturer',
@@ -595,8 +640,11 @@ const StorePage = () => {
             title: 'Touch Screen',
             dataIndex: 'touchscreen',
             key: 'touchscreen',
-            width: 100,
-            render: (value) => value ? 'Yes' : 'No'
+            width: 120,
+            render: (value) => {
+                if (value === 'Yes' || value === 'Yes Detected') return 'Yes';
+                return 'No';
+            }
         },
         {
             title: 'RAM (GB)',
@@ -654,7 +702,7 @@ const StorePage = () => {
             key: 'received_at',
             width: 150,
             render: formatDate,
-            sorter: sortDate
+            sorter: (a, b) => sortDate(a.received_at, b.received_at)
         },
         {
             title: 'Notes',
@@ -691,103 +739,131 @@ const StorePage = () => {
         }
     ].filter(Boolean);
 
-    const rowSelection = {
-        selectedRowKeys: selectedItems.map(item => item.uniqueKey || `store-${item.id}-${item.serialnumber}-${item.store_id || storeId}-${item.received_at || Date.now()}`),
-        onChange: (selectedRowKeys, selectedRows) => {
-            console.log('Selected rows:', selectedRows);
-            setSelectedItems(selectedRows);
+    // 處理全選
+    const handleSelectAll = () => {
+        if (selectedRowKeys.length === filteredRecords.length) {
+            setSelectedRowKeys([]);
+        } else {
+            const newSelectedKeys = filteredRecords.map(record => `${record.id}_${record.serialnumber}`);
+            setSelectedRowKeys(newSelectedKeys);
         }
     };
 
-    const handleAddToOrder = async (selectedItems) => {
-        if (!selectedItems || selectedItems.length === 0) {
+    // 處理批量添加到訂單
+    const handleBulkAddToOrder = async () => {
+        console.log('Selected row keys:', selectedRowKeys);
+        console.log('Records:', records);
+
+        if (selectedRowKeys.length === 0) {
             message.warning('Please select items to add to order');
             return;
         }
 
         try {
-            console.log('Adding items to order:', selectedItems);
-            // Format items with required fields
-            const items = selectedItems.map(item => ({
-                recordId: item.id,
+            // Extract record IDs from the composite keys
+            const selectedIds = selectedRowKeys.map(key => Number(key.split('_')[0]));
+            
+            // 從 records 中找出被選中的項目
+            const selectedItems = records.filter(record => selectedIds.includes(record.id));
+            
+            console.log('Selected items:', selectedItems);
+
+            if (selectedItems.length === 0) {
+                message.warning('No valid items selected');
+                return;
+            }
+
+            // 格式化選中的項目
+            const formattedItems = selectedItems.map(item => ({
+                record_id: item.id,
                 serialnumber: item.serialnumber,
-                notes: '',
-                price: 0
+                notes: item.notes || '',
+                price: item.price || 0,
+                pay_method: 'credit_card'
             }));
 
-            console.log('Formatted items:', items);
-            const response = await orderService.addToOrder(storeId, items);
+            // 調用 API
+            const response = await orderService.bulkAddToOrder(storeId, formattedItems);
 
-            if (response && response.success) {
-                // Add notification for order
-                console.log('Adding order notification for store:', storeId);
-                addNotification('order', storeId);
-                
+            if (response?.success) {
                 message.success('Items added to order successfully');
-                setSelectedItems([]);
-                setSearchPerformed(false);
-                fetchData();
+                // 清除選中的項目
+                setSelectedRowKeys([]);
+                // 重新獲取數據
+                await fetchData();
             } else {
-                const errorMsg = response?.error || 'Failed to add items to order';
-                message.error(errorMsg);
-                console.error('Add to order failed:', errorMsg);
+                throw new Error(response?.error || 'Failed to add items to order');
             }
         } catch (error) {
-            console.error('Add to order error:', error);
-            const errorMsg = error.response?.data?.error || error.message || 'Error adding items to order';
-            message.error(errorMsg);
+            console.error('Bulk add to order error:', error);
+            message.error(error.message || 'Failed to add items to order');
         }
     };
 
-    // Modify renderToolbar function
+    // 表格行選擇配置
+    const rowSelection = {
+        type: 'checkbox',
+        selectedRowKeys,
+        onChange: (selectedKeys) => setSelectedRowKeys(selectedKeys),
+        columnWidth: 60,
+        fixed: true,
+        selections: hasBulkSelectPermission ? [
+            {
+                key: 'all',
+                text: 'Select All',
+                onSelect: handleSelectAll
+            },
+            {
+                key: 'invert',
+                text: 'Invert Selection',
+                onSelect: () => {
+                    const allKeys = filteredRecords.map(r => `${r.id}_${r.serialnumber}`);
+                    const newSelectedKeys = allKeys.filter(key => !selectedRowKeys.includes(key));
+                    setSelectedRowKeys(newSelectedKeys);
+                }
+            },
+            {
+                key: 'none',
+                text: 'Clear Selection',
+                onSelect: () => setSelectedRowKeys([])
+            }
+        ] : []
+    };
+
+    // 渲染工具欄
     const renderToolbar = () => (
-        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col flex="auto">
-                <Search
-                    placeholder="Search records..."
-                    allowClear
-                    enterButton={<SearchOutlined />}
-                    onSearch={handleSearch}
-                    style={{ width: 300 }}
-                />
-            </Col>
-            <Col>
-                <Space>
-                    {searchPerformed && (
-                        <Button
-                            type="primary"
-                            onClick={() => handleAddToOrder(selectedItems)}
-                            disabled={!selectedItems.length}
-                        >
-                            Add to Order ({selectedItems.length})
-                        </Button>
-                    )}
-                    {permissions.hasOutbound && (
-                        <Button
-                            type="primary"
-                            icon={<ExportOutlined />}
-                            onClick={handleOutbound}
-                            loading={outboundLoading}
-                        >
-                            Outbound
-                        </Button>
-                    )}
-                    <Button
-                        icon={<DownloadOutlined />}
-                        onClick={handleExportCSV}
-                    >
-                        Export CSV
-                    </Button>
-                    <Button
-                        icon={<ReloadOutlined />}
-                        onClick={fetchData}
-                        loading={loading}
-                    >
-                        Refresh
-                    </Button>
-                </Space>
-            </Col>
-        </Row>
+        <Space style={{ marginBottom: 16 }}>
+            <Search
+                placeholder="Search by serial number"
+                allowClear
+                onSearch={handleSearch}
+                value={searchInputValue}
+                onChange={e => setSearchInputValue(e.target.value)}
+                style={{ width: 200 }}
+            />
+            {hasOrderPermission && selectedRowKeys.length > 0 && (
+                <Button
+                    type="primary"
+                    onClick={handleBulkAddToOrder}
+                    loading={loading}
+                >
+                    Add {selectedRowKeys.length} items to Order
+                </Button>
+            )}
+            {permissions.hasOutbound && (
+                <Button
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={handleOutbound}
+                    loading={loading}
+                >
+                    Outbound
+                </Button>
+            )}
+            <Button type="primary" onClick={handleExportCSV}>
+                Export CSV
+            </Button>
+        </Space>
     );
 
     // Add OutboundModal component
@@ -806,8 +882,8 @@ const StorePage = () => {
                         allowClear
                         enterButton="Add"
                         onSearch={handleAddToOutbound}
-                        value={searchSerialNumber}
-                        onChange={e => setSearchSerialNumber(e.target.value)}
+                        value={searchInputValue}
+                        onChange={e => setSearchInputValue(e.target.value)}
                     />
                 </Col>
                 <Col span={8}>
@@ -926,8 +1002,8 @@ const StorePage = () => {
                 <Form.Item label="Serial Number">
                     <Space>
                         <Input
-                            value={searchSerialNumber}
-                            onChange={(e) => setSearchSerialNumber(e.target.value)}
+                            value={searchInputValue}
+                            onChange={(e) => setSearchInputValue(e.target.value)}
                             placeholder="Enter serial number"
                         />
                         <Button onClick={handleSalesSearch}>Search</Button>
@@ -974,8 +1050,8 @@ const StorePage = () => {
                 <Form.Item label="Serial Number">
                     <Space>
                         <Input
-                            value={searchSerialNumber}
-                            onChange={(e) => setSearchSerialNumber(e.target.value)}
+                            value={searchInputValue}
+                            onChange={(e) => setSearchInputValue(e.target.value)}
                             placeholder="Enter serial number"
                         />
                         <Button onClick={handleRmaSearch}>Search</Button>
@@ -1032,19 +1108,13 @@ const StorePage = () => {
             {renderToolbar()}
             
             <Table
-                rowSelection={searchPerformed ? rowSelection : undefined}
                 columns={columns}
                 dataSource={filteredRecords}
                 loading={loading}
-                rowKey={record => record.uniqueKey || `store-${record.id}-${record.serialnumber}-${record.store_id || storeId}-${record.received_at || Date.now()}`}
-                scroll={{ x: true }}
-                pagination={{
-                    total: filteredRecords.length,
-                    pageSize: 10,
-                    showSizeChanger: true,
-                    showQuickJumper: true,
-                    showTotal: (total) => `Total ${total} items`
-                }}
+                rowKey={record => `${record.id}_${record.serialnumber}`}
+                scroll={{ x: 'max-content' }}
+                pagination={{ pageSize: 50 }}
+                rowSelection={hasOrderPermission ? rowSelection : undefined}
             />
 
             {renderOutboundModal()}

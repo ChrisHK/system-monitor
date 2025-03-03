@@ -77,7 +77,7 @@ const RecordList = ({ records }) => {
                             <td>{record.cpu?.replace(/\s*\([^)]*\)/g, '')}</td>
                             <td>{record.resolution}</td>
                             <td>{record.graphicscard?.split('[')[0].trim()}</td>
-                            <td>{record.touchscreen}</td>
+                            <td>{record.touchscreen === 'Yes' || record.touchscreen === 'Yes Detected' ? 'Yes' : 'No'}</td>
                             <td>{record.ram_gb}</td>
                             <td>{record.disks}</td>
                             <td>{record.design_capacity}</td>

@@ -134,6 +134,7 @@ export const ENDPOINTS = {
       UPDATE_PRICE: (storeId, itemId) => `/orders/${storeId}/items/${itemId}/price`,
       UPDATE_PAY_METHOD: (storeId, itemId) => `/orders/${storeId}/items/${itemId}/pay-method`,
       DELETE_COMPLETED: (storeId, orderId) => `/orders/${storeId}/completed/${orderId}`,
+      BULK_ADD: (storeId) => `/orders/${storeId}/bulk-add`
     },
     PURCHASE: {
       BASE: '/purchase-orders',

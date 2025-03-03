@@ -1,5 +1,6 @@
 import api from '../index';
 import { ENDPOINTS } from '../config/endpoints';
+import { withErrorHandling } from '../utils/apiUtils';
 
 class UserService {
     constructor() {
@@ -178,7 +179,8 @@ class UserService {
                 inventory: permissions.inventory === true,
                 orders: permissions.orders === true,
                 rma: permissions.rma === true,
-                outbound: permissions.outbound === true
+                outbound: permissions.outbound === true,
+                bulk_select: permissions.bulk_select === true
             }));
 
             // Prepare the payload
@@ -211,7 +213,8 @@ class UserService {
                     inventory: perms.inventory === true ? '1' : '0',
                     orders: perms.orders === true ? '1' : '0',
                     rma: perms.rma === true ? '1' : '0',
-                    outbound: perms.outbound === true ? '1' : '0'
+                    outbound: perms.outbound === true ? '1' : '0',
+                    bulk_select: perms.bulk_select === true ? '1' : '0'
                 });
             });
             permissions.store_permissions = storePermissionsArray;

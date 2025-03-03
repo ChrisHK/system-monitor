@@ -124,30 +124,56 @@ const InventoryPage = () => {
                 
                 // 創建一個 Map 來存儲每個序列號的出現次數和詳細信息
                 const duplicatesMap = new Map();
-                duplicates.forEach(record => {
-                    if (!duplicatesMap.has(record.serialnumber)) {
-                        duplicatesMap.set(record.serialnumber, {
-                            count: 1,
-                            timestamps: [record.created_at]
-                        });
-                    } else {
-                        const info = duplicatesMap.get(record.serialnumber);
-                        info.count++;
-                        info.timestamps.push(record.created_at);
-                    }
+                duplicates.forEach(dup => {
+                    duplicatesMap.set(dup.serialnumber, {
+                        count: dup.count,
+                        timestamps: dup.timestamps || []
+                    });
                 });
-
-                console.log('Processed duplicates:', {
-                    totalUnique: duplicatesMap.size,
-                    details: Array.from(duplicatesMap.entries()),
-                    timestamp: new Date().toISOString()
-                });
-
+                
                 setDuplicateSerials(duplicatesMap);
+
+                // 如果發現重複記錄，自動執行清理
+                if (duplicatesMap.size > 0) {
+                    console.log('Found duplicates, auto cleaning up...', {
+                        duplicateCount: duplicatesMap.size,
+                        timestamp: new Date().toISOString()
+                    });
+                    
+                    try {
+                        const cleanupResponse = await inventoryService.cleanupDuplicates();
+                        
+                        if (cleanupResponse.success) {
+                            message.success('Duplicate records cleaned up automatically');
+                            Modal.info({
+                                title: 'Automatic Cleanup Results',
+                                content: (
+                                    <div>
+                                        <p>Total records before: {cleanupResponse.details.totalBefore}</p>
+                                        <p>Total records after: {cleanupResponse.details.totalAfter}</p>
+                                        <p>Records archived: {cleanupResponse.details.archivedCount}</p>
+                                        <p>Timestamp: {moment(cleanupResponse.details.timestamp).format('YYYY-MM-DD HH:mm:ss')}</p>
+                                    </div>
+                                ),
+                                onOk: () => {
+                                    // 重新獲取記錄
+                                    fetchRecords(true);
+                                    // 重新獲取重複項
+                                    fetchDuplicates();
+                                }
+                            });
+                        } else {
+                            throw new Error(cleanupResponse.error || 'Failed to clean up duplicates');
+                        }
+                    } catch (error) {
+                        console.error('Auto cleanup error:', error);
+                        message.error('Failed to automatically clean up duplicates: ' + error.message);
+                    }
+                }
             } catch (error) {
-                console.error('Failed to fetch duplicates:', error);
+                console.error('Fetch duplicates error:', error);
                 setError(error.message || 'Failed to fetch duplicates');
-                setDuplicateSerials(new Map());
+                message.error(error.message || 'Failed to fetch duplicates');
             } finally {
                 setLoading(false);
             }
@@ -576,8 +602,9 @@ const InventoryPage = () => {
                 icon={<ReloadOutlined />}
                 onClick={() => {
                     setPagination(prev => ({ ...prev, current: 1 }));
-                    fetchRecords();
+                    fetchRecords(true);  // 添加 force 參數為 true
                 }}
+                loading={loading}  // 添加 loading 狀態
             >
                 Refresh
             </Button>
@@ -715,8 +742,11 @@ const InventoryPage = () => {
             title: 'Touch Screen',
             dataIndex: 'touchscreen',
             key: 'touchscreen',
-            width: 100,
-            render: (value) => value ? 'Yes' : 'No'
+            width: 120,
+            render: (value) => {
+                if (value === 'Yes' || value === 'Yes Detected') return 'Yes';
+                return 'No';
+            }
         },
         {
             title: 'RAM (GB)',

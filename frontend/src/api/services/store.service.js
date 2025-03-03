@@ -90,8 +90,29 @@ class StoreService {
     };
 
     this.getStoreItems = async (storeId, params) => {
-      const response = await api.get(ENDPOINTS.STORE.ITEMS(storeId), { params });
-      return response;
+      try {
+        const response = await api.get(ENDPOINTS.STORE.ITEMS(storeId), { 
+          params: {
+            ...params,
+            exclude_ordered: params?.exclude_ordered || false
+          }
+        });
+        
+        if (!response?.success) {
+          console.error('Store items API returned unsuccessful response:', response);
+          throw new Error(response?.error || 'Failed to fetch store items');
+        }
+
+        return response;
+      } catch (error) {
+        console.error('Get store items error:', {
+          error: error.message,
+          stack: error.stack,
+          storeId,
+          params
+        });
+        throw error;
+      }
     };
 
     this.addStoreItem = async (storeId, itemData) => {
