@@ -809,17 +809,6 @@ const InventoryPage = () => {
             width: 150,
             render: (_, record) => (
                 <Space>
-                    <Tooltip title="Edit">
-                        <Button
-                            type="link"
-                            icon={<EditOutlined />}
-                            onClick={() => {
-                                setEditingRecord(record);
-                                form.setFieldsValue(record);
-                                setEditModalVisible(true);
-                            }}
-                        />
-                    </Tooltip>
                     {hasOutboundPermission && (
                         <Tooltip title="Add to Outbound">
                             <Button
